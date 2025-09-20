@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'screens/login_screen.dart';
+import 'screens/register_screen.dart';
 import 'screens/home_screen.dart';
+import 'screens/map_screen.dart';
 import 'screens/settings_screen.dart';
 
 void main() {
@@ -21,6 +23,7 @@ class WayFindCLApp extends StatelessWidget {
 
     return MaterialApp(
       title: 'WayFindCL',
+      debugShowCheckedModeBanner: false, // Quita el banner "DEBUG"
       theme: baseTheme.copyWith(
         appBarTheme: const AppBarTheme(
           backgroundColor: Colors.transparent,
@@ -47,9 +50,13 @@ class WayFindCLApp extends StatelessWidget {
           ),
         ),
       ),
+      initialRoute: '/',
       routes: {
         '/': (_) => const LoginScreen(),
+        LoginScreen.routeName: (_) => const LoginScreen(),
+        RegisterScreen.routeName: (_) => const RegisterScreen(),
         HomeScreen.routeName: (_) => const HomeScreen(),
+        MapScreen.routeName: (_) => const MapScreen(),
         SettingsScreen.routeName: (_) => const SettingsScreen(),
       },
     );

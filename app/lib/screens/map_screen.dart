@@ -1,28 +1,143 @@
 import 'package:flutter/material.dart';
+import 'package:speech_to_text/speech_to_text.dart';
+import 'package:permission_handler/permission_handler.dart';
 
-class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
-  static const routeName = '/home';
+class MapScreen extends StatefulWidget {
+  const MapScreen({super.key});
+  static const routeName = '/map';
 
   @override
-  State<HomeScreen> createState() => _HomeScreenState();
+  State<MapScreen> createState() => _MapScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _MapScreenState extends State<MapScreen> {
   bool _isListening = false;
+  String _lastWords = '';
+  final SpeechToText _speech = SpeechToText();
+  bool _speechEnabled = false;
 
-  void _toggleMicrophone() {
+  @override
+  void initState() {
+    super.initState();
+    _initSpeech();
+  }
+
+  void _initSpeech() async {
+    _speechEnabled = await _speech.initialize(
+      onError: (errorNotification) {
+        setState(() {
+          _isListening = false;
+        });
+      },
+      onStatus: (status) {
+        if (status == 'notListening') {
+          setState(() {
+            _isListening = false;
+          });
+        }
+      },
+    );
+    setState(() {});
+  }
+
+  void _startListening() async {
+    // Verificar permisos de micrófono
+    var status = await Permission.microphone.request();
+    if (status != PermissionStatus.granted) {
+      _showPermissionDialog();
+      return;
+    }
+
+    await _speech.listen(
+      onResult: (result) {
+        setState(() {
+          _lastWords = result.recognizedWords;
+        });
+      },
+      listenFor: const Duration(seconds: 30),
+      pauseFor: const Duration(seconds: 3),
+      partialResults: true,
+      localeId: 'es_ES', // Español
+      cancelOnError: true,
+      listenMode: ListenMode.confirmation,
+    );
     setState(() {
-      _isListening = !_isListening;
+      _isListening = true;
+    });
+  }
+
+  void _stopListening() async {
+    await _speech.stop();
+    setState(() {
+      _isListening = false;
     });
     
-    // Aquí puedes agregar lógica de reconocimiento de voz
+    // Procesar el comando de voz
+    if (_lastWords.isNotEmpty) {
+      _processVoiceCommand(_lastWords);
+    }
+  }
+
+  void _processVoiceCommand(String command) {
+    // Aquí puedes agregar lógica para procesar comandos de voz
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Comando de Voz'),
+        content: Text('Escuché: "$command"'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+    
+    // Limpiar el texto después de procesar
+    setState(() {
+      _lastWords = '';
+    });
+  }
+
+  void _showPermissionDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Permiso Requerido'),
+        content: const Text('Esta aplicación necesita acceso al micrófono para el reconocimiento de voz.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancelar'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              openAppSettings();
+            },
+            child: const Text('Configuración'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _toggleMicrophone() {
+    if (!_speechEnabled) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Reconocimiento de voz no disponible'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
     if (_isListening) {
-      // Iniciar reconocimiento de voz
-      print('Iniciando reconocimiento de voz...');
+      _stopListening();
     } else {
-      // Detener reconocimiento de voz
-      print('Deteniendo reconocimiento de voz...');
+      _startListening();
     }
   }
 
@@ -63,7 +178,7 @@ class _HomeScreenState extends State<HomeScreen> {
           // Botón de brújula (izquierda)
           Positioned(
             left: 20,
-            bottom: 200,
+            bottom: 280,
             child: Container(
               width: 50,
               height: 50,
@@ -89,7 +204,7 @@ class _HomeScreenState extends State<HomeScreen> {
           // Botón de configuración (derecha)
           Positioned(
             right: 20,
-            bottom: 200,
+            bottom: 280,
             child: GestureDetector(
               onTap: () => Navigator.pushNamed(context, '/settings'),
               child: Container(
@@ -141,26 +256,41 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                   const SizedBox(height: 16),
                   
-                  // Texto "Pulsa para hablar"
-                  const Text(
-                    'Pulsa para hablar',
+                  // Texto dinámico según estado
+                  Text(
+                    _isListening 
+                        ? 'Escuchando...' 
+                        : _lastWords.isNotEmpty 
+                            ? 'Último: $_lastWords'
+                            : 'Pulsa para hablar',
                     style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.w600,
-                      color: Colors.black,
+                      color: _isListening ? Colors.blue : Colors.black,
                     ),
+                    textAlign: TextAlign.center,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
                   ),
                   const SizedBox(height: 16),
                   
                   // Botón del micrófono
                   GestureDetector(
                     onTap: _toggleMicrophone,
-                    child: Container(
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 300),
                       width: double.infinity,
                       height: 120,
                       decoration: BoxDecoration(
-                        color: Colors.black,
+                        color: _isListening ? Colors.red : Colors.black,
                         borderRadius: BorderRadius.circular(24),
+                        boxShadow: _isListening ? [
+                          BoxShadow(
+                            color: Colors.red.withOpacity(0.3),
+                            blurRadius: 20,
+                            spreadRadius: 5,
+                          ),
+                        ] : null,
                       ),
                       child: Icon(
                         _isListening ? Icons.mic : Icons.mic_off,
