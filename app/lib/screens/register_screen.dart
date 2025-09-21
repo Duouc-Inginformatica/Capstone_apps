@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import '../services/api_client.dart';
+import '../services/tts_service.dart';
 import 'map_screen.dart';
 
 class RegisterScreen extends StatefulWidget {
@@ -15,6 +17,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final _emailCtrl = TextEditingController();
   final _passCtrl = TextEditingController();
   final _confirmPassCtrl = TextEditingController();
+  final _api = ApiClient();
+  bool _loading = false;
 
   @override
   void dispose() {
@@ -25,11 +29,11 @@ class _RegisterScreenState extends State<RegisterScreen> {
     super.dispose();
   }
 
-  void _handleRegister() {
+  Future<void> _handleRegister() async {
     // Validación básica
-    if (_userCtrl.text.isEmpty || 
-        _emailCtrl.text.isEmpty || 
-        _passCtrl.text.isEmpty || 
+    if (_userCtrl.text.isEmpty ||
+        _emailCtrl.text.isEmpty ||
+        _passCtrl.text.isEmpty ||
         _confirmPassCtrl.text.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -37,6 +41,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
           backgroundColor: Colors.red,
         ),
       );
+      TtsService.instance.speak('Por favor complete todos los campos');
       return;
     }
 
@@ -48,6 +53,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
           backgroundColor: Colors.red,
         ),
       );
+      TtsService.instance.speak('Las contraseñas no coinciden');
       return;
     }
 
@@ -59,19 +65,38 @@ class _RegisterScreenState extends State<RegisterScreen> {
           backgroundColor: Colors.red,
         ),
       );
+      TtsService.instance.speak('Por favor ingrese un email válido');
       return;
     }
-
-    // Mostrar éxito y navegar al mapa
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Cuenta creada exitosamente'),
-        backgroundColor: Colors.green,
-      ),
-    );
-
-    // Navegación al mapa después del registro
-    Navigator.of(context).pushReplacementNamed(MapScreen.routeName);
+    setState(() => _loading = true);
+    try {
+      await _api.register(
+        username: _userCtrl.text.trim(),
+        email: _emailCtrl.text.trim(),
+        password: _passCtrl.text,
+        name: _userCtrl.text.trim(),
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Cuenta creada exitosamente'),
+          backgroundColor: Colors.green,
+        ),
+      );
+      TtsService.instance.speak('Cuenta creada exitosamente');
+      Navigator.of(context).pushReplacementNamed(MapScreen.routeName);
+    } catch (e) {
+      if (!mounted) return;
+      final msg = e.toString().replaceFirst('Exception: ', '');
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(msg), backgroundColor: Colors.red));
+      TtsService.instance.speak(msg);
+    } finally {
+      if (mounted) {
+        setState(() => _loading = false);
+      }
+    }
   }
 
   @override
@@ -104,14 +129,11 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 ),
               ),
               const SizedBox(height: 60),
-              
+
               // Campo Usuario
-              _buildTextField(
-                controller: _userCtrl,
-                label: 'Usuario',
-              ),
+              _buildTextField(controller: _userCtrl, label: 'Usuario'),
               const SizedBox(height: 20),
-              
+
               // Campo Email
               _buildTextField(
                 controller: _emailCtrl,
@@ -119,7 +141,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 keyboardType: TextInputType.emailAddress,
               ),
               const SizedBox(height: 20),
-              
+
               // Campo Contraseña
               _buildTextField(
                 controller: _passCtrl,
@@ -127,7 +149,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 obscureText: true,
               ),
               const SizedBox(height: 20),
-              
+
               // Campo Confirmar Contraseña
               _buildTextField(
                 controller: _confirmPassCtrl,
@@ -135,7 +157,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 obscureText: true,
               ),
               const SizedBox(height: 40),
-              
+
               // Botón de registro con flecha
               Container(
                 width: double.infinity,
@@ -151,14 +173,23 @@ class _RegisterScreenState extends State<RegisterScreen> {
                     elevation: 0,
                   ),
                   onPressed: _handleRegister,
-                  child: const Icon(
-                    Icons.arrow_forward,
-                    size: 28,
-                    color: Colors.white,
-                  ),
+                  child: _loading
+                      ? const SizedBox(
+                          width: 28,
+                          height: 28,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 3,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Icon(
+                          Icons.arrow_forward,
+                          size: 28,
+                          color: Colors.white,
+                        ),
                 ),
               ),
-              
+
               // Link para volver al login
               TextButton(
                 onPressed: () {
@@ -211,7 +242,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
             keyboardType: keyboardType,
             decoration: const InputDecoration(
               border: InputBorder.none,
-              contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+              contentPadding: EdgeInsets.symmetric(
+                horizontal: 16,
+                vertical: 16,
+              ),
               hintStyle: TextStyle(color: Colors.black54),
             ),
           ),

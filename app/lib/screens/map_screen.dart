@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'dart:async';
 import 'package:speech_to_text/speech_to_text.dart';
 import 'package:permission_handler/permission_handler.dart';
+import '../services/tts_service.dart';
 
 class MapScreen extends StatefulWidget {
   const MapScreen({super.key});
@@ -15,6 +17,8 @@ class _MapScreenState extends State<MapScreen> {
   String _lastWords = '';
   final SpeechToText _speech = SpeechToText();
   bool _speechEnabled = false;
+  Timer? _resultDebounce;
+  String _pendingWords = '';
 
   @override
   void initState() {
@@ -25,18 +29,24 @@ class _MapScreenState extends State<MapScreen> {
   void _initSpeech() async {
     _speechEnabled = await _speech.initialize(
       onError: (errorNotification) {
+        if (!mounted) return;
         setState(() {
           _isListening = false;
         });
+        // Feedback por voz en caso de error
+        TtsService.instance.speak('Error en reconocimiento de voz');
       },
       onStatus: (status) {
         if (status == 'notListening') {
+          if (!mounted) return;
           setState(() {
             _isListening = false;
           });
+          TtsService.instance.speak('Micrófono detenido');
         }
       },
     );
+    if (!mounted) return;
     setState(() {});
   }
 
@@ -45,33 +55,45 @@ class _MapScreenState extends State<MapScreen> {
     var status = await Permission.microphone.request();
     if (status != PermissionStatus.granted) {
       _showPermissionDialog();
+      TtsService.instance.speak('Permiso de micrófono denegado');
       return;
     }
 
     await _speech.listen(
       onResult: (result) {
-        setState(() {
-          _lastWords = result.recognizedWords;
+        // Debounce para evitar demasiados rebuilds con resultados parciales
+        _pendingWords = result.recognizedWords;
+        if (_resultDebounce?.isActive ?? false) return;
+        _resultDebounce = Timer(const Duration(milliseconds: 200), () {
+          if (!mounted) return;
+          setState(() {
+            _lastWords = _pendingWords;
+          });
         });
       },
       listenFor: const Duration(seconds: 30),
       pauseFor: const Duration(seconds: 3),
-      partialResults: true,
       localeId: 'es_ES', // Español
-      cancelOnError: true,
-      listenMode: ListenMode.confirmation,
+      listenOptions: SpeechListenOptions(
+        partialResults: true,
+        cancelOnError: true,
+        listenMode: ListenMode.confirmation,
+      ),
     );
+    if (!mounted) return;
     setState(() {
       _isListening = true;
     });
+    TtsService.instance.speak('Escuchando');
   }
 
   void _stopListening() async {
     await _speech.stop();
+    if (!mounted) return;
     setState(() {
       _isListening = false;
     });
-    
+
     // Procesar el comando de voz
     if (_lastWords.isNotEmpty) {
       _processVoiceCommand(_lastWords);
@@ -80,6 +102,7 @@ class _MapScreenState extends State<MapScreen> {
 
   void _processVoiceCommand(String command) {
     // Aquí puedes agregar lógica para procesar comandos de voz
+    if (!mounted) return;
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -93,7 +116,7 @@ class _MapScreenState extends State<MapScreen> {
         ],
       ),
     );
-    
+
     // Limpiar el texto después de procesar
     setState(() {
       _lastWords = '';
@@ -105,7 +128,9 @@ class _MapScreenState extends State<MapScreen> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Permiso Requerido'),
-        content: const Text('Esta aplicación necesita acceso al micrófono para el reconocimiento de voz.'),
+        content: const Text(
+          'Esta aplicación necesita acceso al micrófono para el reconocimiento de voz.',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
@@ -142,6 +167,18 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   @override
+  void dispose() {
+    _resultDebounce?.cancel();
+    // Garantiza liberar el reconocimiento si la vista se destruye
+    if (_isListening) {
+      _speech.stop();
+    }
+    // Intenta cancelar cualquier operación pendiente
+    _speech.cancel();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.grey[300],
@@ -166,15 +203,11 @@ class _MapScreenState extends State<MapScreen> {
             child: Container(
               color: Colors.grey[400],
               child: const Center(
-                child: Icon(
-                  Icons.map_outlined,
-                  size: 120,
-                  color: Colors.grey,
-                ),
+                child: Icon(Icons.map_outlined, size: 120, color: Colors.grey),
               ),
             ),
           ),
-          
+
           // Botón de brújula (izquierda)
           Positioned(
             left: 20,
@@ -200,7 +233,7 @@ class _MapScreenState extends State<MapScreen> {
               ),
             ),
           ),
-          
+
           // Botón de configuración (derecha)
           Positioned(
             right: 20,
@@ -230,7 +263,7 @@ class _MapScreenState extends State<MapScreen> {
               ),
             ),
           ),
-          
+
           // Panel inferior
           Positioned(
             left: 0,
@@ -255,14 +288,14 @@ class _MapScreenState extends State<MapScreen> {
                     ),
                   ),
                   const SizedBox(height: 16),
-                  
+
                   // Texto dinámico según estado
                   Text(
-                    _isListening 
-                        ? 'Escuchando...' 
-                        : _lastWords.isNotEmpty 
-                            ? 'Último: $_lastWords'
-                            : 'Pulsa para hablar',
+                    _isListening
+                        ? 'Escuchando...'
+                        : _lastWords.isNotEmpty
+                        ? 'Último: $_lastWords'
+                        : 'Pulsa para hablar',
                     style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.w600,
@@ -273,29 +306,41 @@ class _MapScreenState extends State<MapScreen> {
                     overflow: TextOverflow.ellipsis,
                   ),
                   const SizedBox(height: 16),
-                  
+
                   // Botón del micrófono
-                  GestureDetector(
-                    onTap: _toggleMicrophone,
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 300),
-                      width: double.infinity,
-                      height: 120,
-                      decoration: BoxDecoration(
-                        color: _isListening ? Colors.red : Colors.black,
-                        borderRadius: BorderRadius.circular(24),
-                        boxShadow: _isListening ? [
-                          BoxShadow(
-                            color: Colors.red.withOpacity(0.3),
-                            blurRadius: 20,
-                            spreadRadius: 5,
-                          ),
-                        ] : null,
-                      ),
-                      child: Icon(
-                        _isListening ? Icons.mic : Icons.mic_off,
-                        color: Colors.white,
-                        size: 48,
+                  Semantics(
+                    label: _isListening
+                        ? 'Botón micrófono, escuchando'
+                        : 'Botón micrófono, no escuchando',
+                    hint: _isListening
+                        ? 'Toca para detener'
+                        : 'Toca para iniciar',
+                    button: true,
+                    enabled: true,
+                    child: GestureDetector(
+                      onTap: _toggleMicrophone,
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 300),
+                        width: double.infinity,
+                        height: 120,
+                        decoration: BoxDecoration(
+                          color: _isListening ? Colors.red : Colors.black,
+                          borderRadius: BorderRadius.circular(24),
+                          boxShadow: _isListening
+                              ? [
+                                  BoxShadow(
+                                    color: Colors.red.withValues(alpha: 0.3),
+                                    blurRadius: 20,
+                                    spreadRadius: 5,
+                                  ),
+                                ]
+                              : null,
+                        ),
+                        child: Icon(
+                          _isListening ? Icons.mic : Icons.mic_off,
+                          color: Colors.white,
+                          size: 48,
+                        ),
                       ),
                     ),
                   ),

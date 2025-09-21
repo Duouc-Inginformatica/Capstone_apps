@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import '../services/api_client.dart';
+import '../services/tts_service.dart';
 import 'map_screen.dart';
 import 'register_screen.dart';
 
@@ -14,6 +16,8 @@ class LoginScreen extends StatefulWidget {
 class _LoginScreenState extends State<LoginScreen> {
   final _userCtrl = TextEditingController();
   final _passCtrl = TextEditingController();
+  final _api = ApiClient();
+  bool _loading = false;
 
   @override
   void dispose() {
@@ -22,8 +26,7 @@ class _LoginScreenState extends State<LoginScreen> {
     super.dispose();
   }
 
-  void _handleLogin() {
-    // Validación básica
+  Future<void> _handleLogin() async {
     if (_userCtrl.text.isEmpty || _passCtrl.text.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -31,11 +34,30 @@ class _LoginScreenState extends State<LoginScreen> {
           backgroundColor: Colors.red,
         ),
       );
+      TtsService.instance.speak('Por favor complete todos los campos');
       return;
     }
-
-    // Navegación al mapa
-    Navigator.of(context).pushReplacementNamed(MapScreen.routeName);
+    setState(() => _loading = true);
+    try {
+      await _api.login(
+        username: _userCtrl.text.trim(),
+        password: _passCtrl.text,
+      );
+      if (!mounted) return;
+      TtsService.instance.speak('Inicio de sesión correcto');
+      Navigator.of(context).pushReplacementNamed(MapScreen.routeName);
+    } catch (e) {
+      if (!mounted) return;
+      final msg = e.toString().replaceFirst('Exception: ', '');
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(msg), backgroundColor: Colors.red));
+      TtsService.instance.speak(msg);
+    } finally {
+      if (mounted) {
+        setState(() => _loading = false);
+      }
+    }
   }
 
   @override
@@ -81,7 +103,10 @@ class _LoginScreenState extends State<LoginScreen> {
                       controller: _userCtrl,
                       decoration: const InputDecoration(
                         border: InputBorder.none,
-                        contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                        contentPadding: EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 16,
+                        ),
                         hintStyle: TextStyle(color: Colors.black54),
                       ),
                     ),
@@ -113,7 +138,10 @@ class _LoginScreenState extends State<LoginScreen> {
                       obscureText: true,
                       decoration: const InputDecoration(
                         border: InputBorder.none,
-                        contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                        contentPadding: EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 16,
+                        ),
                         hintStyle: TextStyle(color: Colors.black54),
                       ),
                     ),
@@ -136,14 +164,23 @@ class _LoginScreenState extends State<LoginScreen> {
                     elevation: 0,
                   ),
                   onPressed: _handleLogin,
-                  child: const Icon(
-                    Icons.arrow_forward,
-                    size: 28,
-                    color: Colors.white,
-                  ),
+                  child: _loading
+                      ? const SizedBox(
+                          width: 28,
+                          height: 28,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 3,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Icon(
+                          Icons.arrow_forward,
+                          size: 28,
+                          color: Colors.white,
+                        ),
                 ),
               ),
-              
+
               // Link para ir al registro
               TextButton(
                 onPressed: () {

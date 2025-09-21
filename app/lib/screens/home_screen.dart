@@ -15,14 +15,14 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() {
       _isListening = !_isListening;
     });
-    
+
     // Aquí puedes agregar lógica de reconocimiento de voz
     if (_isListening) {
       // Iniciar reconocimiento de voz
-      print('Iniciando reconocimiento de voz...');
+      debugPrint('Iniciando reconocimiento de voz...');
     } else {
       // Detener reconocimiento de voz
-      print('Deteniendo reconocimiento de voz...');
+      debugPrint('Deteniendo reconocimiento de voz...');
     }
   }
 
@@ -51,15 +51,11 @@ class _HomeScreenState extends State<HomeScreen> {
             child: Container(
               color: Colors.grey[400],
               child: const Center(
-                child: Icon(
-                  Icons.map_outlined,
-                  size: 120,
-                  color: Colors.grey,
-                ),
+                child: Icon(Icons.map_outlined, size: 120, color: Colors.grey),
               ),
             ),
           ),
-          
+
           // Botón de brújula (izquierda)
           Positioned(
             left: 20,
@@ -85,7 +81,7 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
           ),
-          
+
           // Botón de configuración (derecha)
           Positioned(
             right: 20,
@@ -115,7 +111,7 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
           ),
-          
+
           // Panel inferior
           Positioned(
             left: 0,
@@ -140,7 +136,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                   ),
                   const SizedBox(height: 16),
-                  
+
                   // Texto "Pulsa para hablar"
                   const Text(
                     'Pulsa para hablar',
@@ -151,7 +147,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                   ),
                   const SizedBox(height: 16),
-                  
+
                   // Botón del micrófono
                   GestureDetector(
                     onTap: _toggleMicrophone,

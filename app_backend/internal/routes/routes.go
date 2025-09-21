@@ -9,4 +9,5 @@ func Register(app *fiber.App) {
 	api := app.Group("/api")
 	api.Get("/health", handlers.Health)
 	api.Post("/login", handlers.Login)
+	api.Post("/register", handlers.Register)
 }

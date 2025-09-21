@@ -43,7 +43,10 @@ class WayFindCLApp extends StatelessWidget {
             color: Colors.black,
             fontWeight: FontWeight.w600,
           ),
-          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 16,
+            vertical: 14,
+          ),
           border: OutlineInputBorder(
             borderRadius: BorderRadius.circular(14),
             borderSide: BorderSide.none,
