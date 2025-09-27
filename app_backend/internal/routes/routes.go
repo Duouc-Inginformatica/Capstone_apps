@@ -10,4 +10,7 @@ func Register(app *fiber.App) {
 	api.Get("/health", handlers.Health)
 	api.Post("/login", handlers.Login)
 	api.Post("/register", handlers.Register)
+	api.Post("/gtfs/sync", handlers.SyncGTFS)
+	api.Get("/stops", handlers.GetNearbyStops)
+	api.Post("/route/transit", handlers.PlanTransit)
 }

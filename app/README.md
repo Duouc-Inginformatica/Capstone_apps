@@ -2,15 +2,23 @@
 
 A new Flutter project.
 
+## Características clave
+
+- Persistencia del token de sesión con `flutter_secure_storage`.
+- Pantalla de ajustes con opción de cerrar sesión.
+- Comandos de voz (speech-to-text) que permiten abrir ajustes o solicitar rutas.
+- Text-to-speech para feedback auditivo.
+
 ## Getting Started
 
-This project is a starting point for a Flutter application.
+1. Instala dependencias:
+	```powershell
+	flutter pub get
+	```
+2. Configura la URL base del backend si necesitas apuntar a otra instancia (usa `--dart-define=API_BASE_URL=...`).
+3. Ejecuta la app:
+	```powershell
+	flutter run
+	```
 
-A few resources to get you started if this is your first Flutter project:
-
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
-
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+Para más recursos sobre Flutter visita la [documentación oficial](https://docs.flutter.dev/).

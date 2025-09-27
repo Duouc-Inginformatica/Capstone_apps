@@ -1,5 +1,7 @@
 package models
 
+import "time"
+
 // LoginRequest represents credentials provided by the client.
 type LoginRequest struct {
 	Username string `json:"username"`
@@ -17,6 +19,7 @@ type UserDTO struct {
 type LoginResponse struct {
 	Token string  `json:"token"`
 	User  UserDTO `json:"user"`
+	ExpiresAt time.Time `json:"expires_at"`
 }
 
 // ErrorResponse is a simple error shape for API errors.

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'services/auth_storage.dart';
 import 'screens/login_screen.dart';
 import 'screens/register_screen.dart';
 import 'screens/home_screen.dart';
@@ -9,8 +10,39 @@ void main() {
   runApp(const WayFindCLApp());
 }
 
-class WayFindCLApp extends StatelessWidget {
+class WayFindCLApp extends StatefulWidget {
   const WayFindCLApp({super.key});
+
+  @override
+  State<WayFindCLApp> createState() => _WayFindCLAppState();
+}
+
+class _WayFindCLAppState extends State<WayFindCLApp> {
+  String? _initialRoute;
+
+  @override
+  void initState() {
+    super.initState();
+    _resolveInitialRoute();
+  }
+
+  Future<void> _resolveInitialRoute() async {
+    final token = await AuthStorage.readToken();
+    if (!mounted) return;
+    setState(() {
+      _initialRoute = token != null
+          ? MapScreen.routeName
+          : LoginScreen.routeName;
+    });
+  }
+
+  Widget _getHomeWidget() {
+    if (_initialRoute == MapScreen.routeName) {
+      return const MapScreen();
+    } else {
+      return const LoginScreen();
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -20,6 +52,15 @@ class WayFindCLApp extends StatelessWidget {
       fontFamily: 'Roboto',
       scaffoldBackgroundColor: const Color(0xFFF5F6FF),
     );
+
+    if (_initialRoute == null) {
+      return MaterialApp(
+        title: 'WayFindCL',
+        debugShowCheckedModeBanner: false,
+        theme: baseTheme,
+        home: const _SplashScreen(),
+      );
+    }
 
     return MaterialApp(
       title: 'WayFindCL',
@@ -53,15 +94,32 @@ class WayFindCLApp extends StatelessWidget {
           ),
         ),
       ),
-      initialRoute: '/',
-      routes: {
-        '/': (_) => const LoginScreen(),
-        LoginScreen.routeName: (_) => const LoginScreen(),
-        RegisterScreen.routeName: (_) => const RegisterScreen(),
-        HomeScreen.routeName: (_) => const HomeScreen(),
-        MapScreen.routeName: (_) => const MapScreen(),
-        SettingsScreen.routeName: (_) => const SettingsScreen(),
+      home: _getHomeWidget(),
+      onGenerateRoute: (settings) {
+        switch (settings.name) {
+          case LoginScreen.routeName:
+            return MaterialPageRoute(builder: (_) => const LoginScreen());
+          case RegisterScreen.routeName:
+            return MaterialPageRoute(builder: (_) => const RegisterScreen());
+          case HomeScreen.routeName:
+            return MaterialPageRoute(builder: (_) => const HomeScreen());
+          case MapScreen.routeName:
+            return MaterialPageRoute(builder: (_) => const MapScreen());
+          case SettingsScreen.routeName:
+            return MaterialPageRoute(builder: (_) => const SettingsScreen());
+          default:
+            return MaterialPageRoute(builder: (_) => const LoginScreen());
+        }
       },
     );
+  }
+}
+
+class _SplashScreen extends StatelessWidget {
+  const _SplashScreen();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Scaffold(body: Center(child: CircularProgressIndicator()));
   }
 }

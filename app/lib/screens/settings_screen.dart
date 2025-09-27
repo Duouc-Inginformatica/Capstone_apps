@@ -1,8 +1,19 @@
 import 'package:flutter/material.dart';
 
-class SettingsScreen extends StatelessWidget {
+import '../services/auth_storage.dart';
+import '../services/tts_service.dart';
+import 'login_screen.dart';
+
+class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
   static const routeName = '/settings';
+
+  @override
+  State<SettingsScreen> createState() => _SettingsScreenState();
+}
+
+class _SettingsScreenState extends State<SettingsScreen> {
+  bool _processingLogout = false;
 
   @override
   Widget build(BuildContext context) {
@@ -29,10 +40,33 @@ class SettingsScreen extends StatelessWidget {
               title: 'Reportar Errores',
               onTap: () {},
             ),
+            const SizedBox(height: 16),
+            _ActionTile(
+              icon: Icons.logout,
+              title: _processingLogout ? 'Cerrando sesión...' : 'Cerrar Sesión',
+              onTap: _processingLogout ? null : _handleLogout,
+              destructive: true,
+            ),
           ],
         ),
       ),
     );
+  }
+
+  Future<void> _handleLogout() async {
+    setState(() => _processingLogout = true);
+    try {
+      await AuthStorage.clearToken();
+      await TtsService.instance.speak('Sesión cerrada');
+      if (!mounted) return;
+      Navigator.of(
+        context,
+      ).pushNamedAndRemoveUntil(LoginScreen.routeName, (route) => false);
+    } finally {
+      if (mounted) {
+        setState(() => _processingLogout = false);
+      }
+    }
   }
 }
 
@@ -41,11 +75,13 @@ class _ActionTile extends StatelessWidget {
     required this.icon,
     required this.title,
     required this.onTap,
+    this.destructive = false,
   });
 
   final IconData icon;
   final String title;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
+  final bool destructive;
 
   @override
   Widget build(BuildContext context) {
@@ -55,21 +91,31 @@ class _ActionTile extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: const Color(0xFFF6F5F6),
+          color: destructive
+              ? const Color(0xFFFFEAEA)
+              : const Color(0xFFF6F5F6),
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: Colors.black12),
+          border: Border.all(
+            color: destructive ? Colors.red.shade200 : Colors.black12,
+          ),
         ),
         child: Row(
           children: [
-            Icon(icon, color: Colors.black87),
+            Icon(icon, color: destructive ? Colors.redAccent : Colors.black87),
             const SizedBox(width: 12),
             Expanded(
               child: Text(
                 title,
-                style: const TextStyle(fontWeight: FontWeight.w600),
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  color: destructive ? Colors.redAccent : Colors.black,
+                ),
               ),
             ),
-            const Icon(Icons.chevron_right),
+            Icon(
+              Icons.chevron_right,
+              color: destructive ? Colors.redAccent : Colors.black54,
+            ),
           ],
         ),
       ),

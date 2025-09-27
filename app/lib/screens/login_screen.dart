@@ -48,7 +48,7 @@ class _LoginScreenState extends State<LoginScreen> {
       Navigator.of(context).pushReplacementNamed(MapScreen.routeName);
     } catch (e) {
       if (!mounted) return;
-      final msg = e.toString().replaceFirst('Exception: ', '');
+      final msg = _humanErrorMessage(e);
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text(msg), backgroundColor: Colors.red));
@@ -58,6 +58,16 @@ class _LoginScreenState extends State<LoginScreen> {
         setState(() => _loading = false);
       }
     }
+  }
+
+  String _humanErrorMessage(Object error) {
+    if (error is ApiException) {
+      if (error.statusCode == 401) {
+        return 'Credenciales inválidas. Verifique usuario y contraseña.';
+      }
+      if (error.message.isNotEmpty) return error.message;
+    }
+    return 'Ocurrió un problema al iniciar sesión. Inténtelo de nuevo.';
   }
 
   @override

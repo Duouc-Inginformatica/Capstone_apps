@@ -87,7 +87,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
       Navigator.of(context).pushReplacementNamed(MapScreen.routeName);
     } catch (e) {
       if (!mounted) return;
-      final msg = e.toString().replaceFirst('Exception: ', '');
+      final msg = _humanErrorMessage(e);
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text(msg), backgroundColor: Colors.red));
@@ -97,6 +97,19 @@ class _RegisterScreenState extends State<RegisterScreen> {
         setState(() => _loading = false);
       }
     }
+  }
+
+  String _humanErrorMessage(Object error) {
+    if (error is ApiException) {
+      if (error.statusCode == 409) {
+        return 'El usuario o correo ya se encuentra registrado.';
+      }
+      if (error.statusCode >= 500) {
+        return 'El servidor no está disponible. Intenta más tarde.';
+      }
+      if (error.message.isNotEmpty) return error.message;
+    }
+    return 'No se pudo crear la cuenta. Revisa los datos e inténtalo de nuevo.';
   }
 
   @override

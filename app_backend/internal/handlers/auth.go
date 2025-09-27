@@ -1,17 +1,20 @@
 package handlers
 
 import (
-	"crypto/hmac"
-	"crypto/sha256"
+	"context"
 	"database/sql"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
+	"log"
 	"os"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/yourorg/wayfindcl/internal/graphhopper"
+	"github.com/yourorg/wayfindcl/internal/gtfs"
 	"github.com/yourorg/wayfindcl/internal/models"
 
 	"golang.org/x/crypto/bcrypt"
@@ -19,8 +22,14 @@ import (
 
 // package-level dependencies
 var (
-	dbConn     *sql.DB
-	jwtSecret  []byte
+	dbConn          *sql.DB
+	jwtSecret       []byte
+	tokenTTL        = 24 * time.Hour
+	gtfsLoader      *gtfs.Loader
+	gtfsSyncMu      sync.Mutex
+	gtfsSummaryMu   sync.RWMutex
+	gtfsLastSummary *gtfs.Summary
+	hopperClient    *graphhopper.Client
 )
 
 // Setup wires shared dependencies for handlers. Call this during app bootstrap.
@@ -32,26 +41,85 @@ func Setup(db *sql.DB) {
 		secret = "dev-secret-change-me"
 	}
 	jwtSecret = []byte(secret)
+
+	if ttl := os.Getenv("JWT_TTL"); ttl != "" {
+		dur, err := time.ParseDuration(ttl)
+		if err != nil || dur <= 0 {
+			log.Printf("invalid JWT_TTL=%q, using default %s", ttl, tokenTTL)
+		} else {
+			tokenTTL = dur
+		}
+	}
+
+	feedURL := strings.TrimSpace(os.Getenv("GTFS_FEED_URL"))
+	if feedURL == "" {
+		feedURL = "https://www.dtpm.cl/descarga.php?file=gtfs/gtfs.zip"
+	}
+	fallbackURL := strings.TrimSpace(os.Getenv("GTFS_FALLBACK_URL"))
+	if fallbackURL == "" {
+		fallbackURL = "https://www.dtpm.cl/descarga.php?file=gtfs/gtfs.zip"
+	}
+	gtfsLoader = gtfs.NewLoader(feedURL, fallbackURL, nil)
+
+	if auto := strings.TrimSpace(os.Getenv("GTFS_AUTO_SYNC")); strings.EqualFold(auto, "true") {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+			defer cancel()
+			summary, err := gtfsLoader.Sync(ctx, dbConn)
+			if err != nil {
+				log.Printf("gtfs auto-sync failed: %v", err)
+				return
+			}
+			gtfsSummaryMu.Lock()
+			gtfsLastSummary = summary
+			gtfsSummaryMu.Unlock()
+			log.Printf("gtfs auto-sync completed: %d stops", summary.StopsImported)
+		}()
+	}
+
+	if base := strings.TrimSpace(os.Getenv("GRAPHHOPPER_BASE_URL")); base != "" {
+		includeGeom := true
+		if opt := strings.TrimSpace(os.Getenv("GRAPHHOPPER_INCLUDE_GEOMETRY")); opt != "" {
+			includeGeom = !(strings.EqualFold(opt, "false") || opt == "0")
+		}
+		opts := graphhopper.Options{
+			Profile:         strings.TrimSpace(os.Getenv("GRAPHHOPPER_PROFILE")),
+			Locale:          strings.TrimSpace(os.Getenv("GRAPHHOPPER_LOCALE")),
+			IncludeGeometry: includeGeom,
+		}
+		if timeoutStr := strings.TrimSpace(os.Getenv("GRAPHHOPPER_TIMEOUT")); timeoutStr != "" {
+			if dur, err := time.ParseDuration(timeoutStr); err == nil && dur > 0 {
+				opts.Timeout = dur
+			}
+		}
+		client, err := graphhopper.NewClient(base, strings.TrimSpace(os.Getenv("GRAPHHOPPER_API_KEY")), opts)
+		if err != nil {
+			log.Printf("graphhopper init error: %v", err)
+		} else {
+			hopperClient = client
+		}
+	}
 }
 
-// simple JWT-like token for demo purposes (HMAC SHA256 without external deps)
-func issueToken(userID int64, username string) string {
-	// Minimal JWT-like token generation (HS256) without third-party deps.
-	// For production, prefer a mature JWT library.
-	header := map[string]string{"alg": "HS256", "typ": "JWT"}
-	payload := map[string]any{
-		"sub": userID,
-		"name": username,
-		"iat": time.Now().Unix(),
+type userClaims struct {
+	Username string `json:"username"`
+	jwt.RegisteredClaims
+}
+
+func issueToken(userID int64, username string) (string, time.Time, error) {
+	now := time.Now()
+	expires := now.Add(tokenTTL)
+	claims := userClaims{
+		Username: username,
+		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:   strconv.FormatInt(userID, 10),
+			IssuedAt:  jwt.NewNumericDate(now),
+			ExpiresAt: jwt.NewNumericDate(expires),
+		},
 	}
-	hJSON, _ := json.Marshal(header)
-	pJSON, _ := json.Marshal(payload)
-	enc := base64.RawURLEncoding
-	unsigned := enc.EncodeToString(hJSON) + "." + enc.EncodeToString(pJSON)
-	mac := hmac.New(sha256.New, jwtSecret)
-	mac.Write([]byte(unsigned))
-	sig := enc.EncodeToString(mac.Sum(nil))
-	return unsigned + "." + sig
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	signed, err := token.SignedString(jwtSecret)
+	return signed, expires, err
 }
 
 // Register handles POST /api/register.
@@ -88,11 +156,15 @@ func Register(c *fiber.Ctx) error {
 	}
 	userID, _ := res.LastInsertId()
 
-	token := issueToken(userID, req.Username)
+	token, expiresAt, err := issueToken(userID, req.Username)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(models.ErrorResponse{Error: "failed to sign token"})
+	}
 	c.Set("Cache-Control", "no-store")
 	return c.Status(fiber.StatusCreated).JSON(models.LoginResponse{
-		Token: token,
-		User:  models.UserDTO{ID: userID, Username: req.Username, Name: req.Name},
+		Token:     token,
+		User:      models.UserDTO{ID: userID, Username: req.Username, Name: req.Name},
+		ExpiresAt: expiresAt,
 	})
 }
 
@@ -111,7 +183,7 @@ func Login(c *fiber.Ctx) error {
 	}
 
 	var (
-		id int64
+		id                           int64
 		username, name, passwordHash string
 	)
 	err := dbConn.QueryRow(`SELECT id, username, name, password_hash FROM users WHERE username = ?`, req.Username).Scan(&id, &username, &name, &passwordHash)
@@ -124,10 +196,14 @@ func Login(c *fiber.Ctx) error {
 	if err := bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(req.Password)); err != nil {
 		return c.Status(fiber.StatusUnauthorized).JSON(models.ErrorResponse{Error: "invalid credentials"})
 	}
-	token := issueToken(id, username)
+	token, expiresAt, err := issueToken(id, username)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(models.ErrorResponse{Error: "failed to sign token"})
+	}
 	c.Set("Cache-Control", "no-store")
 	return c.Status(fiber.StatusOK).JSON(models.LoginResponse{
-		Token: token,
-		User:  models.UserDTO{ID: id, Username: username, Name: name},
+		Token:     token,
+		User:      models.UserDTO{ID: id, Username: username, Name: name},
+		ExpiresAt: expiresAt,
 	})
 }
