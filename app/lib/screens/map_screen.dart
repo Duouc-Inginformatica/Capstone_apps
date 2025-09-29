@@ -143,7 +143,7 @@ class _AccessibleNotificationState extends State<AccessibleNotification>
             borderRadius: BorderRadius.circular(12),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withOpacity(0.3),
+                color: Colors.black.withValues(alpha: 0.3),
                 blurRadius: 8,
                 offset: const Offset(0, 4),
               ),
@@ -231,7 +231,7 @@ class _MapScreenState extends State<MapScreen> {
   Timer? _orientationTimer;
 
   // Accessibility features
-  bool _isAccessibilityMode = true;
+  final bool _isAccessibilityMode = true;
   Timer? _feedbackTimer;
 
   // Notification system
@@ -239,7 +239,11 @@ class _MapScreenState extends State<MapScreen> {
   final int _maxNotifications = 3;
 
   // Map and location services
-  MapController? _mapController;
+  final MapController _mapController = MapController();
+  bool _isMapReady = false;
+  double? _pendingRotation;
+  LatLng? _pendingCenter;
+  double? _pendingZoom;
   Position? _currentPosition;
   List<Marker> _markers = [];
   List<Polyline> _polylines = [];
@@ -334,8 +338,11 @@ class _MapScreenState extends State<MapScreen> {
           });
 
           // Rotar el mapa con la orientación del usuario
-          if (_mapController != null) {
-            _mapController!.rotate(-_heading);
+          final rotation = -_heading;
+          if (_isMapReady) {
+            _mapController.rotate(rotation);
+          } else {
+            _pendingRotation = rotation;
           }
 
           // Proporcionar feedback de orientación cada 3 segundos
@@ -429,7 +436,7 @@ class _MapScreenState extends State<MapScreen> {
       final distance = (closest['distance'] as double).round();
 
       TtsService.instance.speak(
-        'Parada ${stop['name']} a ${distance} metros en tu dirección',
+        'Parada ${stop['name']} a $distance metros en tu dirección',
       );
     }
   }
@@ -497,6 +504,28 @@ class _MapScreenState extends State<MapScreen> {
     TtsService.instance.speak(commands.join('. '));
   }
 
+  String _statusMessage() {
+    if (_isListening) {
+      if (_currentRecognizedText.isNotEmpty) {
+        return '"$_currentRecognizedText"';
+      }
+      return 'Escuchando... Di tu comando';
+    }
+    if (_isLoadingStops) {
+      return 'Cargando paradas...';
+    }
+    if (_pendingDestination != null) {
+      return 'Destino pendiente: $_pendingDestination';
+    }
+    if (_hasActiveTrip && _nearbyStops.isNotEmpty) {
+      return '${_nearbyStops.length} paradas cercanas';
+    }
+    if (_lastWords.isNotEmpty) {
+      return 'Último: $_lastWords';
+    }
+    return 'Pulsa para hablar';
+  }
+
   void _announceCurrentOrientation() {
     final message =
         'Estás mirando hacia $_currentDirection, ${_heading.toInt()} grados. Toca para activar comando de voz.';
@@ -505,12 +534,25 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   void _centerOnUserLocation() {
-    if (_currentPosition != null && _mapController != null) {
-      _mapController!.move(
-        LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
-        14.0,
-      );
-      _showNavigationNotification('Centrando mapa en tu ubicación');
+    if (_currentPosition == null) {
+      return;
+    }
+
+    final target = LatLng(
+      _currentPosition!.latitude,
+      _currentPosition!.longitude,
+    );
+
+    _moveMap(target, 14.0);
+    _showNavigationNotification('Centrando mapa en tu ubicación');
+  }
+
+  void _moveMap(LatLng target, double zoom) {
+    if (_isMapReady) {
+      _mapController.move(target, zoom);
+    } else {
+      _pendingCenter = target;
+      _pendingZoom = zoom;
     }
   }
 
@@ -556,7 +598,9 @@ class _MapScreenState extends State<MapScreen> {
 
       // Get current location
       _currentPosition = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+        ),
       );
 
       if (!mounted) return;
@@ -569,8 +613,8 @@ class _MapScreenState extends State<MapScreen> {
       _updateCurrentLocationMarker();
 
       // Move camera to current location if map is ready
-      if (_mapController != null && _currentPosition != null) {
-        _mapController!.move(
+      if (_currentPosition != null) {
+        _moveMap(
           LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
           14.0,
         );
@@ -958,6 +1002,7 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   void _announce(String message) {
+    _lastAnnouncement = message;
     _showNotification(
       NotificationData(message: message, type: NotificationType.info),
     );
@@ -1068,12 +1113,12 @@ class _MapScreenState extends State<MapScreen> {
 
     if (commandProcessed) {
       _showSuccessNotification(
-        'Comando ejecutado: "${recognizedText}" (${(confidence * 100).toInt()}%)',
+        'Comando ejecutado: "$recognizedText" (${(confidence * 100).toInt()}%)',
         withVibration: true,
       );
     } else {
       _showWarningNotification(
-        'Comando no reconocido: "${recognizedText}". Di "ayuda" para ver ejemplos.',
+        'Comando no reconocido: "$recognizedText". Di "ayuda" para ver ejemplos.',
       );
     }
 
@@ -1352,11 +1397,71 @@ class _MapScreenState extends State<MapScreen> {
 
       _announce('Ruta calculada exitosamente');
     } catch (e) {
+      if (e is ApiException && e.isNetworkError) {
+        _showWarningNotification(
+          'Servidor no disponible, usando ruta de demostración',
+        );
+        _displayFallbackRoute(
+          destLat: destLat,
+          destLon: destLon,
+          destName: destName,
+        );
+        return;
+      }
+
       TtsService.instance.speak(
         'Error calculando ruta. Verifique la conexión con el servidor',
       );
-      _announce('Error calculando ruta: ${e.toString()}');
+      _showErrorNotification('No se pudo calcular la ruta: ${e.toString()}');
     }
+  }
+
+  void _displayFallbackRoute({
+    required double destLat,
+    required double destLon,
+    required String destName,
+  }) {
+    if (_currentPosition == null) {
+      return;
+    }
+
+    final origin = LatLng(
+      _currentPosition!.latitude,
+      _currentPosition!.longitude,
+    );
+    final destination = LatLng(destLat, destLon);
+
+    setState(() {
+      _polylines = [
+        Polyline(
+          points: [origin, destination],
+          color: Colors.blueGrey,
+          strokeWidth: 4,
+        ),
+      ];
+      _markers = [
+        Marker(
+          point: origin,
+          child: const Icon(Icons.my_location, color: Colors.blue, size: 30),
+        ),
+        Marker(
+          point: destination,
+          child: const Icon(Icons.location_on, color: Colors.orange, size: 30),
+        ),
+      ];
+    });
+
+    final distanceMeters = Geolocator.distanceBetween(
+      origin.latitude,
+      origin.longitude,
+      destination.latitude,
+      destination.longitude,
+    );
+
+    TtsService.instance.speak(
+      'Ruta de demostración hacia $destName. Distancia aproximada ${(distanceMeters / 1000).toStringAsFixed(1)} kilómetros. '
+      'Conéctate al servidor para obtener instrucciones detalladas.',
+    );
   }
 
   void _displayRoute(Map<String, dynamic> route) {
@@ -1594,7 +1699,20 @@ class _MapScreenState extends State<MapScreen> {
                       initialRotation:
                           -_heading, // Rota el mapa según orientación
                       onMapReady: () {
-                        _mapController = MapController();
+                        _isMapReady = true;
+
+                        if (_pendingCenter != null) {
+                          final zoom =
+                              _pendingZoom ?? _mapController.camera.zoom;
+                          _mapController.move(_pendingCenter!, zoom);
+                          _pendingCenter = null;
+                          _pendingZoom = null;
+                        }
+
+                        if (_pendingRotation != null) {
+                          _mapController.rotate(_pendingRotation!);
+                          _pendingRotation = null;
+                        }
                       },
                       // Optimizaciones de rendimiento
                       keepAlive: true,
@@ -1753,19 +1871,7 @@ class _MapScreenState extends State<MapScreen> {
                   Column(
                     children: [
                       Text(
-                        _isListening
-                            ? _currentRecognizedText.isNotEmpty
-                                  ? '"$_currentRecognizedText"'
-                                  : 'Escuchando... Di tu comando'
-                            : _isLoadingStops
-                            ? 'Cargando paradas...'
-                            : _pendingDestination != null
-                            ? 'Destino pendiente: $_pendingDestination'
-                            : _hasActiveTrip && _nearbyStops.isNotEmpty
-                            ? '${_nearbyStops.length} paradas cercanas'
-                            : _lastWords.isNotEmpty
-                            ? 'Último: $_lastWords'
-                            : 'Pulsa para hablar',
+                        _statusMessage(),
                         style: TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.w600,

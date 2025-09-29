@@ -119,106 +119,112 @@ class _RegisterScreenState extends State<RegisterScreen> {
       body: SafeArea(
         child: SingleChildScrollView(
           padding: const EdgeInsets.symmetric(horizontal: 32),
-          child: Column(
-            children: [
-              const SizedBox(height: 40),
-              // Título WayFindCL centrado
-              const Text(
-                'WayFindCL',
-                style: TextStyle(
-                  fontSize: 24,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.black,
-                ),
-              ),
-              const SizedBox(height: 8),
-              // Subtítulo
-              const Text(
-                'Crear nueva cuenta',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w400,
-                  color: Colors.black54,
-                ),
-              ),
-              const SizedBox(height: 60),
-
-              // Campo Usuario
-              _buildTextField(controller: _userCtrl, label: 'Usuario'),
-              const SizedBox(height: 20),
-
-              // Campo Email
-              _buildTextField(
-                controller: _emailCtrl,
-                label: 'Email',
-                keyboardType: TextInputType.emailAddress,
-              ),
-              const SizedBox(height: 20),
-
-              // Campo Contraseña
-              _buildTextField(
-                controller: _passCtrl,
-                label: 'Contraseña',
-                obscureText: true,
-              ),
-              const SizedBox(height: 20),
-
-              // Campo Confirmar Contraseña
-              _buildTextField(
-                controller: _confirmPassCtrl,
-                label: 'Confirmar Contraseña',
-                obscureText: true,
-              ),
-              const SizedBox(height: 40),
-
-              // Botón de registro con flecha
-              Container(
-                width: double.infinity,
-                height: 80,
-                margin: const EdgeInsets.only(bottom: 20),
-                child: ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.black,
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(40),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              minHeight:
+                  MediaQuery.of(context).size.height -
+                  MediaQuery.of(context).padding.top -
+                  MediaQuery.of(context).padding.bottom,
+            ),
+            child: IntrinsicHeight(
+              child: Column(
+                children: [
+                  const SizedBox(height: 40),
+                  // Título WayFindCL centrado
+                  const Text(
+                    'WayFindCL',
+                    style: TextStyle(
+                      fontSize: 24,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.black,
                     ),
-                    elevation: 0,
                   ),
-                  onPressed: _handleRegister,
-                  child: _loading
-                      ? const SizedBox(
-                          width: 28,
-                          height: 28,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 3,
-                            color: Colors.white,
-                          ),
-                        )
-                      : const Icon(
-                          Icons.arrow_forward,
-                          size: 28,
-                          color: Colors.white,
-                        ),
-                ),
-              ),
+                  const SizedBox(height: 8),
+                  // Subtítulo
+                  const Text(
+                    'Crear nueva cuenta',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w400,
+                      color: Colors.black54,
+                    ),
+                  ),
+                  const SizedBox(height: 40), // Reducido de 60
+                  // Campo Usuario
+                  _buildTextField(controller: _userCtrl, label: 'Usuario'),
+                  const SizedBox(height: 16), // Reducido de 20
+                  // Campo Email
+                  _buildTextField(
+                    controller: _emailCtrl,
+                    label: 'Email',
+                    keyboardType: TextInputType.emailAddress,
+                  ),
+                  const SizedBox(height: 16), // Reducido de 20
+                  // Campo Contraseña
+                  _buildTextField(
+                    controller: _passCtrl,
+                    label: 'Contraseña',
+                    obscureText: true,
+                  ),
+                  const SizedBox(height: 16), // Reducido de 20
+                  // Campo Confirmar Contraseña
+                  _buildTextField(
+                    controller: _confirmPassCtrl,
+                    label: 'Confirmar Contraseña',
+                    obscureText: true,
+                  ),
 
-              // Link para volver al login
-              TextButton(
-                onPressed: () {
-                  Navigator.of(context).pop();
-                },
-                child: const Text(
-                  '¿Ya tienes cuenta? Inicia sesión',
-                  style: TextStyle(
-                    color: Colors.black54,
-                    fontSize: 14,
-                    fontWeight: FontWeight.w500,
+                  const Expanded(child: SizedBox()), // Flexible spacer
+                  // Botón de registro con flecha
+                  Container(
+                    width: double.infinity,
+                    height: 70, // Reducido de 80
+                    margin: const EdgeInsets.only(bottom: 16), // Reducido
+                    child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.black,
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(35),
+                        ),
+                        elevation: 0,
+                      ),
+                      onPressed: _handleRegister,
+                      child: _loading
+                          ? const SizedBox(
+                              width: 24, // Reducido
+                              height: 24, // Reducido
+                              child: CircularProgressIndicator(
+                                strokeWidth: 3,
+                                color: Colors.white,
+                              ),
+                            )
+                          : const Icon(
+                              Icons.arrow_forward,
+                              size: 24, // Reducido
+                              color: Colors.white,
+                            ),
+                    ),
                   ),
-                ),
+
+                  // Link para volver al login
+                  TextButton(
+                    onPressed: () {
+                      Navigator.of(context).pop();
+                    },
+                    child: const Text(
+                      '¿Ya tienes cuenta? Inicia sesión',
+                      style: TextStyle(
+                        color: Colors.black54,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                ],
               ),
-              const SizedBox(height: 20),
-            ],
+            ),
           ),
         ),
       ),

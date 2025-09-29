@@ -1,29 +1,46 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io' show Platform, SocketException;
+import 'dart:io' show SocketException;
 import 'package:http/http.dart' as http;
 import 'auth_storage.dart';
+import 'server_config.dart';
 
 class ApiClient {
-  ApiClient({String? baseUrl}) : baseUrl = _resolveBaseUrl(baseUrl);
-  final String baseUrl;
+  ApiClient({String? baseUrl})
+    : _overrideBaseUrl = baseUrl != null && baseUrl.trim().isNotEmpty
+          ? ServerConfig.instance.normalizeOrFallback(baseUrl)
+          : null;
 
-  static String _resolveBaseUrl(String? provided) {
-    if (provided != null && provided.isNotEmpty) return provided;
+  ApiClient.override(String baseUrl)
+    : _overrideBaseUrl = ServerConfig.instance.normalizeOrFallback(baseUrl);
+
+  final String? _overrideBaseUrl;
+
+  String get baseUrl {
     const envBase = String.fromEnvironment('API_BASE_URL');
-    if (envBase.isNotEmpty) return envBase;
-    // Default heuristics: Android emulator usa 10.0.2.2
-    final defaultBase = Platform.isAndroid
-        ? 'http://10.0.2.2:8080'
-        : 'http://127.0.0.1:8080';
-    return defaultBase;
+    if (envBase.isNotEmpty) {
+      return ServerConfig.instance.normalizeOrFallback(envBase);
+    }
+    return _overrideBaseUrl ?? ServerConfig.instance.baseUrl;
+  }
+
+  Uri _uri(String path) => Uri.parse('$baseUrl$path');
+
+  Uri _uriWithQuery(String path, Map<String, String> query) {
+    return _uri(path).replace(queryParameters: query);
+  }
+
+  // Método para configurar URL personalizada para dispositivos físicos
+  static String getPhysicalDeviceUrl(String hostIP, {int port = 8080}) {
+    final uri = Uri(scheme: 'http', host: hostIP, port: port);
+    return uri.toString();
   }
 
   Future<Map<String, dynamic>> login({
     required String username,
     required String password,
   }) async {
-    final uri = Uri.parse('$baseUrl/api/login');
+    final uri = _uri('/api/login');
     final res = await _safeRequest(
       () => http.post(
         uri,
@@ -52,7 +69,7 @@ class ApiClient {
     required String password,
     required String name,
   }) async {
-    final uri = Uri.parse('$baseUrl/api/register');
+    final uri = _uri('/api/register');
     final res = await _safeRequest(
       () => http.post(
         uri,
@@ -107,14 +124,12 @@ class ApiClient {
     double radius = 400,
     int limit = 20,
   }) async {
-    final uri = Uri.parse('$baseUrl/api/stops').replace(
-      queryParameters: {
-        'lat': lat.toString(),
-        'lon': lon.toString(),
-        'radius': radius.toString(),
-        'limit': limit.toString(),
-      },
-    );
+    final uri = _uriWithQuery('/api/stops', {
+      'lat': lat.toString(),
+      'lon': lon.toString(),
+      'radius': radius.toString(),
+      'limit': limit.toString(),
+    });
 
     final res = await _safeRequest(() => getAuthorized(uri));
     final data =
@@ -131,7 +146,7 @@ class ApiClient {
   }
 
   Future<Map<String, dynamic>> syncGTFS() async {
-    final uri = Uri.parse('$baseUrl/api/gtfs/sync');
+    final uri = _uri('/api/gtfs/sync');
     final res = await _safeRequest(() => postAuthorized(uri, {}));
     final data =
         jsonDecode(res.body.isEmpty ? '{}' : res.body) as Map<String, dynamic>;
@@ -156,7 +171,7 @@ class ApiClient {
     bool arriveBy = false,
     bool includeGeometry = true,
   }) async {
-    final uri = Uri.parse('$baseUrl/api/route/transit');
+    final uri = _uri('/api/route/transit');
     final body = {
       'origin': {'lat': originLat, 'lon': originLon},
       'destination': {'lat': destLat, 'lon': destLon},
@@ -186,25 +201,70 @@ class ApiClient {
     Future<http.Response> Function() request,
   ) async {
     try {
-      return await request().timeout(const Duration(seconds: 20));
-    } on SocketException {
-      throw ApiException(
-        message: 'No se pudo conectar con el servidor.',
-        statusCode: 0,
-      );
+      return await request().timeout(const Duration(seconds: 15));
+    } on SocketException catch (e) {
+      // Error de conectividad específico
+      String message = 'No se pudo conectar con el servidor.';
+      if (e.message.contains('Network is unreachable')) {
+        message = 'Sin conexión a internet. Verifica tu conexión.';
+      } else if (e.message.contains('Connection refused')) {
+        message =
+            'Servidor no disponible. Verifica que el backend esté ejecutándose.';
+      } else if (e.message.contains('Failed host lookup')) {
+        message = 'No se pudo resolver la dirección del servidor.';
+      }
+
+      throw ApiException(message: message, statusCode: 0, isNetworkError: true);
     } on TimeoutException {
       throw ApiException(
-        message: 'La petición tardó demasiado. Inténtalo de nuevo.',
-        statusCode: 0,
+        message: 'La petición tardó demasiado. Verifica tu conexión.',
+        statusCode: 408,
+        isNetworkError: true,
       );
+    } on http.ClientException catch (e) {
+      throw ApiException(
+        message: 'Error de cliente HTTP: ${e.message}',
+        statusCode: 0,
+        isNetworkError: true,
+      );
+    } catch (e) {
+      throw ApiException(
+        message: 'Error inesperado: ${e.toString()}',
+        statusCode: 0,
+        isNetworkError: false,
+      );
+    }
+  }
+
+  // Método para probar conectividad
+  Future<bool> testConnection() async {
+    try {
+      final uri = _uri('/api/health');
+      final response = await http.get(uri).timeout(const Duration(seconds: 5));
+      return response.statusCode == 200;
+    } catch (e) {
+      return false;
     }
   }
 }
 
 class ApiException implements Exception {
-  ApiException({required this.message, required this.statusCode});
+  ApiException({
+    required this.message,
+    required this.statusCode,
+    this.isNetworkError = false,
+  });
+
   final String message;
   final int statusCode;
+  final bool isNetworkError;
+
   @override
   String toString() => 'ApiException($statusCode): $message';
+
+  // Helper methods para diferentes tipos de errores
+  bool get isConnectivityIssue =>
+      isNetworkError && (statusCode == 0 || statusCode == 408);
+  bool get isServerError => statusCode >= 500;
+  bool get isClientError => statusCode >= 400 && statusCode < 500;
 }

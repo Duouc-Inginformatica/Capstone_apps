@@ -1,12 +1,15 @@
 import 'package:flutter/material.dart';
 import 'services/auth_storage.dart';
+import 'services/server_config.dart';
 import 'screens/login_screen.dart';
 import 'screens/register_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/map_screen.dart';
 import 'screens/settings_screen.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await ServerConfig.instance.init();
   runApp(const WayFindCLApp());
 }
 

@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 
 import '../services/auth_storage.dart';
+import '../services/server_config.dart';
 import '../services/tts_service.dart';
+import '../widgets/server_address_dialog.dart';
 import 'login_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -29,6 +31,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
         padding: const EdgeInsets.all(16.0),
         child: Column(
           children: [
+            ValueListenableBuilder<String>(
+              valueListenable: ServerConfig.instance.baseUrlListenable,
+              builder: (context, baseUrl, _) {
+                return _ActionTile(
+                  icon: Icons.cloud_outlined,
+                  title: 'Servidor backend',
+                  subtitle: baseUrl,
+                  onTap: _showServerConfigDialog,
+                );
+              },
+            ),
+            const SizedBox(height: 16),
             _ActionTile(
               icon: Icons.record_voice_over_outlined,
               title: 'Cambiar Voz',
@@ -68,6 +82,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
       }
     }
   }
+
+  Future<void> _showServerConfigDialog() async {
+    final updated = await showServerAddressDialog(context);
+    if (!mounted || !updated) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('URL del servidor actualizada.')),
+    );
+  }
 }
 
 class _ActionTile extends StatelessWidget {
@@ -75,12 +97,14 @@ class _ActionTile extends StatelessWidget {
     required this.icon,
     required this.title,
     required this.onTap,
+    this.subtitle,
     this.destructive = false,
   });
 
   final IconData icon;
   final String title;
   final VoidCallback? onTap;
+  final String? subtitle;
   final bool destructive;
 
   @override
@@ -104,12 +128,26 @@ class _ActionTile extends StatelessWidget {
             Icon(icon, color: destructive ? Colors.redAccent : Colors.black87),
             const SizedBox(width: 12),
             Expanded(
-              child: Text(
-                title,
-                style: TextStyle(
-                  fontWeight: FontWeight.w600,
-                  color: destructive ? Colors.redAccent : Colors.black,
-                ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color: destructive ? Colors.redAccent : Colors.black,
+                    ),
+                  ),
+                  if (subtitle != null) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      subtitle!,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: destructive ? Colors.redAccent : Colors.black54,
+                      ),
+                    ),
+                  ],
+                ],
               ),
             ),
             Icon(

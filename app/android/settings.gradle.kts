@@ -19,10 +19,8 @@ pluginManagement {
 plugins {
     id("dev.flutter.flutter-plugin-loader") version "1.0.0"
     id("com.android.application") version "8.7.3" apply false
-    // Use a Kotlin plugin version compatible with many Flutter plugins
-    // (the plugin code in Pub cache may reference Android embedding APIs not yet adapted
-    // for Kotlin 2.x). 1.8.22 is a stable choice for Android/Kotlin interop.
-    id("org.jetbrains.kotlin.android") version "1.8.22" apply false
+    // Flutter now requires Kotlin 2.1.0+, actualizar para evitar advertencias de compatibilidad.
+    id("org.jetbrains.kotlin.android") version "2.1.0" apply false
 }
 
 include(":app")
