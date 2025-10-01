@@ -10,6 +10,8 @@ import 'package:flutter_compass/flutter_compass.dart';
 import 'package:vibration/vibration.dart';
 import '../services/tts_service.dart';
 import '../services/api_client.dart';
+import '../services/route_tracking_service.dart';
+import '../services/transit_boarding_service.dart';
 import 'settings_screen.dart';
 
 enum NotificationType { success, error, warning, info, navigation, orientation }
@@ -224,6 +226,20 @@ class _MapScreenState extends State<MapScreen> {
   bool _hasActiveTrip = false;
   bool _showStops = false;
 
+  // CAP-9: Confirmación de destino
+  String? _pendingConfirmationDestination;
+  Timer? _confirmationTimer;
+
+  // CAP-12: Instrucciones de ruta
+  List<String> _currentInstructions = [];
+  int _currentInstructionStep = 0;
+
+  // CAP-29: Confirmación de micro abordada
+  bool _waitingBoardingConfirmation = false;
+
+  // CAP-20 & CAP-30: Seguimiento en tiempo real
+  bool _isTrackingRoute = false;
+
   // Compass and orientation
   StreamSubscription<CompassEvent>? _compassSubscription;
   double _heading = 0.0;
@@ -260,7 +276,66 @@ class _MapScreenState extends State<MapScreen> {
     // Usar post-frame callback para evitar bloquear la construcción del widget
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _initServices();
+      _setupTrackingCallbacks();
+      _setupBoardingCallbacks();
     });
+  }
+
+  /// CAP-30 & CAP-20: Configurar callbacks de seguimiento
+  void _setupTrackingCallbacks() {
+    RouteTrackingService.instance.onPositionUpdate = (position) {
+      if (!mounted) return;
+      setState(() {
+        _currentPosition = position;
+      });
+      _updateCurrentLocationMarker();
+    };
+
+    RouteTrackingService
+        .instance
+        .onDeviationDetected = (distance, needsRecalc) {
+      if (!mounted || !needsRecalc) return;
+      // CAP-20: Recalcular ruta automáticamente
+      _showWarningNotification('Desviación detectada. Recalculando ruta...');
+      _recalculateRoute();
+    };
+
+    RouteTrackingService.instance.onDestinationReached = () {
+      if (!mounted) return;
+      setState(() {
+        _hasActiveTrip = false;
+        _isTrackingRoute = false;
+      });
+      _showSuccessNotification('¡Destino alcanzado!', withVibration: true);
+    };
+  }
+
+  /// CAP-29: Configurar callbacks de abordaje
+  void _setupBoardingCallbacks() {
+    TransitBoardingService.instance.onBoardingConfirmed = (busRoute) {
+      if (!mounted) return;
+      setState(() {
+        _waitingBoardingConfirmation = false;
+      });
+      _showSuccessNotification(
+        'Abordaje confirmado en bus $busRoute',
+        withVibration: true,
+      );
+
+      // Iniciar seguimiento si no está activo
+      if (!_isTrackingRoute &&
+          RouteTrackingService.instance.destination != null) {
+        _startRouteTracking();
+      }
+    };
+
+    TransitBoardingService.instance.onBoardingCancelled = () {
+      if (!mounted) return;
+      setState(() {
+        _waitingBoardingConfirmation = false;
+      });
+      _showWarningNotification('Confirmación de abordaje cancelada');
+    };
   }
 
   Future<void> _initServices() async {
@@ -493,6 +568,9 @@ class _MapScreenState extends State<MapScreen> {
       'Llévame al hospital clínico',
       'Necesito ir a la universidad católica',
       'Como llego al aeropuerto',
+      'Para confirmación: Sí, No, Confirmar, Cancelar',
+      'Para instrucciones: Leer instrucciones, Siguiente paso, Repetir paso',
+      'Para monitoreo: Monitorear abordaje, Iniciar seguimiento, Detener seguimiento',
       'Buscar paradas - para transporte público',
       'Orientación - saber hacia dónde miras',
       'Donde estoy - obtener ubicación actual',
@@ -511,6 +589,22 @@ class _MapScreenState extends State<MapScreen> {
       }
       return 'Escuchando... Di tu comando';
     }
+
+    // CAP-9: Mostrar pendiente de confirmación
+    if (_pendingConfirmationDestination != null) {
+      return '¿Ir a $_pendingConfirmationDestination? (Sí/No)';
+    }
+
+    // CAP-29: Mostrar estado de monitoreo de abordaje
+    if (_waitingBoardingConfirmation) {
+      return 'Monitoreando abordaje...';
+    }
+
+    // CAP-30: Mostrar seguimiento activo
+    if (_isTrackingRoute) {
+      return 'Seguimiento en tiempo real activo';
+    }
+
     if (_isLoadingStops) {
       return 'Cargando paradas...';
     }
@@ -843,9 +937,9 @@ class _MapScreenState extends State<MapScreen> {
         _pendingDestination = pretty;
         _lastWords = command;
       });
-      _announce('Buscando ruta a $pretty');
-      TtsService.instance.speak('Buscando ruta a $pretty');
-      _searchRouteToDestination(destination);
+
+      // CAP-9: Solicitar confirmación antes de buscar ruta
+      _requestDestinationConfirmation(destination);
       return;
     }
 
@@ -858,6 +952,84 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   bool _handleNavigationCommand(String command) {
+    // CAP-9: Confirmación de destino
+    if (command.contains('sí') ||
+        command.contains('si') ||
+        command.contains('confirmar') ||
+        command.contains('correcto')) {
+      if (_pendingConfirmationDestination != null) {
+        _confirmDestination();
+        return true;
+      }
+    }
+
+    if (command.contains('no') ||
+        command.contains('cancelar') ||
+        command.contains('incorrecto')) {
+      if (_pendingConfirmationDestination != null) {
+        _cancelDestinationConfirmation();
+        return true;
+      }
+    }
+
+    // CAP-29: Confirmación de abordaje de micro
+    if (_waitingBoardingConfirmation) {
+      TransitBoardingService.instance.confirmBoardingManually(command);
+      return true;
+    }
+
+    // CAP-12: Leer instrucciones de ruta
+    if (command.contains('leer instrucciones') ||
+        command.contains('instrucciones') ||
+        command.contains('pasos')) {
+      _readCurrentInstructions();
+      return true;
+    }
+
+    if (command.contains('siguiente paso') ||
+        command.contains('próximo paso') ||
+        command.contains('próxima instrucción')) {
+      _readNextInstruction();
+      return true;
+    }
+
+    if (command.contains('repetir paso') ||
+        command.contains('repetir instrucción')) {
+      _repeatCurrentInstruction();
+      return true;
+    }
+
+    // CAP-30: Control de seguimiento
+    if (command.contains('detener seguimiento') ||
+        command.contains('parar seguimiento')) {
+      _stopRouteTracking();
+      return true;
+    }
+
+    if (command.contains('iniciar seguimiento') ||
+        command.contains('empezar seguimiento')) {
+      if (RouteTrackingService.instance.destination != null) {
+        _startRouteTracking();
+        return true;
+      }
+    }
+
+    // CAP-29: Monitoreo de abordaje
+    if (command.contains('monitorear abordaje') ||
+        command.contains('activar monitoreo') ||
+        (command.contains('sí') &&
+            !_waitingBoardingConfirmation &&
+            _hasActiveTrip)) {
+      // Extraer número de bus si está disponible
+      final busMatch = RegExp(
+        r'bus\s*(\w+)',
+        caseSensitive: false,
+      ).firstMatch(command);
+      final busRoute = busMatch?.group(1) ?? '506'; // Default para demo
+      _startBoardingMonitoring(busRoute);
+      return true;
+    }
+
     if (command.contains('configuración') ||
         command.contains('configuracion')) {
       TtsService.instance.speak('Abriendo configuración');
@@ -988,6 +1160,188 @@ class _MapScreenState extends State<MapScreen> {
     }
 
     return null;
+  }
+
+  /// CAP-9: Solicitar confirmación del destino reconocido
+  void _requestDestinationConfirmation(String destination) {
+    setState(() {
+      _pendingConfirmationDestination = destination;
+    });
+
+    _confirmationTimer?.cancel();
+    _confirmationTimer = Timer(const Duration(seconds: 15), () {
+      if (_pendingConfirmationDestination != null) {
+        _cancelDestinationConfirmation();
+      }
+    });
+
+    final pretty = _toTitleCase(destination);
+    TtsService.instance.speak(
+      'Entendí que quieres ir a $pretty. ¿Es correcto? '
+      'Di sí para confirmar o no para cancelar.',
+    );
+
+    _showNotification(
+      NotificationData(
+        message: 'Confirma destino: $pretty',
+        type: NotificationType.warning,
+        duration: const Duration(seconds: 15),
+      ),
+    );
+  }
+
+  /// CAP-9: Confirmar destino y buscar ruta
+  void _confirmDestination() {
+    if (_pendingConfirmationDestination == null) return;
+
+    final destination = _pendingConfirmationDestination!;
+    _confirmationTimer?.cancel();
+
+    setState(() {
+      _pendingDestination = null;
+      _pendingConfirmationDestination = null;
+    });
+
+    _showSuccessNotification('Destino confirmado', withVibration: true);
+    TtsService.instance.speak('Perfecto, buscando ruta a $destination');
+
+    _searchRouteToDestination(destination);
+  }
+
+  /// CAP-9: Cancelar confirmación de destino
+  void _cancelDestinationConfirmation() {
+    _confirmationTimer?.cancel();
+
+    setState(() {
+      _pendingConfirmationDestination = null;
+      _pendingDestination = null;
+    });
+
+    TtsService.instance.speak(
+      'Destino cancelado. Puedes decir un nuevo destino cuando quieras.',
+    );
+
+    _showWarningNotification('Confirmación cancelada');
+  }
+
+  /// CAP-12: Leer todas las instrucciones actuales
+  void _readCurrentInstructions() {
+    if (_currentInstructions.isEmpty) {
+      TtsService.instance.speak('No hay instrucciones disponibles aún');
+      return;
+    }
+
+    RouteTrackingService.instance.readAllInstructions(_currentInstructions);
+  }
+
+  /// CAP-12: Leer siguiente instrucción
+  void _readNextInstruction() {
+    if (_currentInstructions.isEmpty) {
+      TtsService.instance.speak('No hay instrucciones disponibles');
+      return;
+    }
+
+    if (_currentInstructionStep >= _currentInstructions.length) {
+      TtsService.instance.speak('Has completado todas las instrucciones');
+      return;
+    }
+
+    final instruction = _currentInstructions[_currentInstructionStep];
+    TtsService.instance.speak(
+      'Paso ${_currentInstructionStep + 1}: $instruction',
+    );
+
+    setState(() {
+      _currentInstructionStep++;
+    });
+  }
+
+  /// CAP-12: Repetir instrucción actual
+  void _repeatCurrentInstruction() {
+    if (_currentInstructions.isEmpty) {
+      TtsService.instance.speak('No hay instrucciones disponibles');
+      return;
+    }
+
+    final step = _currentInstructionStep > 0 ? _currentInstructionStep - 1 : 0;
+
+    if (step < _currentInstructions.length) {
+      final instruction = _currentInstructions[step];
+      TtsService.instance.speak('Repitiendo paso ${step + 1}: $instruction');
+    }
+  }
+
+  /// CAP-30: Iniciar seguimiento en tiempo real
+  void _startRouteTracking() {
+    if (_polylines.isEmpty ||
+        RouteTrackingService.instance.destination == null) {
+      TtsService.instance.speak('No hay una ruta activa para seguir');
+      return;
+    }
+
+    setState(() {
+      _isTrackingRoute = true;
+    });
+
+    final destination = RouteTrackingService.instance.destination!;
+    final destinationName =
+        RouteTrackingService.instance.destinationName ?? 'destino';
+
+    // Extraer puntos de la ruta
+    final routePoints = _polylines.isNotEmpty
+        ? _polylines.first.points
+        : <LatLng>[];
+
+    RouteTrackingService.instance.startTracking(
+      plannedRoute: routePoints,
+      destination: destination,
+      destinationName: destinationName,
+    );
+
+    _showSuccessNotification(
+      'Seguimiento en tiempo real activado',
+      withVibration: true,
+    );
+  }
+
+  /// CAP-30: Detener seguimiento
+  void _stopRouteTracking() {
+    setState(() {
+      _isTrackingRoute = false;
+    });
+
+    RouteTrackingService.instance.stopTracking();
+    _showWarningNotification('Seguimiento detenido');
+  }
+
+  /// CAP-20: Recalcular ruta desde posición actual
+  Future<void> _recalculateRoute() async {
+    if (_currentPosition == null ||
+        RouteTrackingService.instance.destination == null) {
+      return;
+    }
+
+    final dest = RouteTrackingService.instance.destination!;
+    final destName = RouteTrackingService.instance.destinationName ?? 'destino';
+
+    TtsService.instance.speak('Recalculando ruta a $destName');
+
+    try {
+      await _calculateRoute(
+        destLat: dest.latitude,
+        destLon: dest.longitude,
+        destName: destName,
+      );
+
+      _showSuccessNotification('Ruta recalculada exitosamente');
+
+      // Reiniciar seguimiento con nueva ruta
+      if (_isTrackingRoute) {
+        _startRouteTracking();
+      }
+    } catch (e) {
+      _showErrorNotification('Error recalculando ruta');
+    }
   }
 
   String _toTitleCase(String input) {
@@ -1387,15 +1741,41 @@ class _MapScreenState extends State<MapScreen> {
 
       _displayRoute(route);
 
+      // CAP-12: Guardar instrucciones para lectura posterior
+      final instructions =
+          (route['instructions'] as List<dynamic>?)
+              ?.map((e) => e.toString())
+              .toList() ??
+          [];
+
+      setState(() {
+        _currentInstructions = instructions;
+        _currentInstructionStep = 0;
+        _hasActiveTrip = true;
+      });
+
       final durationMinutes = ((route['duration_seconds'] as num?) ?? 0) / 60;
       final distanceMeters = (route['distance_meters'] as num?) ?? 0;
 
-      TtsService.instance.speak(
-        'Ruta a $destName encontrada. Duración: ${durationMinutes.round()} minutos, '
-        'distancia: ${(distanceMeters / 1000).toStringAsFixed(1)} kilómetros',
-      );
+      // CAP-12: Leer primera instrucción automáticamente
+      String message =
+          'Ruta a $destName encontrada. '
+          'Duración: ${durationMinutes.round()} minutos, '
+          'distancia: ${(distanceMeters / 1000).toStringAsFixed(1)} kilómetros. ';
 
+      if (instructions.isNotEmpty) {
+        message += 'Primera instrucción: ${instructions[0]}';
+        _currentInstructionStep = 1;
+      }
+
+      TtsService.instance.speak(message);
       _announce('Ruta calculada exitosamente');
+
+      // CAP-29 & CAP-30: Preguntar si quiere monitoreo de abordaje
+      Timer(const Duration(seconds: 3), () {
+        if (!mounted) return;
+        _askForBoardingMonitoring();
+      });
     } catch (e) {
       if (e is ApiException && e.isNetworkError) {
         _showWarningNotification(
@@ -1414,6 +1794,31 @@ class _MapScreenState extends State<MapScreen> {
       );
       _showErrorNotification('No se pudo calcular la ruta: ${e.toString()}');
     }
+  }
+
+  /// CAP-29: Preguntar si quiere monitoreo de abordaje
+  void _askForBoardingMonitoring() {
+    TtsService.instance.speak(
+      '¿Quieres que monitoree cuando abordes el bus? '
+      'Di "monitorear abordaje" o "sí" para activarlo.',
+    );
+  }
+
+  /// CAP-29: Iniciar monitoreo de abordaje (activado por voz)
+  void _startBoardingMonitoring(String busRoute) {
+    setState(() {
+      _waitingBoardingConfirmation = true;
+    });
+
+    TransitBoardingService.instance.startMonitoring(expectedBusRoute: busRoute);
+
+    _showNotification(
+      NotificationData(
+        message: 'Monitoreando abordaje del bus $busRoute',
+        type: NotificationType.info,
+        duration: const Duration(seconds: 5),
+      ),
+    );
   }
 
   void _displayFallbackRoute({
@@ -1638,6 +2043,11 @@ class _MapScreenState extends State<MapScreen> {
     _orientationTimer?.cancel();
     _feedbackTimer?.cancel();
     _compassSubscription?.cancel();
+    _confirmationTimer?.cancel();
+
+    // Liberar servicios de tracking
+    RouteTrackingService.instance.dispose();
+    TransitBoardingService.instance.dispose();
 
     // Garantiza liberar el reconocimiento si la vista se destruye
     if (_isListening) {

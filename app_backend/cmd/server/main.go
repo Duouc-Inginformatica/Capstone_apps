@@ -21,6 +21,7 @@ func main() {
 	app.Use(logger.New())
 
 	// DB connection with background retries; do not exit if unavailable
+	var dbReady bool
 	go func() {
 		for {
 			db, err := appdb.Connect()
@@ -35,12 +36,17 @@ func main() {
 				continue
 			}
 			handlers.Setup(db)
-			log.Printf("database ready")
+			routes.Register(app, db)
+			dbReady = true
+			log.Printf("database ready and routes registered")
 			return
 		}
 	}()
 
-	routes.Register(app)
+	// Wait briefly for DB to be ready
+	for i := 0; i < 10 && !dbReady; i++ {
+		time.Sleep(500 * time.Millisecond)
+	}
 
 	port := os.Getenv("PORT")
 	if port == "" {

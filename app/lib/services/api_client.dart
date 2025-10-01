@@ -2,8 +2,176 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show SocketException;
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 import 'auth_storage.dart';
 import 'server_config.dart';
+
+// ============================================================================
+// ROUTE CACHE SYSTEM - Sprint 3 CAP-18
+// ============================================================================
+class CachedRoute {
+  CachedRoute({
+    required this.routeData,
+    required this.timestamp,
+    required this.originLat,
+    required this.originLon,
+    required this.destLat,
+    required this.destLon,
+  });
+
+  final Map<String, dynamic> routeData;
+  final DateTime timestamp;
+  final double originLat;
+  final double originLon;
+  final double destLat;
+  final double destLon;
+
+  bool isExpired({Duration ttl = const Duration(minutes: 30)}) {
+    return DateTime.now().difference(timestamp) > ttl;
+  }
+
+  bool matchesRequest({
+    required double originLat,
+    required double originLon,
+    required double destLat,
+    required double destLon,
+    double tolerance = 0.001, // ~100 metros
+  }) {
+    return (this.originLat - originLat).abs() < tolerance &&
+        (this.originLon - originLon).abs() < tolerance &&
+        (this.destLat - destLat).abs() < tolerance &&
+        (this.destLon - destLon).abs() < tolerance;
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'routeData': routeData,
+      'timestamp': timestamp.toIso8601String(),
+      'originLat': originLat,
+      'originLon': originLon,
+      'destLat': destLat,
+      'destLon': destLon,
+    };
+  }
+
+  factory CachedRoute.fromJson(Map<String, dynamic> json) {
+    return CachedRoute(
+      routeData: json['routeData'] as Map<String, dynamic>,
+      timestamp: DateTime.parse(json['timestamp'] as String),
+      originLat: (json['originLat'] as num).toDouble(),
+      originLon: (json['originLon'] as num).toDouble(),
+      destLat: (json['destLat'] as num).toDouble(),
+      destLon: (json['destLon'] as num).toDouble(),
+    );
+  }
+}
+
+class RouteCache {
+  static final RouteCache instance = RouteCache._();
+  RouteCache._();
+
+  static const int maxCacheSize = 10;
+  static const String cacheKey = 'route_cache';
+  final List<CachedRoute> _cache = [];
+
+  Future<void> loadCache() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final cacheJson = prefs.getString(cacheKey);
+      if (cacheJson != null) {
+        final List<dynamic> cacheList = jsonDecode(cacheJson) as List;
+        _cache.clear();
+        for (var item in cacheList) {
+          _cache.add(CachedRoute.fromJson(item as Map<String, dynamic>));
+        }
+        // Limpiar rutas expiradas
+        _cache.removeWhere((route) => route.isExpired());
+      }
+    } catch (e) {
+      print('Error loading route cache: $e');
+    }
+  }
+
+  Future<void> saveCache() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final cacheJson = jsonEncode(_cache.map((r) => r.toJson()).toList());
+      await prefs.setString(cacheKey, cacheJson);
+    } catch (e) {
+      print('Error saving route cache: $e');
+    }
+  }
+
+  Future<void> addRoute({
+    required Map<String, dynamic> routeData,
+    required double originLat,
+    required double originLon,
+    required double destLat,
+    required double destLon,
+  }) async {
+    final cached = CachedRoute(
+      routeData: routeData,
+      timestamp: DateTime.now(),
+      originLat: originLat,
+      originLon: originLon,
+      destLat: destLat,
+      destLon: destLon,
+    );
+
+    _cache.insert(0, cached);
+
+    // Mantener máximo 10 rutas
+    if (_cache.length > maxCacheSize) {
+      _cache.removeRange(maxCacheSize, _cache.length);
+    }
+
+    await saveCache();
+  }
+
+  Map<String, dynamic>? getCachedRoute({
+    required double originLat,
+    required double originLon,
+    required double destLat,
+    required double destLon,
+  }) {
+    for (var cached in _cache) {
+      if (!cached.isExpired() &&
+          cached.matchesRequest(
+            originLat: originLat,
+            originLon: originLon,
+            destLat: destLat,
+            destLon: destLon,
+          )) {
+        return cached.routeData;
+      }
+    }
+    return null;
+  }
+
+  List<Map<String, dynamic>> getAlternativeRoutes({
+    required double destLat,
+    required double destLon,
+    int limit = 3,
+  }) {
+    final alternatives = <Map<String, dynamic>>[];
+
+    for (var cached in _cache) {
+      if (!cached.isExpired() &&
+          (cached.destLat - destLat).abs() < 0.005 && // ~500m del destino
+          (cached.destLon - destLon).abs() < 0.005) {
+        alternatives.add(cached.routeData);
+        if (alternatives.length >= limit) break;
+      }
+    }
+
+    return alternatives;
+  }
+
+  Future<void> clearCache() async {
+    _cache.clear();
+    await saveCache();
+  }
+}
 
 class ApiClient {
   ApiClient({String? baseUrl})
@@ -161,7 +329,7 @@ class ApiClient {
     );
   }
 
-  // Transit Routing with GraphHopper
+  // Transit Routing with GraphHopper + Cache System
   Future<Map<String, dynamic>> getTransitRoute({
     required double originLat,
     required double originLon,
@@ -170,7 +338,25 @@ class ApiClient {
     DateTime? departureTime,
     bool arriveBy = false,
     bool includeGeometry = true,
+    bool useCache = true,
   }) async {
+    // Intentar obtener de caché primero
+    if (useCache) {
+      final cached = RouteCache.instance.getCachedRoute(
+        originLat: originLat,
+        originLon: originLon,
+        destLat: destLat,
+        destLon: destLon,
+      );
+
+      if (cached != null) {
+        print('✅ Ruta encontrada en caché');
+        // Marcar como ruta cacheada
+        cached['fromCache'] = true;
+        return cached;
+      }
+    }
+
     final uri = _uri('/api/route/transit');
     final body = {
       'origin': {'lat': originLat, 'lon': originLon},
@@ -183,18 +369,92 @@ class ApiClient {
       body['departure_time'] = departureTime.toIso8601String();
     }
 
-    final res = await _safeRequest(() => postAuthorized(uri, body));
-    final data =
-        jsonDecode(res.body.isEmpty ? '{}' : res.body) as Map<String, dynamic>;
+    try {
+      final res = await _safeRequest(() => postAuthorized(uri, body));
+      final data =
+          jsonDecode(res.body.isEmpty ? '{}' : res.body)
+              as Map<String, dynamic>;
 
-    if (res.statusCode >= 200 && res.statusCode < 300) {
-      return data;
+      if (res.statusCode >= 200 && res.statusCode < 300) {
+        // Guardar en caché para uso futuro
+        await RouteCache.instance.addRoute(
+          routeData: data,
+          originLat: originLat,
+          originLon: originLon,
+          destLat: destLat,
+          destLon: destLon,
+        );
+
+        data['fromCache'] = false;
+        return data;
+      }
+
+      throw ApiException(
+        message: data['error']?.toString() ?? 'Failed to get transit route',
+        statusCode: res.statusCode,
+      );
+    } catch (e) {
+      // Si falla el servidor, intentar rutas alternativas de caché
+      if (e is ApiException && (e.isNetworkError || e.isServerError)) {
+        print('⚠️ Error del servidor, buscando rutas alternativas en caché...');
+
+        final alternatives = RouteCache.instance.getAlternativeRoutes(
+          destLat: destLat,
+          destLon: destLon,
+          limit: 3,
+        );
+
+        if (alternatives.isNotEmpty) {
+          print('✅ Encontradas ${alternatives.length} rutas alternativas');
+          final bestAlternative = alternatives.first;
+          bestAlternative['fromCache'] = true;
+          bestAlternative['isAlternative'] = true;
+          bestAlternative['alternativeCount'] = alternatives.length;
+          return bestAlternative;
+        }
+      }
+
+      // Re-lanzar error si no hay alternativas
+      rethrow;
+    }
+  }
+
+  // Obtener múltiples rutas alternativas
+  Future<List<Map<String, dynamic>>> getAlternativeRoutes({
+    required double originLat,
+    required double originLon,
+    required double destLat,
+    required double destLon,
+  }) async {
+    final routes = <Map<String, dynamic>>[];
+
+    try {
+      // Intentar obtener ruta principal
+      final mainRoute = await getTransitRoute(
+        originLat: originLat,
+        originLon: originLon,
+        destLat: destLat,
+        destLon: destLon,
+        useCache: false, // Forzar consulta al servidor
+      );
+      routes.add(mainRoute);
+    } catch (e) {
+      print('No se pudo obtener ruta principal: $e');
     }
 
-    throw ApiException(
-      message: data['error']?.toString() ?? 'Failed to get transit route',
-      statusCode: res.statusCode,
+    // Agregar rutas alternativas de caché
+    final cachedAlternatives = RouteCache.instance.getAlternativeRoutes(
+      destLat: destLat,
+      destLon: destLon,
+      limit: 5,
     );
+
+    for (var alt in cachedAlternatives) {
+      alt['isAlternative'] = true;
+      routes.add(alt);
+    }
+
+    return routes;
   }
 
   Future<http.Response> _safeRequest(
