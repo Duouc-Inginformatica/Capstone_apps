@@ -1,0 +1,530 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io' show SocketException;
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
+import 'auth_storage.dart';
+import 'server_config.dart';
+
+// ============================================================================
+// ROUTE CACHE SYSTEM - Sprint 3 CAP-18
+// ============================================================================
+class CachedRoute {
+  CachedRoute({
+    required this.routeData,
+    required this.timestamp,
+    required this.originLat,
+    required this.originLon,
+    required this.destLat,
+    required this.destLon,
+  });
+
+  final Map<String, dynamic> routeData;
+  final DateTime timestamp;
+  final double originLat;
+  final double originLon;
+  final double destLat;
+  final double destLon;
+
+  bool isExpired({Duration ttl = const Duration(minutes: 30)}) {
+    return DateTime.now().difference(timestamp) > ttl;
+  }
+
+  bool matchesRequest({
+    required double originLat,
+    required double originLon,
+    required double destLat,
+    required double destLon,
+    double tolerance = 0.001, // ~100 metros
+  }) {
+    return (this.originLat - originLat).abs() < tolerance &&
+        (this.originLon - originLon).abs() < tolerance &&
+        (this.destLat - destLat).abs() < tolerance &&
+        (this.destLon - destLon).abs() < tolerance;
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'routeData': routeData,
+      'timestamp': timestamp.toIso8601String(),
+      'originLat': originLat,
+      'originLon': originLon,
+      'destLat': destLat,
+      'destLon': destLon,
+    };
+  }
+
+  factory CachedRoute.fromJson(Map<String, dynamic> json) {
+    return CachedRoute(
+      routeData: json['routeData'] as Map<String, dynamic>,
+      timestamp: DateTime.parse(json['timestamp'] as String),
+      originLat: (json['originLat'] as num).toDouble(),
+      originLon: (json['originLon'] as num).toDouble(),
+      destLat: (json['destLat'] as num).toDouble(),
+      destLon: (json['destLon'] as num).toDouble(),
+    );
+  }
+}
+
+class RouteCache {
+  static final RouteCache instance = RouteCache._();
+  RouteCache._();
+
+  static const int maxCacheSize = 10;
+  static const String cacheKey = 'route_cache';
+  final List<CachedRoute> _cache = [];
+
+  Future<void> loadCache() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final cacheJson = prefs.getString(cacheKey);
+      if (cacheJson != null) {
+        final List<dynamic> cacheList = jsonDecode(cacheJson) as List;
+        _cache.clear();
+        for (var item in cacheList) {
+          _cache.add(CachedRoute.fromJson(item as Map<String, dynamic>));
+        }
+        // Limpiar rutas expiradas
+        _cache.removeWhere((route) => route.isExpired());
+      }
+    } catch (e) {
+      print('Error loading route cache: $e');
+    }
+  }
+
+  Future<void> saveCache() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final cacheJson = jsonEncode(_cache.map((r) => r.toJson()).toList());
+      await prefs.setString(cacheKey, cacheJson);
+    } catch (e) {
+      print('Error saving route cache: $e');
+    }
+  }
+
+  Future<void> addRoute({
+    required Map<String, dynamic> routeData,
+    required double originLat,
+    required double originLon,
+    required double destLat,
+    required double destLon,
+  }) async {
+    final cached = CachedRoute(
+      routeData: routeData,
+      timestamp: DateTime.now(),
+      originLat: originLat,
+      originLon: originLon,
+      destLat: destLat,
+      destLon: destLon,
+    );
+
+    _cache.insert(0, cached);
+
+    // Mantener máximo 10 rutas
+    if (_cache.length > maxCacheSize) {
+      _cache.removeRange(maxCacheSize, _cache.length);
+    }
+
+    await saveCache();
+  }
+
+  Map<String, dynamic>? getCachedRoute({
+    required double originLat,
+    required double originLon,
+    required double destLat,
+    required double destLon,
+  }) {
+    for (var cached in _cache) {
+      if (!cached.isExpired() &&
+          cached.matchesRequest(
+            originLat: originLat,
+            originLon: originLon,
+            destLat: destLat,
+            destLon: destLon,
+          )) {
+        return cached.routeData;
+      }
+    }
+    return null;
+  }
+
+  List<Map<String, dynamic>> getAlternativeRoutes({
+    required double destLat,
+    required double destLon,
+    int limit = 3,
+  }) {
+    final alternatives = <Map<String, dynamic>>[];
+
+    for (var cached in _cache) {
+      if (!cached.isExpired() &&
+          (cached.destLat - destLat).abs() < 0.005 && // ~500m del destino
+          (cached.destLon - destLon).abs() < 0.005) {
+        alternatives.add(cached.routeData);
+        if (alternatives.length >= limit) break;
+      }
+    }
+
+    return alternatives;
+  }
+
+  Future<void> clearCache() async {
+    _cache.clear();
+    await saveCache();
+  }
+}
+
+class ApiClient {
+  ApiClient({String? baseUrl})
+    : _overrideBaseUrl = baseUrl != null && baseUrl.trim().isNotEmpty
+          ? ServerConfig.instance.normalizeOrFallback(baseUrl)
+          : null;
+
+  ApiClient.override(String baseUrl)
+    : _overrideBaseUrl = ServerConfig.instance.normalizeOrFallback(baseUrl);
+
+  final String? _overrideBaseUrl;
+
+  String get baseUrl {
+    const envBase = String.fromEnvironment('API_BASE_URL');
+    if (envBase.isNotEmpty) {
+      return ServerConfig.instance.normalizeOrFallback(envBase);
+    }
+    return _overrideBaseUrl ?? ServerConfig.instance.baseUrl;
+  }
+
+  Uri _uri(String path) => Uri.parse('$baseUrl$path');
+
+  Uri _uriWithQuery(String path, Map<String, String> query) {
+    return _uri(path).replace(queryParameters: query);
+  }
+
+  // Método para configurar URL personalizada para dispositivos físicos
+  static String getPhysicalDeviceUrl(String hostIP, {int port = 8080}) {
+    final uri = Uri(scheme: 'http', host: hostIP, port: port);
+    return uri.toString();
+  }
+
+  Future<Map<String, dynamic>> login({
+    required String username,
+    required String password,
+  }) async {
+    final uri = _uri('/api/login');
+    final res = await _safeRequest(
+      () => http.post(
+        uri,
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'username': username, 'password': password}),
+      ),
+    );
+    final data =
+        jsonDecode(res.body.isEmpty ? '{}' : res.body) as Map<String, dynamic>;
+    if (res.statusCode >= 200 && res.statusCode < 300) {
+      final token = data['token']?.toString();
+      if (token != null) {
+        await AuthStorage.saveToken(token);
+      }
+      return data;
+    }
+    throw ApiException(
+      message: data['error']?.toString() ?? 'login failed',
+      statusCode: res.statusCode,
+    );
+  }
+
+  Future<Map<String, dynamic>> register({
+    required String username,
+    required String email,
+    required String password,
+    required String name,
+  }) async {
+    final uri = _uri('/api/register');
+    final res = await _safeRequest(
+      () => http.post(
+        uri,
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'username': username,
+          'email': email,
+          'password': password,
+          'name': name,
+        }),
+      ),
+    );
+    final data =
+        jsonDecode(res.body.isEmpty ? '{}' : res.body) as Map<String, dynamic>;
+    if (res.statusCode >= 200 && res.statusCode < 300) {
+      final token = data['token']?.toString();
+      if (token != null) {
+        await AuthStorage.saveToken(token);
+      }
+      return data;
+    }
+    throw ApiException(
+      message: data['error']?.toString() ?? 'register failed',
+      statusCode: res.statusCode,
+    );
+  }
+
+  Future<http.Response> getAuthorized(Uri uri) async {
+    final token = await AuthStorage.readToken();
+    final headers = <String, String>{'Accept': 'application/json'};
+    if (token != null) headers['Authorization'] = 'Bearer $token';
+    return http.get(uri, headers: headers);
+  }
+
+  Future<http.Response> postAuthorized(
+    Uri uri,
+    Map<String, dynamic> body,
+  ) async {
+    final token = await AuthStorage.readToken();
+    final headers = <String, String>{
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+    };
+    if (token != null) headers['Authorization'] = 'Bearer $token';
+    return http.post(uri, headers: headers, body: jsonEncode(body));
+  }
+
+  // GTFS Services
+  Future<List<dynamic>> getNearbyStops({
+    required double lat,
+    required double lon,
+    double radius = 400,
+    int limit = 20,
+  }) async {
+    final uri = _uriWithQuery('/api/stops', {
+      'lat': lat.toString(),
+      'lon': lon.toString(),
+      'radius': radius.toString(),
+      'limit': limit.toString(),
+    });
+
+    final res = await _safeRequest(() => getAuthorized(uri));
+    final data =
+        jsonDecode(res.body.isEmpty ? '{}' : res.body) as Map<String, dynamic>;
+
+    if (res.statusCode >= 200 && res.statusCode < 300) {
+      return data['stops'] as List<dynamic>? ?? [];
+    }
+
+    throw ApiException(
+      message: data['error']?.toString() ?? 'Failed to fetch nearby stops',
+      statusCode: res.statusCode,
+    );
+  }
+
+  Future<Map<String, dynamic>> syncGTFS() async {
+    final uri = _uri('/api/gtfs/sync');
+    final res = await _safeRequest(() => postAuthorized(uri, {}));
+    final data =
+        jsonDecode(res.body.isEmpty ? '{}' : res.body) as Map<String, dynamic>;
+
+    if (res.statusCode >= 200 && res.statusCode < 300) {
+      return data;
+    }
+
+    throw ApiException(
+      message: data['error']?.toString() ?? 'Failed to sync GTFS',
+      statusCode: res.statusCode,
+    );
+  }
+
+  // Transit Routing with GraphHopper + Cache System
+  Future<Map<String, dynamic>> getTransitRoute({
+    required double originLat,
+    required double originLon,
+    required double destLat,
+    required double destLon,
+    DateTime? departureTime,
+    bool arriveBy = false,
+    bool includeGeometry = true,
+    bool useCache = true,
+  }) async {
+    // Intentar obtener de caché primero
+    if (useCache) {
+      final cached = RouteCache.instance.getCachedRoute(
+        originLat: originLat,
+        originLon: originLon,
+        destLat: destLat,
+        destLon: destLon,
+      );
+
+      if (cached != null) {
+        print('✅ Ruta encontrada en caché');
+        // Marcar como ruta cacheada
+        cached['fromCache'] = true;
+        return cached;
+      }
+    }
+
+    final uri = _uri('/api/route/transit');
+    final body = {
+      'origin': {'lat': originLat, 'lon': originLon},
+      'destination': {'lat': destLat, 'lon': destLon},
+      'arrive_by': arriveBy,
+      'include_geometry': includeGeometry,
+    };
+
+    if (departureTime != null) {
+      body['departure_time'] = departureTime.toIso8601String();
+    }
+
+    try {
+      final res = await _safeRequest(() => postAuthorized(uri, body));
+      final data =
+          jsonDecode(res.body.isEmpty ? '{}' : res.body)
+              as Map<String, dynamic>;
+
+      if (res.statusCode >= 200 && res.statusCode < 300) {
+        // Guardar en caché para uso futuro
+        await RouteCache.instance.addRoute(
+          routeData: data,
+          originLat: originLat,
+          originLon: originLon,
+          destLat: destLat,
+          destLon: destLon,
+        );
+
+        data['fromCache'] = false;
+        return data;
+      }
+
+      throw ApiException(
+        message: data['error']?.toString() ?? 'Failed to get transit route',
+        statusCode: res.statusCode,
+      );
+    } catch (e) {
+      // Si falla el servidor, intentar rutas alternativas de caché
+      if (e is ApiException && (e.isNetworkError || e.isServerError)) {
+        print('⚠️ Error del servidor, buscando rutas alternativas en caché...');
+
+        final alternatives = RouteCache.instance.getAlternativeRoutes(
+          destLat: destLat,
+          destLon: destLon,
+          limit: 3,
+        );
+
+        if (alternatives.isNotEmpty) {
+          print('✅ Encontradas ${alternatives.length} rutas alternativas');
+          final bestAlternative = alternatives.first;
+          bestAlternative['fromCache'] = true;
+          bestAlternative['isAlternative'] = true;
+          bestAlternative['alternativeCount'] = alternatives.length;
+          return bestAlternative;
+        }
+      }
+
+      // Re-lanzar error si no hay alternativas
+      rethrow;
+    }
+  }
+
+  // Obtener múltiples rutas alternativas
+  Future<List<Map<String, dynamic>>> getAlternativeRoutes({
+    required double originLat,
+    required double originLon,
+    required double destLat,
+    required double destLon,
+  }) async {
+    final routes = <Map<String, dynamic>>[];
+
+    try {
+      // Intentar obtener ruta principal
+      final mainRoute = await getTransitRoute(
+        originLat: originLat,
+        originLon: originLon,
+        destLat: destLat,
+        destLon: destLon,
+        useCache: false, // Forzar consulta al servidor
+      );
+      routes.add(mainRoute);
+    } catch (e) {
+      print('No se pudo obtener ruta principal: $e');
+    }
+
+    // Agregar rutas alternativas de caché
+    final cachedAlternatives = RouteCache.instance.getAlternativeRoutes(
+      destLat: destLat,
+      destLon: destLon,
+      limit: 5,
+    );
+
+    for (var alt in cachedAlternatives) {
+      alt['isAlternative'] = true;
+      routes.add(alt);
+    }
+
+    return routes;
+  }
+
+  Future<http.Response> _safeRequest(
+    Future<http.Response> Function() request,
+  ) async {
+    try {
+      return await request().timeout(const Duration(seconds: 15));
+    } on SocketException catch (e) {
+      // Error de conectividad específico
+      String message = 'No se pudo conectar con el servidor.';
+      if (e.message.contains('Network is unreachable')) {
+        message = 'Sin conexión a internet. Verifica tu conexión.';
+      } else if (e.message.contains('Connection refused')) {
+        message =
+            'Servidor no disponible. Verifica que el backend esté ejecutándose.';
+      } else if (e.message.contains('Failed host lookup')) {
+        message = 'No se pudo resolver la dirección del servidor.';
+      }
+
+      throw ApiException(message: message, statusCode: 0, isNetworkError: true);
+    } on TimeoutException {
+      throw ApiException(
+        message: 'La petición tardó demasiado. Verifica tu conexión.',
+        statusCode: 408,
+        isNetworkError: true,
+      );
+    } on http.ClientException catch (e) {
+      throw ApiException(
+        message: 'Error de cliente HTTP: ${e.message}',
+        statusCode: 0,
+        isNetworkError: true,
+      );
+    } catch (e) {
+      throw ApiException(
+        message: 'Error inesperado: ${e.toString()}',
+        statusCode: 0,
+        isNetworkError: false,
+      );
+    }
+  }
+
+  // Método para probar conectividad
+  Future<bool> testConnection() async {
+    try {
+      final uri = _uri('/api/health');
+      final response = await http.get(uri).timeout(const Duration(seconds: 5));
+      return response.statusCode == 200;
+    } catch (e) {
+      return false;
+    }
+  }
+}
+
+class ApiException implements Exception {
+  ApiException({
+    required this.message,
+    required this.statusCode,
+    this.isNetworkError = false,
+  });
+
+  final String message;
+  final int statusCode;
+  final bool isNetworkError;
+
+  @override
+  String toString() => 'ApiException($statusCode): $message';
+
+  // Helper methods para diferentes tipos de errores
+  bool get isConnectivityIssue =>
+      isNetworkError && (statusCode == 0 || statusCode == 408);
+  bool get isServerError => statusCode >= 500;
+  bool get isClientError => statusCode >= 400 && statusCode < 500;
+}
