@@ -340,6 +340,28 @@ class ApiClient {
     bool includeGeometry = true,
     bool useCache = true,
   }) async {
+    // Validar coordenadas antes de enviar la solicitud
+    if (originLat.isNaN || originLon.isNaN || destLat.isNaN || destLon.isNaN) {
+      throw ApiException(
+        message: 'Coordenadas inválidas (NaN): origin($originLat, $originLon), dest($destLat, $destLon)',
+        statusCode: 400,
+      );
+    }
+
+    if (originLat < -90 || originLat > 90 || destLat < -90 || destLat > 90) {
+      throw ApiException(
+        message: 'Latitud fuera de rango: origin=$originLat, dest=$destLat (debe estar entre -90 y 90)',
+        statusCode: 400,
+      );
+    }
+
+    if (originLon < -180 || originLon > 180 || destLon < -180 || destLon > 180) {
+      throw ApiException(
+        message: 'Longitud fuera de rango: origin=$originLon, dest=$destLon (debe estar entre -180 y 180)',
+        statusCode: 400,
+      );
+    }
+
     // Intentar obtener de caché primero
     if (useCache) {
       final cached = RouteCache.instance.getCachedRoute(
@@ -366,11 +388,20 @@ class ApiClient {
     };
 
     if (departureTime != null) {
-      body['departure_time'] = departureTime.toIso8601String();
+      // Asegurar formato RFC3339 completo con zona horaria
+      body['departure_time'] = departureTime.toUtc().toIso8601String();
     }
+
+    print('🔍 Enviando solicitud a: $uri');
+    print('📝 Body: $body');
+    print('📍 Origin: lat=$originLat, lon=$originLon');
+    print('📍 Destination: lat=$destLat, lon=$destLon');
 
     try {
       final res = await _safeRequest(() => postAuthorized(uri, body));
+      print('📡 Response status: ${res.statusCode}');
+      print('📄 Response body: ${res.body}');
+      
       final data =
           jsonDecode(res.body.isEmpty ? '{}' : res.body)
               as Map<String, dynamic>;

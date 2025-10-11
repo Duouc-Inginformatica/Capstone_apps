@@ -77,7 +77,7 @@ func (c *Client) PlanTransit(ctx context.Context, req models.TransitRouteRequest
 	query.Add("point", formatPoint(req.Origin))
 	query.Add("point", formatPoint(req.Destination))
 	if req.DepartureTime != nil {
-		query.Add("earliest_departure_time", req.DepartureTime.UTC().Format("2006-01-02T15:04:05"))
+		query.Add("earliest_departure_time", req.DepartureTime.Time.UTC().Format("2006-01-02T15:04:05"))
 	}
 	if req.ArriveBy {
 		query.Add("arrive_by", "true")

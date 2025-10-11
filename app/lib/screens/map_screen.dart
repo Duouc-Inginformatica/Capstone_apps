@@ -15,6 +15,7 @@ import '../services/route_recommendation_service.dart';
 import '../services/address_validation_service.dart';
 import '../services/route_tracking_service.dart';
 import '../services/transit_boarding_service.dart';
+import '../services/red_cl_scraper_service.dart';
 import 'settings_screen.dart';
 import '../widgets/bottom_nav.dart';
 import 'contribute_screen.dart';
@@ -1810,46 +1811,20 @@ class _MapScreenState extends State<MapScreen> {
           final selected = suggestions[selectedIndex];
           final destLat = (selected['lat'] as num).toDouble();
           final destLon = (selected['lon'] as num).toDouble();
+          final selectedName = selected['display_name'] as String;
 
-          // Reuse the same alternative-routes flow
-          final originLat = _currentPosition!.latitude;
-          final originLon = _currentPosition!.longitude;
-
-          final apiClient = ApiClient();
-          List<Map<String, dynamic>> transitRoutes = [];
-          try {
-            transitRoutes = await apiClient.getAlternativeRoutes(
-              originLat: originLat,
-              originLon: originLon,
-              destLat: destLat,
-              destLon: destLon,
-            );
-          } catch (e) {
-            final single = await apiClient.getTransitRoute(
-              originLat: originLat,
-              originLon: originLon,
-              destLat: destLat,
-              destLon: destLon,
-            );
-            transitRoutes = [single];
-          }
-
-          final origin = LatLng(originLat, originLon);
-          final destinationPoint = LatLng(destLat, destLon);
-
-          final combinedRoutes = await CombinedRoutesService.instance
-              .generateAlternativeRoutes(
-            origin: origin,
-            destination: destinationPoint,
-            transitDataList: transitRoutes,
-          );
-
-          if (combinedRoutes.isEmpty) {
-            _showWarningNotification('No se pudieron generar rutas alternativas');
+          TtsService.instance.speak('Buscando el paradero más cercano a $selectedName');
+          
+          // Buscar el paradero más cercano a la dirección seleccionada
+          final nearestStop = await _findNearestStopToLocation(destLat, destLon);
+          
+          if (nearestStop == null) {
+            _showWarningNotification('No se encontraron paraderos cerca de la dirección seleccionada');
             return;
           }
 
-          await _showRouteOptions(combinedRoutes, selected['display_name'] as String);
+          // Mostrar información del paradero con buses disponibles
+          await _showStopDetailsWithBuses(nearestStop, selectedName);
         } catch (e) {
           _showErrorNotification('Error buscando direcciones: ${e.toString()}');
         }
@@ -1887,6 +1862,384 @@ class _MapScreenState extends State<MapScreen> {
       setState(() => _isLoadingStops = false);
       rethrow; // Re-throw para que el método llamador pueda manejar el error
     }
+  }
+
+  /// Encuentra el paradero más cercano a una ubicación específica
+  Future<Map<String, dynamic>?> _findNearestStopToLocation(double lat, double lon) async {
+    try {
+      final apiClient = ApiClient();
+      
+      // Buscar paradas cerca de la ubicación específica (mayor radio para encontrar más opciones)
+      final stopsNearDestination = await apiClient.getNearbyStops(
+        lat: lat,
+        lon: lon,
+        radius: 1500, // Radio más grande para encontrar más opciones
+        limit: 50,    // Más paradas para tener mejor selección
+      );
+
+      if (stopsNearDestination.isEmpty) {
+        return null;
+      }
+
+      // Calcular distancias y encontrar el más cercano
+      double minDistance = double.infinity;
+      Map<String, dynamic>? nearestStop;
+
+      for (var stop in stopsNearDestination) {
+        final stopLat = stop['latitude'] as double?;
+        final stopLon = stop['longitude'] as double?;
+        
+        if (stopLat == null || stopLon == null) continue;
+
+        // Calcular distancia usando fórmula haversine
+        final distance = _calculateDistance(lat, lon, stopLat, stopLon);
+        
+        if (distance < minDistance) {
+          minDistance = distance;
+          nearestStop = stop;
+        }
+      }
+
+      return nearestStop;
+    } catch (e) {
+      print('Error buscando paradero más cercano: $e');
+      return null;
+    }
+  }
+
+  /// Calcula la distancia entre dos puntos usando la fórmula haversine (en metros)
+  double _calculateDistance(double lat1, double lon1, double lat2, double lon2) {
+    const double earthRadius = 6371000; // Radio de la Tierra en metros
+    
+    final double dLat = _toRadians(lat2 - lat1);
+    final double dLon = _toRadians(lon2 - lon1);
+    
+    final double a = math.sin(dLat / 2) * math.sin(dLat / 2) +
+        math.cos(_toRadians(lat1)) * math.cos(_toRadians(lat2)) *
+        math.sin(dLon / 2) * math.sin(dLon / 2);
+    
+    final double c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a));
+    
+    return earthRadius * c;
+  }
+
+  /// Convierte grados a radianes
+  double _toRadians(double degrees) {
+    return degrees * (math.pi / 180);
+  }
+
+  /// Muestra información detallada del paradero con buses disponibles
+  Future<void> _showStopDetailsWithBuses(Map<String, dynamic> stop, String destinationName) async {
+    final stopId = stop['stop_id']?.toString() ?? stop['id']?.toString() ?? '';
+    final stopName = stop['name'] as String? ?? 'Paradero sin nombre';
+    
+    // Obtener información de buses en tiempo real
+    TtsService.instance.speak('Obteniendo información de buses para $stopName');
+    
+    try {
+      final buses = await RedClScraperService.instance.getBusInfoForStop(stopId);
+      
+      if (!mounted) return;
+      
+      await _showBusSelectionModal(stop, buses, destinationName);
+    } catch (e) {
+      _showErrorNotification('Error obteniendo información de buses');
+    }
+  }
+
+  /// Muestra modal para seleccionar bus
+  Future<void> _showBusSelectionModal(Map<String, dynamic> stop, List<BusInfo> buses, String destinationName) async {
+    final stopName = stop['name'] as String? ?? 'Paradero';
+    final stopId = stop['stop_id']?.toString() ?? stop['id']?.toString() ?? '';
+    
+    final selectedBus = await showModalBottomSheet<BusInfo?>(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) {
+        return DraggableScrollableSheet(
+          initialChildSize: 0.7,
+          maxChildSize: 0.9,
+          minChildSize: 0.3,
+          builder: (context, scrollController) {
+            return Container(
+              decoration: const BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+              ),
+              child: Column(
+                children: [
+                  // Header
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).primaryColor,
+                      borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+                    ),
+                    child: Column(
+                      children: [
+                        Row(
+                          children: [
+                            const Icon(Icons.directions_bus, color: Colors.white, size: 24),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    stopName,
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 18,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                  Text(
+                                    'ID: $stopId',
+                                    style: const TextStyle(
+                                      color: Colors.white70,
+                                      fontSize: 14,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            IconButton(
+                              onPressed: () => Navigator.of(context).pop(),
+                              icon: const Icon(Icons.close, color: Colors.white),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'Buses disponibles hacia $destinationName',
+                          style: const TextStyle(
+                            color: Colors.white70,
+                            fontSize: 14,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  
+                  // Lista de buses
+                  Expanded(
+                    child: buses.isEmpty
+                        ? const Center(
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(Icons.info_outline, size: 64, color: Colors.grey),
+                                SizedBox(height: 16),
+                                Text(
+                                  'No hay buses disponibles en este momento',
+                                  style: TextStyle(fontSize: 16, color: Colors.grey),
+                                ),
+                              ],
+                            ),
+                          )
+                        : ListView.builder(
+                            controller: scrollController,
+                            padding: const EdgeInsets.all(16),
+                            itemCount: buses.length,
+                            itemBuilder: (context, index) {
+                              final bus = buses[index];
+                              return Card(
+                                margin: const EdgeInsets.only(bottom: 12),
+                                elevation: 2,
+                                child: ListTile(
+                                  contentPadding: const EdgeInsets.all(16),
+                                  leading: CircleAvatar(
+                                    backgroundColor: Theme.of(context).primaryColor,
+                                    child: Text(
+                                      bus.route,
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ),
+                                  title: Text(
+                                    'Bus ${bus.route}',
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 16,
+                                    ),
+                                  ),
+                                  subtitle: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      const SizedBox(height: 4),
+                                      Row(
+                                        children: [
+                                          const Icon(Icons.access_time, size: 16, color: Colors.green),
+                                          const SizedBox(width: 4),
+                                          Expanded(
+                                            child: Text(
+                                              'Llega en ${bus.arrivalTimeMinutes} min',
+                                              style: const TextStyle(
+                                                color: Colors.green,
+                                                fontWeight: FontWeight.w500,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 4),
+                                      Row(
+                                        children: [
+                                          const Icon(Icons.place, size: 16, color: Colors.blue),
+                                          const SizedBox(width: 4),
+                                          Expanded(
+                                            child: Text(
+                                              bus.destination,
+                                              style: const TextStyle(color: Colors.blue),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ],
+                                  ),
+                                  trailing: const Icon(Icons.arrow_forward_ios),
+                                  onTap: () => Navigator.of(context).pop(bus),
+                                ),
+                              );
+                            },
+                          ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+
+    if (selectedBus != null) {
+      await _navigateToStopAndTrackBus(stop, selectedBus, destinationName);
+    }
+  }
+
+  /// Navegar al paradero y hacer seguimiento del bus seleccionado
+  Future<void> _navigateToStopAndTrackBus(Map<String, dynamic> stop, BusInfo selectedBus, String destinationName) async {
+    final stopName = stop['name'] as String? ?? 'Paradero';
+    final stopLat = stop['latitude'] as double;
+    final stopLon = stop['longitude'] as double;
+    
+    TtsService.instance.speak(
+      'Perfecto, te guiaré al $stopName para tomar el bus ${selectedBus.route} '
+      'que llega en ${selectedBus.arrivalTimeMinutes} minutos hacia ${selectedBus.destination}'
+    );
+
+    // Calcular ruta al paradero
+    try {
+      await _calculateRoute(
+        destLat: stopLat,
+        destLon: stopLon,
+        destName: stopName,
+      );
+
+      // Programar seguimiento del bus cuando llegue al paradero
+      _scheduleArrivaltAtStop(stop, selectedBus, destinationName);
+      
+    } catch (e) {
+      _showErrorNotification('Error calculando ruta al paradero');
+    }
+  }
+
+  /// Programa acciones cuando llegue al paradero
+  void _scheduleArrivaltAtStop(Map<String, dynamic> stop, BusInfo selectedBus, String destinationName) {
+    // Aquí implementarías la lógica para detectar cuando el usuario llega al paradero
+    // y comenzar el seguimiento del bus hacia el destino final
+    
+    Timer.periodic(const Duration(seconds: 10), (timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      
+      // Verificar si el usuario está cerca del paradero (dentro de 50 metros)
+      if (_currentPosition != null) {
+        final stopLat = stop['latitude'] as double;
+        final stopLon = stop['longitude'] as double;
+        final distance = _calculateDistance(
+          _currentPosition!.latitude,
+          _currentPosition!.longitude,
+          stopLat,
+          stopLon,
+        );
+        
+        if (distance <= 50) { // 50 metros de distancia
+          timer.cancel();
+          _handleArrivalAtStop(stop, selectedBus, destinationName);
+        }
+      }
+    });
+  }
+
+  /// Maneja la llegada al paradero
+  void _handleArrivalAtStop(Map<String, dynamic> stop, BusInfo selectedBus, String destinationName) {
+    final stopName = stop['name'] as String? ?? 'Paradero';
+    
+    TtsService.instance.speak(
+      '¡Has llegado al $stopName! '
+      'El bus ${selectedBus.route} hacia ${selectedBus.destination} '
+      'debería llegar en ${selectedBus.arrivalTimeMinutes} minutos. '
+      'Te notificaré cuando esté cerca.'
+    );
+
+    _showSuccessNotification(
+      'Llegaste al paradero $stopName',
+      withVibration: true,
+    );
+
+    // Iniciar monitoreo de llegada del bus
+    _startBusArrivalMonitoring(selectedBus, destinationName);
+  }
+
+  /// Inicia el monitoreo de llegada del bus
+  void _startBusArrivalMonitoring(BusInfo selectedBus, String destinationName) {
+    TtsService.instance.speak(
+      'Monitoreando la llegada del bus ${selectedBus.route}. '
+      'Te avisaré cuando esté por llegar.'
+    );
+
+    // Simular llegada del bus después del tiempo estimado
+    Timer(Duration(minutes: selectedBus.arrivalTimeMinutes), () {
+      if (!mounted) return;
+      
+      TtsService.instance.speak(
+        '¡El bus ${selectedBus.route} está llegando! '
+        'Prepárate para abordar. Te guiaré hacia $destinationName.'
+      );
+
+      _showNotification(
+        NotificationData(
+          message: 'Bus ${selectedBus.route} llegando al paradero',
+          type: NotificationType.success,
+          withVibration: true,
+        ),
+      );
+
+      // Iniciar seguimiento hacia el destino final
+      _startDestinationTracking(selectedBus, destinationName);
+    });
+  }
+
+  /// Inicia el seguimiento hacia el destino final
+  void _startDestinationTracking(BusInfo selectedBus, String destinationName) {
+    TtsService.instance.speak(
+      'Ahora te estoy siguiendo en el bus ${selectedBus.route} hacia $destinationName. '
+      'Te avisaré cuando te acerques a tu destino.'
+    );
+
+    setState(() {
+      _isTrackingRoute = true;
+    });
+
+    // Aquí podrías implementar lógica más sofisticada para:
+    // 1. Seguir la ruta del bus en tiempo real
+    // 2. Alertar cuando se acerque al destino
+    // 3. Proporcionar instrucciones de bajada
   }
 
   Future<void> _calculateRoute({
