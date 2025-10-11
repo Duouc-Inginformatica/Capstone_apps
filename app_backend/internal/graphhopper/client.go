@@ -62,6 +62,10 @@ func NewClient(baseURL, apiKey string, opts Options) (*Client, error) {
 
 // PlanTransit requests a public transport route from GraphHopper.
 func (c *Client) PlanTransit(ctx context.Context, req models.TransitRouteRequest) (*models.TransitRouteResponse, error) {
+	fmt.Printf("DEBUG: Iniciando PlanTransit con origen: %+v, destino: %+v\n", req.Origin, req.Destination)
+	fmt.Printf("DEBUG: Base URL configurada: %s\n", c.baseURL)
+	fmt.Printf("DEBUG: API Key configurada: %s\n", c.apiKey)
+	
 	query := url.Values{}
 	query.Add("profile", c.profile)
 	query.Add("locale", c.locale)
@@ -73,10 +77,10 @@ func (c *Client) PlanTransit(ctx context.Context, req models.TransitRouteRequest
 	query.Add("point", formatPoint(req.Origin))
 	query.Add("point", formatPoint(req.Destination))
 	if req.DepartureTime != nil {
-		query.Add("pt.earliest_departure_time", req.DepartureTime.UTC().Format("2006-01-02T15:04:05"))
+		query.Add("earliest_departure_time", req.DepartureTime.UTC().Format("2006-01-02T15:04:05"))
 	}
 	if req.ArriveBy {
-		query.Add("pt.arrive_by", "true")
+		query.Add("arrive_by", "true")
 	}
 	if c.apiKey != "" {
 		query.Add("key", c.apiKey)
@@ -95,12 +99,17 @@ func (c *Client) PlanTransit(ctx context.Context, req models.TransitRouteRequest
 	}
 	defer resp.Body.Close()
 
+	// Log para debugging
+	fmt.Printf("GraphHopper Response Status: %d\n", resp.StatusCode)
+	fmt.Printf("GraphHopper Request URL: %s\n", endpoint)
+	
 	decoder := json.NewDecoder(resp.Body)
 	if resp.StatusCode >= 400 {
 		var apiErr ghError
 		if err := decoder.Decode(&apiErr); err != nil {
 			return nil, fmt.Errorf("graphhopper: http %d", resp.StatusCode)
 		}
+		fmt.Printf("GraphHopper Error: %s\n", apiErr.Message)
 		return nil, fmt.Errorf("graphhopper: %s", apiErr.Message)
 	}
 

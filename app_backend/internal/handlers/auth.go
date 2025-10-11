@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"strconv"
@@ -78,6 +79,9 @@ func Setup(db *sql.DB) {
 	}
 
 	if base := strings.TrimSpace(os.Getenv("GRAPHHOPPER_BASE_URL")); base != "" {
+		fmt.Printf("DEBUG: Inicializando GraphHopper con base URL: %s\n", base)
+		fmt.Printf("DEBUG: API Key: %s\n", strings.TrimSpace(os.Getenv("GRAPHHOPPER_API_KEY")))
+		
 		includeGeom := true
 		if opt := strings.TrimSpace(os.Getenv("GRAPHHOPPER_INCLUDE_GEOMETRY")); opt != "" {
 			includeGeom = !(strings.EqualFold(opt, "false") || opt == "0")
@@ -97,7 +101,10 @@ func Setup(db *sql.DB) {
 			log.Printf("graphhopper init error: %v", err)
 		} else {
 			hopperClient = client
+			fmt.Printf("DEBUG: GraphHopper client inicializado correctamente\n")
 		}
+	} else {
+		fmt.Printf("DEBUG: GRAPHHOPPER_BASE_URL está vacío, no inicializando GraphHopper\n")
 	}
 }
 

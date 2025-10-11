@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"time"
 
@@ -12,6 +13,8 @@ import (
 
 // PlanTransit handles POST /api/route/transit to fetch a route from GraphHopper.
 func PlanTransit(c *fiber.Ctx) error {
+	fmt.Printf("DEBUG: PlanTransit llamado, hopperClient es nil: %t\n", hopperClient == nil)
+	
 	if hopperClient == nil {
 		return c.Status(fiber.StatusServiceUnavailable).JSON(models.ErrorResponse{Error: "GraphHopper no configurado"})
 	}
