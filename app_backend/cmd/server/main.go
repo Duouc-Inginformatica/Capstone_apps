@@ -16,7 +16,7 @@ import (
 
 func main() {
 	_ = godotenv.Load()
-	
+
 	// Debug: verificar variables de entorno
 	log.Printf("DEBUG: GRAPHHOPPER_BASE_URL = '%s'", os.Getenv("GRAPHHOPPER_BASE_URL"))
 	log.Printf("DEBUG: GRAPHHOPPER_API_KEY = '%s'", os.Getenv("GRAPHHOPPER_API_KEY"))

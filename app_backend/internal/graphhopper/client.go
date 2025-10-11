@@ -65,7 +65,7 @@ func (c *Client) PlanTransit(ctx context.Context, req models.TransitRouteRequest
 	fmt.Printf("DEBUG: Iniciando PlanTransit con origen: %+v, destino: %+v\n", req.Origin, req.Destination)
 	fmt.Printf("DEBUG: Base URL configurada: %s\n", c.baseURL)
 	fmt.Printf("DEBUG: API Key configurada: %s\n", c.apiKey)
-	
+
 	query := url.Values{}
 	query.Add("profile", c.profile)
 	query.Add("locale", c.locale)
@@ -102,7 +102,7 @@ func (c *Client) PlanTransit(ctx context.Context, req models.TransitRouteRequest
 	// Log para debugging
 	fmt.Printf("GraphHopper Response Status: %d\n", resp.StatusCode)
 	fmt.Printf("GraphHopper Request URL: %s\n", endpoint)
-	
+
 	decoder := json.NewDecoder(resp.Body)
 	if resp.StatusCode >= 400 {
 		var apiErr ghError

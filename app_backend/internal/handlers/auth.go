@@ -81,7 +81,7 @@ func Setup(db *sql.DB) {
 	if base := strings.TrimSpace(os.Getenv("GRAPHHOPPER_BASE_URL")); base != "" {
 		fmt.Printf("DEBUG: Inicializando GraphHopper con base URL: %s\n", base)
 		fmt.Printf("DEBUG: API Key: %s\n", strings.TrimSpace(os.Getenv("GRAPHHOPPER_API_KEY")))
-		
+
 		includeGeom := true
 		if opt := strings.TrimSpace(os.Getenv("GRAPHHOPPER_INCLUDE_GEOMETRY")); opt != "" {
 			includeGeom = !(strings.EqualFold(opt, "false") || opt == "0")
