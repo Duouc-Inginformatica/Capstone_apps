@@ -1954,162 +1954,129 @@ class _MapScreenState extends State<MapScreen> {
     
     final selectedBus = await showModalBottomSheet<BusInfo?>(
       context: context,
-      isScrollControlled: true,
       builder: (context) {
-        return DraggableScrollableSheet(
-          initialChildSize: 0.7,
-          maxChildSize: 0.9,
-          minChildSize: 0.3,
-          builder: (context, scrollController) {
-            return Container(
-              decoration: const BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-              ),
-              child: Column(
-                children: [
-                  // Header
-                  Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: Theme.of(context).primaryColor,
-                      borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-                    ),
-                    child: Column(
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Header simple como el de sugerencias
+              Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Column(
+                  children: [
+                    Row(
                       children: [
-                        Row(
-                          children: [
-                            const Icon(Icons.directions_bus, color: Colors.white, size: 24),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    stopName,
-                                    style: const TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 18,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                  Text(
-                                    'ID: $stopId',
-                                    style: const TextStyle(
-                                      color: Colors.white70,
-                                      fontSize: 14,
-                                    ),
-                                  ),
-                                ],
-                              ),
+                        const Icon(Icons.directions_bus, color: Colors.blue, size: 20),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            stopName,
+                            style: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
                             ),
-                            IconButton(
-                              onPressed: () => Navigator.of(context).pop(),
-                              icon: const Icon(Icons.close, color: Colors.white),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          'Buses disponibles hacia $destinationName',
-                          style: const TextStyle(
-                            color: Colors.white70,
-                            fontSize: 14,
                           ),
+                        ),
+                        IconButton(
+                          onPressed: () => Navigator.of(context).pop(),
+                          icon: const Icon(Icons.close, size: 20),
                         ),
                       ],
                     ),
-                  ),
-                  
-                  // Lista de buses
-                  Expanded(
-                    child: buses.isEmpty
-                        ? const Center(
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
+                    if (stopId.isNotEmpty)
+                      Text(
+                        'ID: $stopId',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              
+              // Información del destino
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                child: Text(
+                  'Buses disponibles hacia $destinationName',
+                  style: const TextStyle(fontSize: 14, color: Colors.grey),
+                  textAlign: TextAlign.center,
+                ),
+              ),
+              
+              const SizedBox(height: 8),
+              
+              // Lista de buses con el mismo estilo que sugerencias
+              Flexible(
+                child: buses.isEmpty
+                    ? const Padding(
+                        padding: EdgeInsets.all(40),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.info_outline, size: 48, color: Colors.grey),
+                            SizedBox(height: 12),
+                            Text(
+                              'No hay buses disponibles',
+                              style: TextStyle(fontSize: 14, color: Colors.grey),
+                            ),
+                          ],
+                        ),
+                      )
+                    : ListView.separated(
+                        shrinkWrap: true,
+                        itemCount: buses.length,
+                        separatorBuilder: (_, __) => const Divider(),
+                        itemBuilder: (context, index) {
+                          final bus = buses[index];
+                          return ListTile(
+                            leading: CircleAvatar(
+                              backgroundColor: Theme.of(context).primaryColor,
+                              radius: 16,
+                              child: Text(
+                                bus.route,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ),
+                            title: Text(
+                              'Bus ${bus.route}',
+                              style: const TextStyle(fontWeight: FontWeight.w600),
+                            ),
+                            subtitle: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Icon(Icons.info_outline, size: 64, color: Colors.grey),
-                                SizedBox(height: 16),
+                                const SizedBox(height: 2),
                                 Text(
-                                  'No hay buses disponibles en este momento',
-                                  style: TextStyle(fontSize: 16, color: Colors.grey),
+                                  'Llega en ${bus.arrivalTimeMinutes} min',
+                                  style: const TextStyle(color: Colors.green, fontSize: 12),
+                                ),
+                                Text(
+                                  bus.destination,
+                                  style: const TextStyle(color: Colors.blue, fontSize: 12),
+                                  overflow: TextOverflow.ellipsis,
                                 ),
                               ],
                             ),
-                          )
-                        : ListView.builder(
-                            controller: scrollController,
-                            padding: const EdgeInsets.all(16),
-                            itemCount: buses.length,
-                            itemBuilder: (context, index) {
-                              final bus = buses[index];
-                              return Card(
-                                margin: const EdgeInsets.only(bottom: 12),
-                                elevation: 2,
-                                child: ListTile(
-                                  contentPadding: const EdgeInsets.all(16),
-                                  leading: CircleAvatar(
-                                    backgroundColor: Theme.of(context).primaryColor,
-                                    child: Text(
-                                      bus.route,
-                                      style: const TextStyle(
-                                        color: Colors.white,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    ),
-                                  ),
-                                  title: Text(
-                                    'Bus ${bus.route}',
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 16,
-                                    ),
-                                  ),
-                                  subtitle: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      const SizedBox(height: 4),
-                                      Row(
-                                        children: [
-                                          const Icon(Icons.access_time, size: 16, color: Colors.green),
-                                          const SizedBox(width: 4),
-                                          Expanded(
-                                            child: Text(
-                                              'Llega en ${bus.arrivalTimeMinutes} min',
-                                              style: const TextStyle(
-                                                color: Colors.green,
-                                                fontWeight: FontWeight.w500,
-                                              ),
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                      const SizedBox(height: 4),
-                                      Row(
-                                        children: [
-                                          const Icon(Icons.place, size: 16, color: Colors.blue),
-                                          const SizedBox(width: 4),
-                                          Expanded(
-                                            child: Text(
-                                              bus.destination,
-                                              style: const TextStyle(color: Colors.blue),
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ],
-                                  ),
-                                  trailing: const Icon(Icons.arrow_forward_ios),
-                                  onTap: () => Navigator.of(context).pop(bus),
-                                ),
-                              );
-                            },
-                          ),
-                  ),
-                ],
+                            trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+                            onTap: () => Navigator.of(context).pop(bus),
+                          );
+                        },
+                      ),
               ),
-            );
-          },
+              
+              // Botón cancelar como en sugerencias
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(null),
+                child: const Text('Cancelar'),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
         );
       },
     );
