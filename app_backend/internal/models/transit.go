@@ -6,6 +6,30 @@ import (
 	"time"
 )
 
+// BusRoute representa una ruta de bus del sistema GTFS
+type BusRoute struct {
+	RouteID        string `json:"route_id" db:"route_id"`
+	RouteShortName string `json:"route_short_name" db:"route_short_name"`
+	RouteLongName  string `json:"route_long_name" db:"route_long_name"`
+	RouteType      int    `json:"route_type" db:"route_type"`
+}
+
+// TransitLeg representa un segmento de viaje en transporte público
+type TransitLeg struct {
+	Type        string `json:"type"`                 // "walk", "pt" (public transport)
+	Distance    int    `json:"distance"`             // en metros
+	Time        int    `json:"time"`                 // en milisegundos
+	Instruction string `json:"instruction"`          // instrucciones para el usuario
+	RouteDesc   string `json:"route_desc,omitempty"` // descripción de la ruta (para buses)
+}
+
+// TransitPath representa una ruta completa de transporte público
+type TransitPath struct {
+	Time     int          `json:"time"`     // tiempo total en milisegundos
+	Distance int          `json:"distance"` // distancia total en metros
+	Legs     []TransitLeg `json:"legs"`     // segmentos del viaje
+}
+
 // FlexibleTime es un tipo personalizado que puede parsear múltiples formatos de fecha
 type FlexibleTime struct {
 	time.Time
@@ -84,4 +108,5 @@ type TransitRouteResponse struct {
 	Instructions    []TransitInstruction `json:"instructions"`
 	Geometry        [][]float64          `json:"geometry,omitempty"`
 	Raw             map[string]any       `json:"raw,omitempty"`
+	Paths           []TransitPath        `json:"paths,omitempty"` // Para compatibilidad con GraphHopper
 }

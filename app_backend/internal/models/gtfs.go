@@ -15,6 +15,9 @@ type Stop struct {
 	DistanceMeters     float64 `json:"distance_meters,omitempty"`
 }
 
+// GTFSStop is an alias for Stop to match naming convention
+type GTFSStop = Stop
+
 // GTFSSummary contains metadata about the last imported feed.
 type GTFSSummary struct {
 	FeedVersion   string    `json:"feed_version,omitempty"`

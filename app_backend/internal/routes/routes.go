@@ -9,7 +9,7 @@ import (
 
 func Register(app *fiber.App, db *sql.DB) {
 	api := app.Group("/api")
-	
+
 	// Existing routes
 	api.Get("/health", handlers.Health)
 	api.Post("/login", handlers.Login)
@@ -17,6 +17,12 @@ func Register(app *fiber.App, db *sql.DB) {
 	api.Post("/gtfs/sync", handlers.SyncGTFS)
 	api.Get("/stops", handlers.GetNearbyStops)
 	api.Post("/route/transit", handlers.PlanTransit)
+
+	// Initialize handlers with database
+	handler := handlers.NewHandler(db)
+
+	// New public transit route using GTFS data
+	api.Post("/route/public-transit", handler.PublicTransitRoute)
 
 	// Initialize new handlers
 	incidentHandler := handlers.NewIncidentHandler(db)

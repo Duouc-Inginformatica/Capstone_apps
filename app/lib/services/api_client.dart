@@ -329,7 +329,119 @@ class ApiClient {
     );
   }
 
-  // Transit Routing with GraphHopper + Cache System
+  // Public Transit Routing using GTFS data - NUEVO MÉTODO
+  Future<Map<String, dynamic>> getPublicTransitRoute({
+    required double originLat,
+    required double originLon,
+    required double destLat,
+    required double destLon,
+    DateTime? departureTime,
+    bool arriveBy = false,
+    bool includeGeometry = true,
+    bool useCache = true,
+  }) async {
+    // Validar coordenadas antes de enviar la solicitud
+    if (originLat.isNaN || originLon.isNaN || destLat.isNaN || destLon.isNaN) {
+      throw ApiException(
+        message: 'Coordenadas inválidas (NaN): origin($originLat, $originLon), dest($destLat, $destLon)',
+        statusCode: 400,
+      );
+    }
+
+    if (originLat < -90 || originLat > 90 || destLat < -90 || destLat > 90) {
+      throw ApiException(
+        message: 'Latitud fuera de rango: origin=$originLat, dest=$destLat (debe estar entre -90 y 90)',
+        statusCode: 400,
+      );
+    }
+
+    if (originLon < -180 || originLon > 180 || destLon < -180 || destLon > 180) {
+      throw ApiException(
+        message: 'Longitud fuera de rango: origin=$originLon, dest=$destLon (debe estar entre -180 y 180)',
+        statusCode: 400,
+      );
+    }
+
+    // Intentar obtener de caché primero
+    if (useCache) {
+      final cached = RouteCache.instance.getCachedRoute(
+        originLat: originLat,
+        originLon: originLon,
+        destLat: destLat,
+        destLon: destLon,
+      );
+
+      if (cached != null) {
+        print('✅ Ruta de transporte público encontrada en caché');
+        cached['fromCache'] = true;
+        return cached;
+      }
+    }
+
+    final uri = _uri('/api/route/public-transit');
+    final body = {
+      'origin': {'lat': originLat, 'lon': originLon},
+      'destination': {'lat': destLat, 'lon': destLon},
+      'arrive_by': arriveBy,
+      'include_geometry': includeGeometry,
+    };
+
+    if (departureTime != null) {
+      body['departure_time'] = departureTime.toUtc().toIso8601String();
+    }
+
+    print('🚌 Enviando solicitud de transporte público a: $uri');
+    print('📝 Body: $body');
+    print('📍 Origin: lat=$originLat, lon=$originLon');
+    print('📍 Destination: lat=$destLat, lon=$destLon');
+
+    try {
+      final headers = <String, String>{
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      };
+      
+      final token = await AuthStorage.readToken();
+      if (token != null) headers['Authorization'] = 'Bearer $token';
+
+      final response = await http.post(
+        uri,
+        headers: headers,
+        body: jsonEncode(body),
+      );
+
+      print('📡 Status Code: ${response.statusCode}');
+      print('📄 Response: ${response.body}');
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        
+        // Guardar en caché si la respuesta es válida
+        if (useCache && data['paths'] != null) {
+          await RouteCache.instance.addRoute(
+            routeData: data,
+            originLat: originLat,
+            originLon: originLon,
+            destLat: destLat,
+            destLon: destLon,
+          );
+        }
+        
+        return data;
+      } else {
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        throw ApiException(
+          statusCode: response.statusCode,
+          message: data['error']?.toString() ?? 'Failed to get public transit route',
+        );
+      }
+    } catch (e) {
+      print('❌ Error en solicitud de transporte público: $e');
+      rethrow;
+    }
+  }
+
+  // Transit Routing with GraphHopper + Cache System (MÉTODO ORIGINAL)
   Future<Map<String, dynamic>> getTransitRoute({
     required double originLat,
     required double originLon,

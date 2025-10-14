@@ -6,6 +6,7 @@
 // ============================================================================
 
 import 'package:latlong2/latlong.dart';
+import 'api_client.dart';
 
 enum TransportMode { walk, bus, metro, train }
 
@@ -183,7 +184,57 @@ class CombinedRoutesService {
 
   final Distance _distance = const Distance();
 
-  /// Calcula ruta combinada multimodal
+  /// Calcula ruta combinada usando el nuevo endpoint de transporte público GTFS
+  Future<CombinedRoute> calculatePublicTransitRoute({
+    required LatLng origin,
+    required LatLng destination,
+    DateTime? departureTime,
+  }) async {
+    try {
+      print('🚌 Calculando ruta de transporte público con datos GTFS');
+      
+      // Llamar al nuevo endpoint de transporte público
+      final apiClient = ApiClient();
+      final transitData = await apiClient.getPublicTransitRoute(
+        originLat: origin.latitude,
+        originLon: origin.longitude,
+        destLat: destination.latitude,
+        destLon: destination.longitude,
+        departureTime: departureTime,
+        includeGeometry: true,
+        useCache: true,
+      );
+
+      return await calculateCombinedRoute(
+        origin: origin,
+        destination: destination,
+        transitData: transitData,
+      );
+    } catch (e) {
+      print('❌ Error en ruta de transporte público: $e');
+      
+      // Fallback a GraphHopper si falla
+      print('🔄 Usando GraphHopper como fallback');
+      final apiClient = ApiClient();
+      final transitData = await apiClient.getTransitRoute(
+        originLat: origin.latitude,
+        originLon: origin.longitude,
+        destLat: destination.latitude,
+        destLon: destination.longitude,
+        departureTime: departureTime,
+        includeGeometry: true,
+        useCache: true,
+      );
+
+      return await calculateCombinedRoute(
+        origin: origin,
+        destination: destination,
+        transitData: transitData,
+      );
+    }
+  }
+
+  /// Calcula ruta combinada multimodal (método original)
   Future<CombinedRoute> calculateCombinedRoute({
     required LatLng origin,
     required LatLng destination,
