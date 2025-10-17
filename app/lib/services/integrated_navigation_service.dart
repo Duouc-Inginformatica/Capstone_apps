@@ -466,9 +466,13 @@ class IntegratedNavigationService {
   ) async {
     final geometries = <int, List<LatLng>>{};
 
+    print('🗺️ Construyendo geometrías para ${steps.length} pasos');
+
     for (int i = 0; i < steps.length; i++) {
       final step = steps[i];
       final stepGeometry = <LatLng>[];
+
+      print('🗺️ Paso $i: ${step.type}');
 
       switch (step.type) {
         case 'walk':
@@ -476,6 +480,9 @@ class IntegratedNavigationService {
           if (step.location != null) {
             stepGeometry.add(origin); // Posición inicial
             stepGeometry.add(step.location!); // Paradero destino
+            print(
+              '   ✅ WALK: Añadida geometría ${origin.latitude},${origin.longitude} → ${step.location!.latitude},${step.location!.longitude}',
+            );
           }
           break;
 
@@ -487,6 +494,9 @@ class IntegratedNavigationService {
                 leg.geometry != null &&
                 leg.geometry!.isNotEmpty) {
               stepGeometry.addAll(leg.geometry!);
+              print(
+                '   ✅ RIDE_BUS: Añadida geometría del leg (${leg.geometry!.length} puntos)',
+              );
               break;
             }
           }
@@ -498,19 +508,27 @@ class IntegratedNavigationService {
             if (prevStep?.location != null) {
               stepGeometry.add(prevStep!.location!);
               stepGeometry.add(step.location!);
+              print('   ⚠️ RIDE_BUS: Geometría fallback (línea recta)');
             }
           }
           break;
 
         case 'wait_bus':
           // No hay geometría para esperar en el paradero
+          print('   ℹ️ WAIT_BUS: Sin geometría (correcto)');
           break;
       }
 
       if (stepGeometry.isNotEmpty) {
         geometries[i] = stepGeometry;
+        print(
+          '   📍 Guardada geometría para paso $i con ${stepGeometry.length} puntos',
+        );
       }
     }
+
+    print('🗺️ Total de geometrías creadas: ${geometries.length}');
+    print('🗺️ Índices con geometría: ${geometries.keys.toList()}');
 
     return geometries;
   }
