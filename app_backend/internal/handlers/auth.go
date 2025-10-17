@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"log"
 	"os"
 	"strconv"
@@ -14,7 +13,6 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/yourorg/wayfindcl/internal/graphhopper"
 	"github.com/yourorg/wayfindcl/internal/gtfs"
 	"github.com/yourorg/wayfindcl/internal/models"
 
@@ -30,7 +28,6 @@ var (
 	gtfsSyncMu      sync.Mutex
 	gtfsSummaryMu   sync.RWMutex
 	gtfsLastSummary *gtfs.Summary
-	hopperClient    *graphhopper.Client
 )
 
 // Setup wires shared dependencies for handlers. Call this during app bootstrap.
@@ -76,35 +73,6 @@ func Setup(db *sql.DB) {
 			gtfsSummaryMu.Unlock()
 			log.Printf("gtfs auto-sync completed: %d stops", summary.StopsImported)
 		}()
-	}
-
-	if base := strings.TrimSpace(os.Getenv("GRAPHHOPPER_BASE_URL")); base != "" {
-		fmt.Printf("DEBUG: Inicializando GraphHopper con base URL: %s\n", base)
-		fmt.Printf("DEBUG: API Key: %s\n", strings.TrimSpace(os.Getenv("GRAPHHOPPER_API_KEY")))
-
-		includeGeom := true
-		if opt := strings.TrimSpace(os.Getenv("GRAPHHOPPER_INCLUDE_GEOMETRY")); opt != "" {
-			includeGeom = !(strings.EqualFold(opt, "false") || opt == "0")
-		}
-		opts := graphhopper.Options{
-			Profile:         strings.TrimSpace(os.Getenv("GRAPHHOPPER_PROFILE")),
-			Locale:          strings.TrimSpace(os.Getenv("GRAPHHOPPER_LOCALE")),
-			IncludeGeometry: includeGeom,
-		}
-		if timeoutStr := strings.TrimSpace(os.Getenv("GRAPHHOPPER_TIMEOUT")); timeoutStr != "" {
-			if dur, err := time.ParseDuration(timeoutStr); err == nil && dur > 0 {
-				opts.Timeout = dur
-			}
-		}
-		client, err := graphhopper.NewClient(base, strings.TrimSpace(os.Getenv("GRAPHHOPPER_API_KEY")), opts)
-		if err != nil {
-			log.Printf("graphhopper init error: %v", err)
-		} else {
-			hopperClient = client
-			fmt.Printf("DEBUG: GraphHopper client inicializado correctamente\n")
-		}
-	} else {
-		fmt.Printf("DEBUG: GRAPHHOPPER_BASE_URL está vacío, no inicializando GraphHopper\n")
 	}
 }
 

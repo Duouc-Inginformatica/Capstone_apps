@@ -213,23 +213,35 @@ class CombinedRoutesService {
     } catch (e) {
       print('❌ Error en ruta de transporte público: $e');
       
-      // Fallback a GraphHopper si falla
-      print('🔄 Usando GraphHopper como fallback');
-      final apiClient = ApiClient();
-      final transitData = await apiClient.getTransitRoute(
-        originLat: origin.latitude,
-        originLon: origin.longitude,
-        destLat: destination.latitude,
-        destLon: destination.longitude,
-        departureTime: departureTime,
-        includeGeometry: true,
-        useCache: true,
-      );
-
+      // Si falla, crear una ruta de caminata directa
+      print('� Creando ruta de caminata directa como fallback');
+      
+      final walkDistance = _distance.as(LengthUnit.Meter, origin, destination);
+      final walkDuration = (walkDistance / 1.4).round(); // ~1.4 m/s velocidad caminata
+      
+      final fallbackData = {
+        'paths': [
+          {
+            'legs': [
+              {
+                'type': 'walk',
+                'distance': walkDistance,
+                'time': walkDuration * 1000, // convertir a milisegundos
+                'geometry': [
+                  [origin.longitude, origin.latitude],
+                  [destination.longitude, destination.latitude],
+                ],
+                'instructions': 'Dirígete caminando hacia el destino',
+              }
+            ]
+          }
+        ]
+      };
+      
       return await calculateCombinedRoute(
         origin: origin,
         destination: destination,
-        transitData: transitData,
+        transitData: fallbackData,
       );
     }
   }

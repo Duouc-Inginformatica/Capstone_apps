@@ -8,7 +8,7 @@ Fiber-based REST API with MariaDB. Provides registration and login with bcrypt a
 - `POST /api/login` → `{ token, user, expires_at }`
 - `POST /api/gtfs/sync` → fuerza la descarga del feed GTFS y retorna un resumen (`stops_imported`, `feed_version`).
 - `GET /api/stops?lat=-33.45&lon=-70.66&radius=400&limit=20` → lista paradas cercanas al punto solicitado ordenadas por distancia.
-- `POST /api/route/transit` → consulta GraphHopper para obtener un itinerario en transporte público.
+- `POST /api/route/public-transit` → consulta datos GTFS para obtener un itinerario en transporte público.
 	- Body JSON:
 	```json
 	{
@@ -20,6 +20,24 @@ Fiber-based REST API with MariaDB. Provides registration and login with bcrypt a
 	}
 	```
 	- Respuesta simplificada con `distance_meters`, `duration_seconds`, `instructions[]` y geometría (líneas `[[lon, lat], ...]`) cuando está disponible.
+
+### Endpoints de Buses Red (Moovit Scraping)
+- `GET /api/red/routes/common` → lista rutas Red comunes en Santiago
+- `GET /api/red/routes/search?q=query` → busca rutas Red por nombre o zona
+- `GET /api/red/route/:routeNumber` → obtiene información detallada de una ruta Red específica
+- `GET /api/red/route/:routeNumber/stops` → obtiene todas las paradas de una ruta Red
+- `GET /api/red/route/:routeNumber/geometry` → obtiene la geometría (polilínea) para visualización en mapa
+- `POST /api/red/itinerary` → obtiene un itinerario completo usando buses Red
+	- Body JSON:
+	```json
+	{
+	  "origin_lat": -33.45,
+	  "origin_lon": -70.66,
+	  "dest_lat": -33.52,
+	  "dest_lon": -70.68
+	}
+	```
+	- Respuesta con legs del viaje, rutas Red utilizadas, geometría y tiempos estimados
 
 ## Run
 ```powershell
@@ -44,15 +62,9 @@ Server logs: `server listening on :8080`
 - `GTFS_FEED_URL` (URL del feed GTFS; por defecto se usa el publicado por [DTPM](https://www.dtpm.cl/index.php/noticias/gtfs-vigente)).
 - `GTFS_AUTO_SYNC` (`true/false`) para actualizar automáticamente al iniciar el servidor.
 - `GTFS_FALLBACK_URL` (URL alternativa a usar si la primaria retorna error, útil cuando DTPM rota el nombre del zip diario).
-- `GRAPHHOPPER_BASE_URL` (URL del servidor GraphHopper, ejemplo `http://localhost:8998`).
-- `GRAPHHOPPER_API_KEY` (opcional, si usas la nube de GraphHopper).
-- `GRAPHHOPPER_PROFILE` (por defecto `pt`).
-- `GRAPHHOPPER_LOCALE` (por defecto `es`).
-- `GRAPHHOPPER_INCLUDE_GEOMETRY` (`true/false`, por defecto `true`).
-- `GRAPHHOPPER_TIMEOUT` (opcional, duración para la petición, ej. `45s`).
 - `DB_SKIP_SCHEMA` (`true/false` o `1/0`): cuando es `true/1` el servidor **no** ejecuta `EnsureSchema`. Útil en producción si el esquema se administra externamente.
 
-## Transporte público (GTFS + GraphHopper)
+## Transporte público (GTFS + Moovit Scraping)
 
 1. **Descarga e ingesta del GTFS:**
 	- Ejecuta el CLI: `go run ./cmd/cli` → opción `3) Sync GTFS feed`.
@@ -61,10 +73,13 @@ Server logs: `server listening on :8080`
 
 2. **Servir paradas cercanas:** `GET /api/stops` acepta parámetros `lat`, `lon`, `radius` (metros, default 400, máximo 2000) y `limit` (máx. 100). Respuesta incluye distancia a cada parada y fecha del último feed.
 
-3. **GraphHopper:**
-	- Requiere instanciar un servidor GraphHopper con soporte GTFS. Sigue la guía oficial para construir el grafo con OpenStreetMap + GTFS de DTPM (ver [docs](https://github.com/graphhopper/graphhopper/blob/master/docs/core/transit.md)).
-	- Configura `GRAPHHOPPER_BASE_URL` apuntando al servidor en ejecución. Si usas la versión comercial/Nube, añade `GRAPHHOPPER_API_KEY`.
-	- El endpoint `/api/route/transit` devolverá instrucciones paso a paso (texto en español) y la geometría de la ruta para integrarla con la app Flutter.
+3. **Rutas de transporte público:** El endpoint `/api/route/public-transit` utiliza datos GTFS para calcular rutas de transporte público y devuelve instrucciones paso a paso e información de la ruta para integrarla con la app Flutter.
+
+4. **Buses Red (Moovit Scraping):** Los endpoints bajo `/api/red/*` utilizan web scraping de Moovit para obtener información actualizada de rutas de buses Red de Santiago, incluyendo:
+	- Información de rutas específicas con paradas y horarios
+	- Itinerarios completos usando buses Red
+	- Geometrías de rutas para visualización en mapas
+	- Datos actualizados directamente desde Moovit
   
 ### MariaDB/MySQL auth plugin note
 If you see errors like `unknown auth plugin: auth_gssapi_client`, it's because the user is configured with an unsupported plugin. The Go MySQL driver can't override this via DSN.

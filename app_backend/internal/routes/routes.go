@@ -16,7 +16,6 @@ func Register(app *fiber.App, db *sql.DB) {
 	api.Post("/register", handlers.Register)
 	api.Post("/gtfs/sync", handlers.SyncGTFS)
 	api.Get("/stops", handlers.GetNearbyStops)
-	api.Post("/route/transit", handlers.PlanTransit)
 
 	// Initialize handlers with database
 	handler := handlers.NewHandler(db)
@@ -29,6 +28,16 @@ func Register(app *fiber.App, db *sql.DB) {
 	locationShareHandler := handlers.NewLocationShareHandler(db)
 	tripHistoryHandler := handlers.NewTripHistoryHandler(db)
 	notificationPrefsHandler := handlers.NewNotificationPreferencesHandler(db)
+	redBusHandler := handlers.NewRedBusHandler()
+
+	// Red Bus routes (Moovit scraping)
+	red := api.Group("/red")
+	red.Get("/routes/common", redBusHandler.ListCommonRedRoutes)
+	red.Get("/routes/search", redBusHandler.SearchRedRoutes)
+	red.Get("/route/:routeNumber", redBusHandler.GetRedBusRoute)
+	red.Get("/route/:routeNumber/stops", redBusHandler.GetRedBusStops)
+	red.Get("/route/:routeNumber/geometry", redBusHandler.GetRedBusGeometry)
+	red.Post("/itinerary", redBusHandler.GetRedBusItinerary)
 
 	// Incident routes
 	incidents := api.Group("/incidents")

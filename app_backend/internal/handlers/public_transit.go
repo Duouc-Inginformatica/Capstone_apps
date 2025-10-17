@@ -17,7 +17,9 @@ type Handler struct {
 
 // NewHandler crea una nueva instancia de Handler
 func NewHandler(db *sql.DB) *Handler {
-	return &Handler{db: db}
+	return &Handler{
+		db: db,
+	}
 }
 
 // PublicTransitRoute maneja rutas de transporte público usando datos GTFS
@@ -59,39 +61,80 @@ func (h *Handler) PublicTransitRoute(c *fiber.Ctx) error {
 	}
 
 	if len(originStops) == 0 || len(destStops) == 0 {
-		return c.Status(fiber.StatusNotFound).JSON(models.ErrorResponse{
-			Error: "No se encontraron paradas de bus cercanas",
-		})
+		// Si no hay paradas GTFS cercanas, intentar con Moovit como fallback
+		log.Printf("⚠️ No se encontraron paradas GTFS cercanas, intentando con Moovit...")
+		return h.calculateRouteWithMoovitFallback(c, req)
 	}
 
 	// Encontrar la mejor ruta de transporte público
 	route, err := h.calculatePublicTransitRoute(req, originStops, destStops)
 	if err != nil {
-		log.Printf("Error calculating transit route: %v", err)
-		return c.Status(fiber.StatusInternalServerError).JSON(models.ErrorResponse{
-			Error: "Error calculating route",
-		})
+		log.Printf("⚠️ Error calculando ruta GTFS: %v, intentando con Moovit...", err)
+		// Si falla GTFS, intentar con Moovit como fallback
+		return h.calculateRouteWithMoovitFallback(c, req)
 	}
 
 	return c.JSON(route)
 }
 
+// calculateRouteWithMoovitFallback usa datos de Moovit cuando GTFS no tiene rutas
+func (h *Handler) calculateRouteWithMoovitFallback(c *fiber.Ctx, req models.TransitRouteRequest) error {
+	log.Printf("🚌 Usando Moovit como fuente de datos alternativa")
+
+	// Retornar respuesta indicando que use el endpoint de Red directamente
+	return c.JSON(fiber.Map{
+		"message":  "Use /api/red/itinerary endpoint for routes",
+		"fallback": "moovit",
+		"suggestion": fiber.Map{
+			"endpoint": "/api/red/itinerary",
+			"method":   "POST",
+			"body": fiber.Map{
+				"origin_lat": req.Origin.Lat,
+				"origin_lon": req.Origin.Lon,
+				"dest_lat":   req.Destination.Lat,
+				"dest_lon":   req.Destination.Lon,
+			},
+		},
+	})
+}
+
 // findNearbyStops encuentra paradas cercanas usando la base de datos GTFS
+// Optimizado con bounding box para mejor performance
 func (h *Handler) findNearbyStops(lat, lon float64, radiusMeters int) ([]models.GTFSStop, error) {
+	// Calcular bounding box aproximado (más rápido que calcular distancia exacta)
+	// 1 grado de latitud ≈ 111km
+	// 1 grado de longitud ≈ 111km * cos(latitude)
+	latDelta := float64(radiusMeters) / 111000.0
+	lonDelta := float64(radiusMeters) / (111000.0 * math.Cos(lat*math.Pi/180))
+
+	minLat := lat - latDelta
+	maxLat := lat + latDelta
+	minLon := lon - lonDelta
+	maxLon := lon + lonDelta
+
+	// Query optimizada con bounding box primero, luego distancia exacta
 	query := `
-		SELECT stop_id, stop_name, stop_lat, stop_lon, 
-		       (6371000 * acos(cos(radians(?)) * cos(radians(stop_lat)) * 
-		        cos(radians(stop_lon) - radians(?)) + sin(radians(?)) * 
-		        sin(radians(stop_lat)))) AS distance
+		SELECT stop_id, name, latitude, longitude, 
+		       (6371000 * acos(
+		           LEAST(1.0, GREATEST(-1.0,
+		               cos(radians(?)) * cos(radians(latitude)) * 
+		               cos(radians(longitude) - radians(?)) + 
+		               sin(radians(?)) * sin(radians(latitude))
+		           ))
+		       )) AS distance
 		FROM gtfs_stops 
-		WHERE (6371000 * acos(cos(radians(?)) * cos(radians(stop_lat)) * 
-		       cos(radians(stop_lon) - radians(?)) + sin(radians(?)) * 
-		       sin(radians(stop_lat)))) <= ?
+		WHERE latitude BETWEEN ? AND ?
+		  AND longitude BETWEEN ? AND ?
+		HAVING distance <= ?
 		ORDER BY distance 
-		LIMIT 10
+		LIMIT 20
 	`
 
-	rows, err := h.db.Query(query, lat, lon, lat, lat, lon, lat, radiusMeters)
+	rows, err := h.db.Query(query,
+		lat, lon, lat, // para el cálculo de distancia
+		minLat, maxLat, minLon, maxLon, // bounding box
+		radiusMeters, // radio máximo
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -105,6 +148,7 @@ func (h *Handler) findNearbyStops(lat, lon float64, radiusMeters int) ([]models.
 		if err != nil {
 			continue
 		}
+		stop.DistanceMeters = distance // Guardar distancia calculada
 		stops = append(stops, stop)
 	}
 
@@ -131,7 +175,7 @@ func (h *Handler) calculatePublicTransitRoute(req models.TransitRouteRequest, or
 // findDirectBusRoute busca rutas directas entre paradas
 func (h *Handler) findDirectBusRoute(originStops, destStops []models.GTFSStop) (*models.BusRoute, error) {
 	query := `
-		SELECT DISTINCT r.route_id, r.route_short_name, r.route_long_name
+		SELECT DISTINCT r.route_id, r.short_name, r.long_name
 		FROM gtfs_routes r
 		JOIN gtfs_trips t ON r.route_id = t.route_id
 		JOIN gtfs_stop_times st1 ON t.trip_id = st1.trip_id
@@ -139,7 +183,7 @@ func (h *Handler) findDirectBusRoute(originStops, destStops []models.GTFSStop) (
 		WHERE st1.stop_id IN (` + h.buildInClause(len(originStops)) + `)
 		  AND st2.stop_id IN (` + h.buildInClause(len(destStops)) + `)
 		  AND st1.stop_sequence < st2.stop_sequence
-		ORDER BY r.route_short_name
+		ORDER BY r.short_name
 		LIMIT 1
 	`
 
@@ -154,6 +198,11 @@ func (h *Handler) findDirectBusRoute(originStops, destStops []models.GTFSStop) (
 	var route models.BusRoute
 	err := h.db.QueryRow(query, args...).Scan(&route.RouteID, &route.RouteShortName, &route.RouteLongName)
 	if err != nil {
+		// Si no hay resultados, retornar nil sin error (permite fallback a Moovit)
+		if err == sql.ErrNoRows {
+			log.Printf("ℹ️ No se encontró ruta directa en GTFS")
+			return nil, nil
+		}
 		return nil, err
 	}
 

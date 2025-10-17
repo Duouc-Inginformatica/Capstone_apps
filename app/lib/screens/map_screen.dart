@@ -16,6 +16,7 @@ import '../services/address_validation_service.dart';
 import '../services/route_tracking_service.dart';
 import '../services/transit_boarding_service.dart';
 import '../services/red_cl_scraper_service.dart';
+import '../services/integrated_navigation_service.dart';
 import 'settings_screen.dart';
 import '../widgets/bottom_nav.dart';
 import 'contribute_screen.dart';
@@ -1605,6 +1606,24 @@ class _MapScreenState extends State<MapScreen> {
       return true;
     }
 
+    // 🚌 Comando para navegación integrada con Moovit (buses Red)
+    if (normalized.contains('navegación red') || 
+        normalized.contains('ruta red') ||
+        normalized.contains('bus red')) {
+      final destination = _extractDestination(command);
+      if (destination != null && destination.isNotEmpty) {
+        final pretty = _toTitleCase(destination);
+        setState(() {
+          _pendingDestination = pretty;
+          _lastWords = command;
+        });
+        
+        // Llamar a navegación integrada con Moovit en vez de ruta normal
+        _onIntegratedNavigationVoiceCommand(command);
+        return true;
+      }
+    }
+
     // Intentar extraer destino del comando original (sin normalizar demasiado)
     final destination = _extractDestination(command);
     if (destination != null && destination.isNotEmpty) {
@@ -1717,19 +1736,8 @@ class _MapScreenState extends State<MapScreen> {
             destLon: destLon,
           );
         } catch (e) {
-          // If retrieving alternatives fails, fallback to single route call
-          try {
-            final single = await apiClient.getTransitRoute(
-              originLat: originLat,
-              originLon: originLon,
-              destLat: destLat,
-              destLon: destLon,
-            );
-            transitRoutes = [single];
-          } catch (e2) {
-            _showErrorNotification('Error obteniendo rutas: ${e.toString()}');
-            return;
-          }
+          _showErrorNotification('Error obteniendo rutas: ${e.toString()}');
+          return;
         }
 
         // Convert transit data into CombinedRoute objects
@@ -1926,6 +1934,192 @@ class _MapScreenState extends State<MapScreen> {
   /// Convierte grados a radianes
   double _toRadians(double degrees) {
     return degrees * (math.pi / 180);
+  }
+
+  /// 🚌 NAVEGACIÓN INTEGRADA CON MOOVIT 🚌
+  /// Inicia navegación completa usando scraping de Moovit + GTFS + GPS
+  Future<void> _startIntegratedMoovitNavigation(String destination, double destLat, double destLon) async {
+    if (_currentPosition == null) {
+      _showErrorNotification('No se puede calcular ruta sin ubicación actual');
+      TtsService.instance.speak('No se puede obtener tu ubicación actual');
+      return;
+    }
+
+    // Anunciar inicio
+    TtsService.instance.speak('Buscando ruta hacia $destination usando Red');
+
+    try {
+      // Iniciar navegación integrada con Moovit
+      final navigation = await IntegratedNavigationService.instance.startNavigation(
+        originLat: _currentPosition!.latitude,
+        originLon: _currentPosition!.longitude,
+        destLat: destLat,
+        destLon: destLon,
+        destinationName: destination,
+      );
+
+      // Configurar callbacks para actualizar UI
+      IntegratedNavigationService.instance.onStepChanged = (step) {
+        if (!mounted) return;
+        setState(() {
+          _hasActiveTrip = true;
+        });
+        
+        // Actualizar notificación con paso actual
+        _showNavigationNotification(step.instruction);
+        print('📍 Paso actual: ${step.instruction}');
+      };
+
+      IntegratedNavigationService.instance.onArrivalAtStop = (stopId) {
+        if (!mounted) return;
+        print('✅ Llegaste al paradero: $stopId');
+        
+        // Vibración de confirmación
+        Vibration.vibrate(duration: 500);
+        _showSuccessNotification(
+          'Has llegado al paradero',
+          withVibration: true,
+        );
+      };
+
+      IntegratedNavigationService.instance.onDestinationReached = () {
+        if (!mounted) return;
+        print('🎉 ¡Destino alcanzado!');
+        
+        setState(() {
+          _hasActiveTrip = false;
+          _isTrackingRoute = false;
+        });
+        
+        _showSuccessNotification(
+          '¡Felicitaciones! Has llegado a tu destino',
+          withVibration: true,
+        );
+        
+        Vibration.vibrate(duration: 1000);
+      };
+
+      // Dibujar ruta en el mapa con estilo Red
+      setState(() {
+        _polylines = [
+          Polyline(
+            points: navigation.routeGeometry,
+            color: const Color(0xFFE30613), // Color característico de buses Red
+            strokeWidth: 5.0,
+          ),
+        ];
+
+        // Agregar marcadores de paraderos y puntos de interés
+        _markers = navigation.steps
+            .where((s) => s.location != null)
+            .map((s) {
+              IconData icon;
+              Color color;
+              
+              switch (s.type) {
+                case 'wait_bus':
+                  icon = Icons.directions_bus;
+                  color = Colors.orange;
+                  break;
+                case 'ride_bus':
+                  icon = Icons.drive_eta;
+                  color = Colors.red;
+                  break;
+                case 'transfer':
+                  icon = Icons.swap_horiz;
+                  color = Colors.purple;
+                  break;
+                case 'arrival':
+                  icon = Icons.flag;
+                  color = Colors.green;
+                  break;
+                default: // walk
+                  icon = Icons.directions_walk;
+                  color = Colors.blue;
+              }
+              
+              return Marker(
+                point: s.location!,
+                child: Icon(
+                  icon,
+                  color: color,
+                  size: 30,
+                ),
+              );
+            })
+            .toList();
+
+        _selectedDestinationName = destination;
+      });
+
+      _showSuccessNotification(
+        'Navegación iniciada. Duración estimada: ${navigation.estimatedDuration} minutos',
+        withVibration: true,
+      );
+
+    } catch (e) {
+      _showErrorNotification('Error al calcular la ruta: $e');
+      TtsService.instance.speak('Error al calcular la ruta. Intenta de nuevo.');
+      print('❌ Error en navegación integrada: $e');
+    }
+  }
+
+  /// Comando de voz para controlar navegación integrada
+  void _onIntegratedNavigationVoiceCommand(String command) async {
+    final normalized = command.toLowerCase();
+    
+    if (normalized.contains('repetir') || normalized.contains('qué debo hacer')) {
+      IntegratedNavigationService.instance.repeatCurrentInstruction();
+      return;
+    } 
+    
+    if (normalized.contains('cancelar navegación') || normalized.contains('detener navegación')) {
+      IntegratedNavigationService.instance.cancelNavigation();
+      setState(() {
+        _hasActiveTrip = false;
+        _isTrackingRoute = false;
+        _polylines.clear();
+        _markers.clear();
+      });
+      _showWarningNotification('Navegación cancelada');
+      return;
+    } 
+    
+    if (normalized.contains('siguiente paso')) {
+      // El servicio automáticamente avanza cuando llegas a cada punto
+      TtsService.instance.speak('Continúa siguiendo las instrucciones actuales');
+      return;
+    }
+
+    // Si no es un comando de control, buscar destino y comenzar navegación
+    final destination = _extractDestination(command);
+    if (destination != null && destination.isNotEmpty) {
+      // Buscar dirección usando el servicio de validación
+      try {
+        final suggestions = await AddressValidationService.instance
+            .suggestAddresses(destination, limit: 1);
+
+        if (suggestions.isEmpty) {
+          _showWarningNotification('No se encontró la dirección: $destination');
+          TtsService.instance.speak('No se encontró la dirección $destination');
+          return;
+        }
+
+        final selected = suggestions.first;
+        final destLat = (selected['lat'] as num).toDouble();
+        final destLon = (selected['lon'] as num).toDouble();
+        final selectedName = selected['display_name'] as String;
+
+        // Iniciar navegación integrada con Moovit
+        await _startIntegratedMoovitNavigation(
+          selectedName,
+          destLat,
+          destLon,
+        );
+      } catch (e) {
+        _showErrorNotification('Error buscando dirección: $e');
+      }
+    }
   }
 
   /// Muestra información detallada del paradero con buses disponibles
@@ -2218,7 +2412,7 @@ class _MapScreenState extends State<MapScreen> {
 
     try {
       final apiClient = ApiClient();
-      final route = await apiClient.getTransitRoute(
+      final route = await apiClient.getPublicTransitRoute(
         originLat: _currentPosition!.latitude,
         originLon: _currentPosition!.longitude,
         destLat: destLat,

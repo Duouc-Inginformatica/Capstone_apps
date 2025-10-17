@@ -416,6 +416,40 @@ class ApiClient {
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body) as Map<String, dynamic>;
         
+        // Verificar si es un fallback a Moovit
+        if (data['fallback'] == 'moovit') {
+          print('🔄 Backend sugiere usar Moovit, consultando endpoint de Red...');
+          
+          // Llamar al endpoint de Moovit/Red directamente
+          final redUri = _uri('/api/red/itinerary');
+          final redBody = {
+            'origin_lat': originLat,
+            'origin_lon': originLon,
+            'dest_lat': destLat,
+            'dest_lon': destLon,
+          };
+          
+          final redResponse = await http.post(
+            redUri,
+            headers: headers,
+            body: jsonEncode(redBody),
+          );
+          
+          if (redResponse.statusCode == 200) {
+            final redData = jsonDecode(redResponse.body) as Map<String, dynamic>;
+            print('✅ Ruta obtenida desde Moovit/Red');
+            
+            // Convertir formato de Moovit a formato GTFS para compatibilidad
+            return _convertMoovitToGTFSFormat(redData);
+          } else {
+            print('⚠️ Error obteniendo ruta de Moovit: ${redResponse.statusCode}');
+            throw ApiException(
+              statusCode: redResponse.statusCode,
+              message: 'No se pudo obtener ruta de Moovit',
+            );
+          }
+        }
+        
         // Guardar en caché si la respuesta es válida
         if (useCache && data['paths'] != null) {
           await RouteCache.instance.addRoute(
@@ -441,125 +475,20 @@ class ApiClient {
     }
   }
 
-  // Transit Routing with GraphHopper + Cache System (MÉTODO ORIGINAL)
-  Future<Map<String, dynamic>> getTransitRoute({
-    required double originLat,
-    required double originLon,
-    required double destLat,
-    required double destLon,
-    DateTime? departureTime,
-    bool arriveBy = false,
-    bool includeGeometry = true,
-    bool useCache = true,
-  }) async {
-    // Validar coordenadas antes de enviar la solicitud
-    if (originLat.isNaN || originLon.isNaN || destLat.isNaN || destLon.isNaN) {
-      throw ApiException(
-        message: 'Coordenadas inválidas (NaN): origin($originLat, $originLon), dest($destLat, $destLon)',
-        statusCode: 400,
-      );
-    }
-
-    if (originLat < -90 || originLat > 90 || destLat < -90 || destLat > 90) {
-      throw ApiException(
-        message: 'Latitud fuera de rango: origin=$originLat, dest=$destLat (debe estar entre -90 y 90)',
-        statusCode: 400,
-      );
-    }
-
-    if (originLon < -180 || originLon > 180 || destLon < -180 || destLon > 180) {
-      throw ApiException(
-        message: 'Longitud fuera de rango: origin=$originLon, dest=$destLon (debe estar entre -180 y 180)',
-        statusCode: 400,
-      );
-    }
-
-    // Intentar obtener de caché primero
-    if (useCache) {
-      final cached = RouteCache.instance.getCachedRoute(
-        originLat: originLat,
-        originLon: originLon,
-        destLat: destLat,
-        destLon: destLon,
-      );
-
-      if (cached != null) {
-        print('✅ Ruta encontrada en caché');
-        // Marcar como ruta cacheada
-        cached['fromCache'] = true;
-        return cached;
-      }
-    }
-
-    final uri = _uri('/api/route/transit');
-    final body = {
-      'origin': {'lat': originLat, 'lon': originLon},
-      'destination': {'lat': destLat, 'lon': destLon},
-      'arrive_by': arriveBy,
-      'include_geometry': includeGeometry,
-    };
-
-    if (departureTime != null) {
-      // Asegurar formato RFC3339 completo con zona horaria
-      body['departure_time'] = departureTime.toUtc().toIso8601String();
-    }
-
-    print('🔍 Enviando solicitud a: $uri');
-    print('📝 Body: $body');
-    print('📍 Origin: lat=$originLat, lon=$originLon');
-    print('📍 Destination: lat=$destLat, lon=$destLon');
-
-    try {
-      final res = await _safeRequest(() => postAuthorized(uri, body));
-      print('📡 Response status: ${res.statusCode}');
-      print('📄 Response body: ${res.body}');
-      
-      final data =
-          jsonDecode(res.body.isEmpty ? '{}' : res.body)
-              as Map<String, dynamic>;
-
-      if (res.statusCode >= 200 && res.statusCode < 300) {
-        // Guardar en caché para uso futuro
-        await RouteCache.instance.addRoute(
-          routeData: data,
-          originLat: originLat,
-          originLon: originLon,
-          destLat: destLat,
-          destLon: destLon,
-        );
-
-        data['fromCache'] = false;
-        return data;
-      }
-
-      throw ApiException(
-        message: data['error']?.toString() ?? 'Failed to get transit route',
-        statusCode: res.statusCode,
-      );
-    } catch (e) {
-      // Si falla el servidor, intentar rutas alternativas de caché
-      if (e is ApiException && (e.isNetworkError || e.isServerError)) {
-        print('⚠️ Error del servidor, buscando rutas alternativas en caché...');
-
-        final alternatives = RouteCache.instance.getAlternativeRoutes(
-          destLat: destLat,
-          destLon: destLon,
-          limit: 3,
-        );
-
-        if (alternatives.isNotEmpty) {
-          print('✅ Encontradas ${alternatives.length} rutas alternativas');
-          final bestAlternative = alternatives.first;
-          bestAlternative['fromCache'] = true;
-          bestAlternative['isAlternative'] = true;
-          bestAlternative['alternativeCount'] = alternatives.length;
-          return bestAlternative;
+  // Convierte el formato de Moovit al formato GTFS para compatibilidad
+  Map<String, dynamic> _convertMoovitToGTFSFormat(Map<String, dynamic> moovitData) {
+    // TODO: Implementar conversión completa
+    // Por ahora, retornar el formato de Moovit directamente
+    return {
+      'paths': [
+        {
+          'time': moovitData['total_duration'] ?? 0,
+          'distance': moovitData['total_distance'] ?? 0,
+          'legs': moovitData['legs'] ?? [],
+          'source': 'moovit',
         }
-      }
-
-      // Re-lanzar error si no hay alternativas
-      rethrow;
-    }
+      ],
+    };
   }
 
   // Obtener múltiples rutas alternativas
@@ -573,7 +502,7 @@ class ApiClient {
 
     try {
       // Intentar obtener ruta principal
-      final mainRoute = await getTransitRoute(
+      final mainRoute = await getPublicTransitRoute(
         originLat: originLat,
         originLon: originLon,
         destLat: destLat,
