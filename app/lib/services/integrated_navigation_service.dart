@@ -87,13 +87,17 @@ class ActiveNavigation {
       return [];
     }
 
-    print('🔍 getCurrentStepGeometry: Paso actual = ${step.type} (índice $currentStepIndex)');
+    print(
+      '🔍 getCurrentStepGeometry: Paso actual = ${step.type} (índice $currentStepIndex)',
+    );
     print('🔍 Geometrías disponibles: ${stepGeometries.keys.toList()}');
 
     // Si tenemos geometría pre-calculada para este paso, usarla
     if (stepGeometries.containsKey(currentStepIndex)) {
       final geometry = stepGeometries[currentStepIndex]!;
-      print('🔍 Geometría encontrada para paso $currentStepIndex: ${geometry.length} puntos');
+      print(
+        '🔍 Geometría encontrada para paso $currentStepIndex: ${geometry.length} puntos',
+      );
 
       // Si es paso de walk, actualizar el punto inicial con la posición actual
       if (step.type == 'walk' && geometry.length >= 2) {
