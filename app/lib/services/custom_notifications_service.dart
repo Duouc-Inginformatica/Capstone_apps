@@ -160,8 +160,7 @@ class CustomNotificationsService {
 
       // Guardar como JSON string simple
       final json =
-          '{' '"approachingDistance":${preferences.approachingDistance},' +
-          '"nearDistance":${preferences.nearDistance},' +
+          '{' '"approachingDistance":${preferences.approachingDistance},' '"nearDistance":${preferences.nearDistance},' +
           '"veryNearDistance":${preferences.veryNearDistance},' +
           '"enableAudio":${preferences.enableAudio},' +
           '"enableVibration":${preferences.enableVibration},' +

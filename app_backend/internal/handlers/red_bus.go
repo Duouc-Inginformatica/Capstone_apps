@@ -74,7 +74,8 @@ func (h *RedBusHandler) GetRedBusItinerary(c *fiber.Ctx) error {
 	log.Printf("Fetching Red bus itinerary from (%.4f, %.4f) to (%.4f, %.4f)",
 		req.OriginLat, req.OriginLon, req.DestLat, req.DestLon)
 
-	itinerary, err := h.scraper.GetRouteItinerary(
+	// Obtener múltiples opciones de rutas
+	routeOptions, err := h.scraper.GetRouteItinerary(
 		req.OriginLat,
 		req.OriginLon,
 		req.DestLat,
@@ -87,7 +88,8 @@ func (h *RedBusHandler) GetRedBusItinerary(c *fiber.Ctx) error {
 		})
 	}
 
-	return c.JSON(itinerary)
+	// Retornar TODAS las opciones para que el usuario elija por voz en Flutter
+	return c.JSON(routeOptions)
 }
 
 // ListCommonRedRoutes maneja GET /api/red/routes/common

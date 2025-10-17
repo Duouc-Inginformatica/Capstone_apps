@@ -3,10 +3,11 @@
 // ============================================================================
 // Calcula rutas multimodales: caminata + bus + metro + caminata
 // Maneja transferencias entre diferentes modos de transporte
+// CORREGIDO: USA MOOVIT como fuente principal, GTFS solo complementario
 // ============================================================================
 
 import 'package:latlong2/latlong.dart';
-import 'api_client.dart';
+import 'red_bus_service.dart';
 
 enum TransportMode { walk, bus, metro, train }
 
@@ -184,27 +185,29 @@ class CombinedRoutesService {
 
   final Distance _distance = const Distance();
 
-  /// Calcula ruta combinada usando el nuevo endpoint de transporte público GTFS
+  /// Calcula ruta combinada usando MOOVIT como fuente principal
+  /// GTFS se usa solo como complemento para información adicional de paradas
   Future<CombinedRoute> calculatePublicTransitRoute({
     required LatLng origin,
     required LatLng destination,
     DateTime? departureTime,
   }) async {
     try {
-      print('🚌 Calculando ruta de transporte público con datos GTFS');
-      
-      // Llamar al nuevo endpoint de transporte público
-      final apiClient = ApiClient();
-      final transitData = await apiClient.getPublicTransitRoute(
+      print('🚌 Calculando ruta de transporte público con MOOVIT (scraping)');
+
+      // USAR MOOVIT como fuente principal - NO GTFS
+      final redBusService = RedBusService.instance;
+      final moovitItinerary = await redBusService.getRedBusItinerary(
         originLat: origin.latitude,
         originLon: origin.longitude,
         destLat: destination.latitude,
         destLon: destination.longitude,
-        departureTime: departureTime,
-        includeGeometry: true,
-        useCache: true,
       );
 
+      // Convertir itinerario de Moovit al formato esperado
+      final transitData = _convertRedBusItineraryToTransitFormat(
+        moovitItinerary,
+      );
       return await calculateCombinedRoute(
         origin: origin,
         destination: destination,
@@ -212,13 +215,14 @@ class CombinedRoutesService {
       );
     } catch (e) {
       print('❌ Error en ruta de transporte público: $e');
-      
+
       // Si falla, crear una ruta de caminata directa
       print('� Creando ruta de caminata directa como fallback');
-      
+
       final walkDistance = _distance.as(LengthUnit.Meter, origin, destination);
-      final walkDuration = (walkDistance / 1.4).round(); // ~1.4 m/s velocidad caminata
-      
+      final walkDuration = (walkDistance / 1.4)
+          .round(); // ~1.4 m/s velocidad caminata
+
       final fallbackData = {
         'paths': [
           {
@@ -232,12 +236,12 @@ class CombinedRoutesService {
                   [destination.longitude, destination.latitude],
                 ],
                 'instructions': 'Dirígete caminando hacia el destino',
-              }
-            ]
-          }
-        ]
+              },
+            ],
+          },
+        ],
       };
-      
+
       return await calculateCombinedRoute(
         origin: origin,
         destination: destination,
@@ -414,9 +418,9 @@ class CombinedRoutesService {
       String? stopName;
       String? nextStopName;
 
-      if (type == 'walk' || type == 'pt') {
+      if (type == 'walk') {
         mode = TransportMode.walk;
-      } else if (type == 'pt' || type == 'transit') {
+      } else if (type == 'pt' || type == 'transit' || type == 'bus') {
         final routeType = leg['route_type'] as String?;
 
         if (routeType?.contains('metro') ?? false) {
@@ -445,8 +449,14 @@ class CombinedRoutesService {
         geometry = _parseGeometry(leg['geometry']);
       }
 
-      final startPoint = geometry?.first ?? LatLng(0, 0);
-      final endPoint = geometry?.last ?? LatLng(0, 0);
+      // Validar que la geometría no esté vacía antes de usar first/last
+      if (geometry == null || geometry.isEmpty) {
+        print('⚠️  Geometría vacía para leg: $type');
+        return null;
+      }
+
+      final startPoint = geometry.first;
+      final endPoint = geometry.last;
 
       return RouteSegment(
         mode: mode,
@@ -481,13 +491,53 @@ class CombinedRoutesService {
     } else if (geometry is List) {
       for (var coord in geometry) {
         if (coord is List && coord.length >= 2) {
-          points.add(
-            LatLng((coord[0] as num).toDouble(), (coord[1] as num).toDouble()),
-          );
+          // El backend envía [lon, lat], convertir a LatLng(lat, lon)
+          final lon = (coord[0] as num).toDouble();
+          final lat = (coord[1] as num).toDouble();
+          points.add(LatLng(lat, lon));
         }
       }
     }
 
     return points;
+  }
+
+  /// Convierte RedBusItinerary de Moovit al formato de tránsito esperado
+  Map<String, dynamic> _convertRedBusItineraryToTransitFormat(
+    RedBusItinerary itinerary,
+  ) {
+    final convertedLegs = itinerary.legs
+        .map((leg) {
+          // Solo incluir segmentos de bus, NO caminatas
+          if (leg.type != 'bus') {
+            return null;
+          }
+
+          return {
+            'type': 'bus', // Mantener como 'bus' para facilitar detección
+            'distance': leg.distanceKm * 1000, // km a metros
+            'time': leg.durationMinutes * 60 * 1000, // minutos a ms
+            'geometry': leg.geometry,
+            'instructions': leg.instruction,
+            'route_short_name': leg.routeNumber,
+            'route_type': 'bus',
+            'mode': 'Red',
+            'departureLocation': leg.departStop?.name ?? leg.from,
+            'arrivalLocation': leg.arriveStop?.name ?? leg.to,
+          };
+        })
+        .whereType<Map<String, dynamic>>()
+        .toList(); // Filtrar nulls
+
+    return {
+      'paths': [
+        {
+          'time': itinerary.totalDurationMinutes * 60 * 1000,
+          'distance': itinerary.totalDistanceKm * 1000,
+          'legs': convertedLegs,
+          'source': 'moovit',
+        },
+      ],
+    };
   }
 }

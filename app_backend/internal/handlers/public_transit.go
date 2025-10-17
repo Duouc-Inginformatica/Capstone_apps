@@ -22,7 +22,8 @@ func NewHandler(db *sql.DB) *Handler {
 	}
 }
 
-// PublicTransitRoute maneja rutas de transporte público usando datos GTFS
+// PublicTransitRoute DEPRECADO - Redirige a usar Moovit directamente
+// Este endpoint ya no debe usarse. La app debe llamar a /api/red/itinerary
 func (h *Handler) PublicTransitRoute(c *fiber.Ctx) error {
 	var req models.TransitRouteRequest
 	if err := c.BodyParser(&req); err != nil {
@@ -43,59 +44,44 @@ func (h *Handler) PublicTransitRoute(c *fiber.Ctx) error {
 		})
 	}
 
-	// Buscar paradas de bus cercanas al origen y destino
-	originStops, err := h.findNearbyStops(req.Origin.Lat, req.Origin.Lon, 500) // 500m radius
-	if err != nil {
-		log.Printf("Error finding origin stops: %v", err)
-		return c.Status(fiber.StatusInternalServerError).JSON(models.ErrorResponse{
-			Error: "Error finding nearby stops",
-		})
-	}
-
-	destStops, err := h.findNearbyStops(req.Destination.Lat, req.Destination.Lon, 500)
-	if err != nil {
-		log.Printf("Error finding destination stops: %v", err)
-		return c.Status(fiber.StatusInternalServerError).JSON(models.ErrorResponse{
-			Error: "Error finding nearby stops",
-		})
-	}
-
-	if len(originStops) == 0 || len(destStops) == 0 {
-		// Si no hay paradas GTFS cercanas, intentar con Moovit como fallback
-		log.Printf("⚠️ No se encontraron paradas GTFS cercanas, intentando con Moovit...")
-		return h.calculateRouteWithMoovitFallback(c, req)
-	}
-
-	// Encontrar la mejor ruta de transporte público
-	route, err := h.calculatePublicTransitRoute(req, originStops, destStops)
-	if err != nil {
-		log.Printf("⚠️ Error calculando ruta GTFS: %v, intentando con Moovit...", err)
-		// Si falla GTFS, intentar con Moovit como fallback
-		return h.calculateRouteWithMoovitFallback(c, req)
-	}
-
-	return c.JSON(route)
-}
-
-// calculateRouteWithMoovitFallback usa datos de Moovit cuando GTFS no tiene rutas
-func (h *Handler) calculateRouteWithMoovitFallback(c *fiber.Ctx, req models.TransitRouteRequest) error {
-	log.Printf("🚌 Usando Moovit como fuente de datos alternativa")
-
-	// Retornar respuesta indicando que use el endpoint de Red directamente
-	return c.JSON(fiber.Map{
-		"message":  "Use /api/red/itinerary endpoint for routes",
-		"fallback": "moovit",
-		"suggestion": fiber.Map{
-			"endpoint": "/api/red/itinerary",
-			"method":   "POST",
-			"body": fiber.Map{
-				"origin_lat": req.Origin.Lat,
-				"origin_lon": req.Origin.Lon,
-				"dest_lat":   req.Destination.Lat,
-				"dest_lon":   req.Destination.Lon,
-			},
+	// SIEMPRE usar Moovit como fuente principal
+	// GTFS solo se usa para información complementaria (horarios, paradas cercanas)
+	log.Printf("🚌 Endpoint /api/public-transit deprecado. Usar /api/red/itinerary")
+	
+	return c.Status(fiber.StatusMovedPermanently).JSON(fiber.Map{
+		"message":  "This endpoint is deprecated. Use /api/red/itinerary for route planning",
+		"redirect": "/api/red/itinerary",
+		"method":   "POST",
+		"body": fiber.Map{
+			"origin_lat": req.Origin.Lat,
+			"origin_lon": req.Origin.Lon,
+			"dest_lat":   req.Destination.Lat,
+			"dest_lon":   req.Destination.Lon,
 		},
 	})
+}
+
+// GTFSNearbyStops proporciona paradas GTFS cercanas como información complementaria
+// Esto se usa junto con Moovit para enriquecer los datos de paradas
+func (h *Handler) GTFSNearbyStops(c *fiber.Ctx) error {
+	lat := c.QueryFloat("lat", 0)
+	lon := c.QueryFloat("lon", 0)
+	radiusMeters := c.QueryInt("radius", 500)
+
+	if lat == 0 || lon == 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(models.ErrorResponse{
+			Error: "Missing lat or lon parameters",
+		})
+	}
+
+	stops, err := h.findNearbyStops(lat, lon, radiusMeters)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(models.ErrorResponse{
+			Error: "Error finding nearby stops",
+		})
+	}
+
+	return c.JSON(stops)
 }
 
 // findNearbyStops encuentra paradas cercanas usando la base de datos GTFS

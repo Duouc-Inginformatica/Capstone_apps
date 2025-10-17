@@ -136,7 +136,7 @@ class RedClScraperService {
   }
 
   String _generateVehicleId(String route) {
-    return 'BUS-${route}-${DateTime.now().millisecondsSinceEpoch % 1000}';
+    return 'BUS-$route-${DateTime.now().millisecondsSinceEpoch % 1000}';
   }
 
   /// Obtiene información detallada de una ruta específica

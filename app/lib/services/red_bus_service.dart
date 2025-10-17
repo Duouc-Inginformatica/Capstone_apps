@@ -241,7 +241,7 @@ class RedBusItinerary {
     } else if (busCount == 1) {
       return 'Bus Red ${redBusRoutes[0]} - $totalDurationMinutes min';
     } else {
-      return '${busCount} buses - $totalDurationMinutes min';
+      return '$busCount buses - $totalDurationMinutes min';
     }
   }
 
