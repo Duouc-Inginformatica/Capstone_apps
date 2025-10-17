@@ -324,11 +324,17 @@ class ItineraryDetails extends StatelessWidget {
         parts.add('hacia ${segment.stopName}');
       }
     } else {
-      if (segment.stopName != null) {
+      // Solo mostrar paradas si están disponibles (no null)
+      if (segment.stopName != null && segment.stopName!.isNotEmpty) {
         parts.add('Subir en: ${segment.stopName}');
       }
-      if (segment.nextStopName != null) {
+      if (segment.nextStopName != null && segment.nextStopName!.isNotEmpty) {
         parts.add('Bajar en: ${segment.nextStopName}');
+      }
+
+      // Si no hay paradas específicas, mostrar mensaje genérico
+      if (segment.stopName == null && segment.nextStopName == null) {
+        parts.add('Ruta aproximada (paradas no disponibles)');
       }
     }
 
@@ -341,7 +347,15 @@ class ItineraryDetails extends StatelessWidget {
           padding: const EdgeInsets.only(top: 2),
           child: Text(
             part,
-            style: TextStyle(fontSize: 13, color: Colors.grey[700]),
+            style: TextStyle(
+              fontSize: 13,
+              color: part.contains('no disponibles')
+                  ? Colors.orange[700]
+                  : Colors.grey[700],
+              fontStyle: part.contains('no disponibles')
+                  ? FontStyle.italic
+                  : FontStyle.normal,
+            ),
           ),
         );
       }).toList(),

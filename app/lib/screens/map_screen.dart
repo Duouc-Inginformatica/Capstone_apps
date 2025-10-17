@@ -869,6 +869,9 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   void _startListening() async {
+    // IMPORTANTE: Detener TTS antes de habilitar el micrófono
+    await TtsService.instance.stop();
+
     // Verificar permisos de micrófono
     var status = await Permission.microphone.request();
     if (status != PermissionStatus.granted) {
@@ -1691,189 +1694,59 @@ class _MapScreenState extends State<MapScreen> {
   void _searchRouteToDestination(String destination) async {
     if (_currentPosition == null) {
       _showErrorNotification('No se puede calcular ruta sin ubicación actual');
+      TtsService.instance.speak(
+        'No se puede calcular ruta sin ubicación actual',
+      );
       return;
     }
 
-    // Activar viaje y mostrar paradas
+    // Activar viaje pero NO mostrar paradas automaticamente
+    // (solo mostrar la ruta del bus en el mapa)
     setState(() {
       _hasActiveTrip = true;
-      _showStops = true;
+      // NO activar _showStops - solo mostrar la ruta del bus
     });
 
-    // Si no hay paradas cargadas, cargarlas primero
-    if (_nearbyStops.isEmpty) {
-      TtsService.instance.speak('Cargando paradas para calcular ruta');
-      try {
-        await _loadNearbyStopsSync();
-      } catch (e) {
-        TtsService.instance.speak('Error cargando paradas');
-        return;
-      }
-    }
+    // Anunciar que se está calculando
+    TtsService.instance.speak(
+      'Buscando mejor ruta hacia $destination. Por favor espera.',
+    );
 
     try {
-      // Search for a nearby stop that matches the destination
-      final matchingStop = _nearbyStops.where((stop) {
-        final name = (stop['name'] as String?)?.toLowerCase() ?? '';
-        return name.contains(destination.toLowerCase());
-      }).toList();
+      // Geocodificar destino usando el servicio de validación de direcciones
+      final suggestions = await AddressValidationService.instance
+          .suggestAddresses(destination, limit: 1);
 
-      if (matchingStop.isNotEmpty) {
-        final bestStop = matchingStop.first;
-
-        // Mostrar indicador de carga
-        _showNotification(
-          NotificationData(
-            message: 'Calculando mejor ruta con scraper Moovit...',
-            type: NotificationType.info,
-            duration: const Duration(seconds: 2),
-          ),
-        );
-
-        // Fetch alternative routes (server + cache) and convert to CombinedRoute
-        final originLat = _currentPosition!.latitude;
-        final originLon = _currentPosition!.longitude;
-        final destLat = bestStop['latitude'] as double;
-        final destLon = bestStop['longitude'] as double;
-
-        // Usar directamente el servicio de rutas combinadas con Moovit
-        final origin = LatLng(originLat, originLon);
-        final destinationPoint = LatLng(destLat, destLon);
-
-        // Calcular ruta usando Moovit (scraper educacional)
-        CombinedRoute? combinedRoute;
-        try {
-          combinedRoute = await CombinedRoutesService.instance
-              .calculatePublicTransitRoute(
-                origin: origin,
-                destination: destinationPoint,
-              );
-
-          _showSuccessNotification('Ruta generada desde datos de Moovit ✅');
-        } catch (e) {
-          _showErrorNotification('Error calculando ruta: ${e.toString()}');
-          return;
-        }
-
-        // Mostrar la ruta con el nuevo widget de detalles
-        await _showRouteWithItinerary(
-          combinedRoute,
-          bestStop['name'] as String,
-        );
-      } else {
-        _showWarningNotification(
-          'No se encontró una parada con ese nombre cerca, buscando direcciones similares...',
-        );
-
-        // Intentar sugerir direcciones usando AddressValidationService
-        try {
-          final suggestions = await AddressValidationService.instance
-              .suggestAddresses(destination, limit: 5);
-
-          if (suggestions.isEmpty) {
-            _showWarningNotification('No se encontraron direcciones similares');
-            return;
-          }
-
-          // Mostrar modal de sugerencias y permitir seleccionar una
-          final selectedIndex = await showModalBottomSheet<int?>(
-            context: context,
-            builder: (context) {
-              return SafeArea(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Padding(
-                      padding: EdgeInsets.all(12.0),
-                      child: Text(
-                        'Sugerencias encontradas',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                    Flexible(
-                      child: ListView.separated(
-                        shrinkWrap: true,
-                        itemCount: suggestions.length,
-                        separatorBuilder: (_, __) => const Divider(),
-                        itemBuilder: (context, i) {
-                          final s = suggestions[i];
-                          final display =
-                              s['display_name'] as String? ??
-                              'Sugerencia ${i + 1}';
-                          final dist = s['importance']?.toString() ?? '';
-                          return ListTile(
-                            title: Text(display),
-                            subtitle: dist.isNotEmpty
-                                ? Text('Importancia: $dist')
-                                : null,
-                            onTap: () => Navigator.of(context).pop(i),
-                          );
-                        },
-                      ),
-                    ),
-                    TextButton(
-                      onPressed: () => Navigator.of(context).pop(null),
-                      child: const Text('Cancelar'),
-                    ),
-                  ],
-                ),
-              );
-            },
-          );
-
-          if (selectedIndex == null) return;
-
-          final selected = suggestions[selectedIndex];
-          final destLat = (selected['lat'] as num).toDouble();
-          final destLon = (selected['lon'] as num).toDouble();
-          final selectedName = selected['display_name'] as String;
-
-          // Mostrar indicador de carga
-          _showNotification(
-            NotificationData(
-              message:
-                  'Calculando ruta hacia $selectedName con scraper Moovit...',
-              type: NotificationType.info,
-              duration: const Duration(seconds: 2),
-            ),
-          );
-
-          TtsService.instance.speak(
-            'Calculando mejor ruta hacia $selectedName',
-          );
-
-          // Calcular ruta directamente usando el scraper (no buscar paradas)
-          final origin = LatLng(
-            _currentPosition!.latitude,
-            _currentPosition!.longitude,
-          );
-          final destinationPoint = LatLng(destLat, destLon);
-
-          CombinedRoute? combinedRoute;
-          try {
-            combinedRoute = await CombinedRoutesService.instance
-                .calculatePublicTransitRoute(
-                  origin: origin,
-                  destination: destinationPoint,
-                );
-
-            _showSuccessNotification('Ruta generada desde datos de Moovit ✅');
-          } catch (e) {
-            _showErrorNotification('Error calculando ruta: ${e.toString()}');
-            return;
-          }
-
-          // Mostrar la ruta con el widget de itinerario detallado
-          await _showRouteWithItinerary(combinedRoute, selectedName);
-        } catch (e) {
-          _showErrorNotification('Error buscando direcciones: ${e.toString()}');
-        }
+      if (suggestions.isEmpty) {
+        _showErrorNotification('No se encontró el destino: $destination');
+        TtsService.instance.speak('No se encontró el destino $destination');
+        return;
       }
+
+      final firstResult = suggestions.first;
+      final destLat = (firstResult['lat'] as num).toDouble();
+      final destLon = (firstResult['lon'] as num).toDouble();
+
+      // Calcular ruta usando Moovit
+      final origin = LatLng(
+        _currentPosition!.latitude,
+        _currentPosition!.longitude,
+      );
+      final destinationPoint = LatLng(destLat, destLon);
+
+      final combinedRoute = await CombinedRoutesService.instance
+          .calculatePublicTransitRoute(
+            origin: origin,
+            destination: destinationPoint,
+          );
+
+      // ACCESIBILIDAD: Anunciar ruta automáticamente e iniciar navegación
+      await _announceAndStartNavigation(combinedRoute, destination);
     } catch (e) {
-      _showErrorNotification('Error buscando parada: ${e.toString()}');
+      _showErrorNotification('Error calculando ruta: ${e.toString()}');
+      TtsService.instance.speak(
+        'Error al calcular la ruta. Por favor intenta nuevamente.',
+      );
     }
   }
 
@@ -2012,8 +1885,18 @@ class _MapScreenState extends State<MapScreen> {
       // Configurar callbacks para actualizar UI
       IntegratedNavigationService.instance.onStepChanged = (step) {
         if (!mounted) return;
+
         setState(() {
           _hasActiveTrip = true;
+
+          // Actualizar geometría al paso actual
+          _polylines = [
+            Polyline(
+              points: IntegratedNavigationService.instance.currentStepGeometry,
+              color: const Color(0xFFE30613),
+              strokeWidth: 5.0,
+            ),
+          ];
         });
 
         // Actualizar notificación con paso actual
@@ -2054,7 +1937,7 @@ class _MapScreenState extends State<MapScreen> {
       setState(() {
         _polylines = [
           Polyline(
-            points: navigation.routeGeometry,
+            points: IntegratedNavigationService.instance.currentStepGeometry,
             color: const Color(0xFFE30613), // Color característico de buses Red
             strokeWidth: 5.0,
           ),
@@ -2639,6 +2522,64 @@ class _MapScreenState extends State<MapScreen> {
 
   /// Muestra un diálogo con rutas alternativas y permite seleccionar una
   /// Muestra la ruta calculada con detalles de itinerario estilo Moovit
+  /// ACCESIBILIDAD: Anuncia ruta por TTS e inicia navegación automáticamente
+  /// ACCESIBILIDAD: Anuncia ruta por TTS e inicia navegación automáticamente
+  Future<void> _announceAndStartNavigation(
+    CombinedRoute route,
+    String destName,
+  ) async {
+    if (!mounted) return;
+
+    // Extraer información de la ruta desde los segments
+    final busSegments = route.segments
+        .where((seg) => seg.mode == TransportMode.bus)
+        .toList();
+
+    if (busSegments.isEmpty) {
+      final walkDuration = route.totalDuration.inMinutes;
+      await TtsService.instance.speak(
+        'No se encontró ruta en bus. Solo ruta caminando de $walkDuration minutos.',
+        urgent: true,
+      );
+      return;
+    }
+
+    // Mostrar notificación visual simple
+    _showSuccessNotification('Calculando ruta');
+
+    // Iniciar navegación usando IntegratedNavigationService
+    // El servicio se encargará de anunciar todo (resumen + primer paso)
+    try {
+      // Obtener coordenadas de inicio y destino desde los segments
+      final firstSegment = route.segments.first;
+      final lastSegment = route.segments.last;
+
+      final originLat = firstSegment.startPoint.latitude;
+      final originLon = firstSegment.startPoint.longitude;
+      final destLat = lastSegment.endPoint.latitude;
+      final destLon = lastSegment.endPoint.longitude;
+
+      // Iniciar navegación integrada
+      // Este método ya se encarga de anunciar el resumen y el primer paso
+      await IntegratedNavigationService.instance.startNavigation(
+        originLat: originLat,
+        originLon: originLon,
+        destLat: destLat,
+        destLon: destLon,
+        destinationName: destName,
+      );
+
+      // Mostrar ruta en el mapa
+      _displayCombinedRoute(route);
+    } catch (e) {
+      print('Error al iniciar navegación: $e');
+      await TtsService.instance.speak(
+        'Error al iniciar navegación. Intenta nuevamente.',
+        urgent: true,
+      );
+    }
+  }
+
   Future<void> _showRouteWithItinerary(
     CombinedRoute route,
     String destName,

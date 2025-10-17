@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"database/sql"
 	"fmt"
 	"log"
 
@@ -14,9 +15,16 @@ type RedBusHandler struct {
 }
 
 // NewRedBusHandler crea una nueva instancia del handler
-func NewRedBusHandler() *RedBusHandler {
+func NewRedBusHandler(db *sql.DB) *RedBusHandler {
+	scraper := moovit.NewScraper()
+	if db != nil {
+		scraper.SetDB(db)
+		log.Printf("✅ RedBusHandler configurado con acceso a base de datos GTFS")
+	} else {
+		log.Printf("⚠️  RedBusHandler creado sin base de datos - solo funcionará scraping Moovit")
+	}
 	return &RedBusHandler{
-		scraper: moovit.NewScraper(),
+		scraper: scraper,
 	}
 }
 
@@ -90,6 +98,113 @@ func (h *RedBusHandler) GetRedBusItinerary(c *fiber.Ctx) error {
 
 	// Retornar TODAS las opciones para que el usuario elija por voz en Flutter
 	return c.JSON(routeOptions)
+}
+
+// GetRedBusItineraryOptions maneja POST /api/red/itinerary/options
+// FASE 1: Obtiene opciones LIGERAS sin geometría para selección por voz
+func (h *RedBusHandler) GetRedBusItineraryOptions(c *fiber.Ctx) error {
+	type ItineraryRequest struct {
+		OriginLat float64 `json:"origin_lat"`
+		OriginLon float64 `json:"origin_lon"`
+		DestLat   float64 `json:"dest_lat"`
+		DestLon   float64 `json:"dest_lon"`
+	}
+
+	var req ItineraryRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "invalid request format",
+		})
+	}
+
+	// Validar coordenadas
+	if req.OriginLat < -90 || req.OriginLat > 90 ||
+		req.OriginLon < -180 || req.OriginLon > 180 ||
+		req.DestLat < -90 || req.DestLat > 90 ||
+		req.DestLon < -180 || req.DestLon > 180 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "invalid coordinates",
+		})
+	}
+
+	log.Printf("🚌 FASE 1: Obteniendo opciones ligeras de (%.4f, %.4f) a (%.4f, %.4f)",
+		req.OriginLat, req.OriginLon, req.DestLat, req.DestLon)
+
+	// Obtener opciones LIGERAS (sin geometría)
+	lightweightOptions, err := h.scraper.GetLightweightRouteOptions(
+		req.OriginLat,
+		req.OriginLon,
+		req.DestLat,
+		req.DestLon,
+	)
+	if err != nil {
+		log.Printf("Error obteniendo opciones ligeras: %v", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": fmt.Sprintf("error obteniendo opciones: %v", err),
+		})
+	}
+
+	log.Printf("✅ Retornando %d opciones ligeras para selección por voz", len(lightweightOptions.Options))
+	
+	// Retornar opciones para que Flutter las lea por voz
+	return c.JSON(lightweightOptions)
+}
+
+// GetRedBusItineraryDetail maneja POST /api/red/itinerary/detail
+// FASE 2: Genera geometría completa DESPUÉS de que usuario selecciona por voz
+func (h *RedBusHandler) GetRedBusItineraryDetail(c *fiber.Ctx) error {
+	type DetailRequest struct {
+		OriginLat           float64 `json:"origin_lat"`
+		OriginLon           float64 `json:"origin_lon"`
+		DestLat             float64 `json:"dest_lat"`
+		DestLon             float64 `json:"dest_lon"`
+		SelectedOptionIndex int     `json:"selected_option_index"`
+	}
+
+	var req DetailRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "invalid request format",
+		})
+	}
+
+	// Validar coordenadas
+	if req.OriginLat < -90 || req.OriginLat > 90 ||
+		req.OriginLon < -180 || req.OriginLon > 180 ||
+		req.DestLat < -90 || req.DestLat > 90 ||
+		req.DestLon < -180 || req.DestLon > 180 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "invalid coordinates",
+		})
+	}
+
+	// Validar índice de opción
+	if req.SelectedOptionIndex < 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "selected_option_index must be >= 0",
+		})
+	}
+
+	log.Printf("🚌 FASE 2: Generando geometría detallada para opción %d", req.SelectedOptionIndex)
+
+	// Generar geometría completa para la opción seleccionada
+	detailedItinerary, err := h.scraper.GetDetailedItinerary(
+		req.OriginLat,
+		req.OriginLon,
+		req.DestLat,
+		req.DestLon,
+		req.SelectedOptionIndex,
+	)
+	if err != nil {
+		log.Printf("Error generando itinerario detallado: %v", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": fmt.Sprintf("error generando geometría: %v", err),
+		})
+	}
+
+	log.Printf("✅ Geometría detallada generada con %d legs", len(detailedItinerary.Legs))
+	
+	return c.JSON(detailedItinerary)
 }
 
 // ListCommonRedRoutes maneja GET /api/red/routes/common

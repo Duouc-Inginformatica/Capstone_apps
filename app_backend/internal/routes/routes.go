@@ -16,19 +16,14 @@ func Register(app *fiber.App, db *sql.DB) {
 	api.Post("/register", handlers.Register)
 	api.Post("/gtfs/sync", handlers.SyncGTFS)
 	api.Get("/stops", handlers.GetNearbyStops)
-
-	// Initialize handlers with database
-	handler := handlers.NewHandler(db)
-
-	// New public transit route using GTFS data
-	api.Post("/route/public-transit", handler.PublicTransitRoute)
+	api.Get("/stops/code/:code", handlers.GetStopByCode) // Buscar paradero por código (PC1237, etc.)
 
 	// Initialize new handlers
 	incidentHandler := handlers.NewIncidentHandler(db)
 	locationShareHandler := handlers.NewLocationShareHandler(db)
 	tripHistoryHandler := handlers.NewTripHistoryHandler(db)
 	notificationPrefsHandler := handlers.NewNotificationPreferencesHandler(db)
-	redBusHandler := handlers.NewRedBusHandler()
+	redBusHandler := handlers.NewRedBusHandler(db) // Ahora recibe db para consultas GTFS
 
 	// Red Bus routes (Moovit scraping)
 	red := api.Group("/red")
@@ -37,7 +32,11 @@ func Register(app *fiber.App, db *sql.DB) {
 	red.Get("/route/:routeNumber", redBusHandler.GetRedBusRoute)
 	red.Get("/route/:routeNumber/stops", redBusHandler.GetRedBusStops)
 	red.Get("/route/:routeNumber/geometry", redBusHandler.GetRedBusGeometry)
-	red.Post("/itinerary", redBusHandler.GetRedBusItinerary)
+	red.Post("/itinerary", redBusHandler.GetRedBusItinerary) // Método antiguo (mantener para compatibilidad)
+	
+	// Nuevos endpoints de dos fases para usuarios ciegos (selección por voz)
+	red.Post("/itinerary/options", redBusHandler.GetRedBusItineraryOptions) // FASE 1: Opciones ligeras
+	red.Post("/itinerary/detail", redBusHandler.GetRedBusItineraryDetail)   // FASE 2: Geometría completa
 
 	// Incident routes
 	incidents := api.Group("/incidents")

@@ -446,12 +446,21 @@ class CombinedRoutesService {
       // Extraer geometría
       List<LatLng>? geometry;
       if (leg['geometry'] != null) {
+        print('[DEBUG] Geometry recibida: ${leg['geometry'].runtimeType}');
+        if (leg['geometry'] is List) {
+          print(
+            '[DEBUG] Geometry es List con ${(leg['geometry'] as List).length} elementos',
+          );
+        }
         geometry = _parseGeometry(leg['geometry']);
+        print('[DEBUG] Geometry parseada: ${geometry.length} puntos');
+      } else {
+        print('[DEBUG] leg[geometry] es NULL');
       }
 
       // Validar que la geometría no esté vacía antes de usar first/last
       if (geometry == null || geometry.isEmpty) {
-        print('⚠️  Geometría vacía para leg: $type');
+        print('Geometría vacía para leg: $type (routeName: $routeName)');
         return null;
       }
 
@@ -513,11 +522,20 @@ class CombinedRoutesService {
             return null;
           }
 
+          // Convertir geometría de List<LatLng> a List<List<double>> formato [lon, lat]
+          List<List<double>>? geometryArray;
+          if (leg.geometry != null && leg.geometry!.isNotEmpty) {
+            geometryArray = leg.geometry!
+                .map((latLng) => [latLng.longitude, latLng.latitude])
+                .toList();
+          }
+
           return {
-            'type': 'bus', // Mantener como 'bus' para facilitar detección
+            'type': 'bus',
             'distance': leg.distanceKm * 1000, // km a metros
             'time': leg.durationMinutes * 60 * 1000, // minutos a ms
-            'geometry': leg.geometry,
+            'geometry':
+                geometryArray, // Ahora en formato correcto [[lon, lat], ...]
             'instructions': leg.instruction,
             'route_short_name': leg.routeNumber,
             'route_type': 'bus',

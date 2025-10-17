@@ -157,3 +157,35 @@ func haversineMeters(lat1, lon1, lat2, lon2 float64) float64 {
 func degreesToRadians(deg float64) float64 {
 	return deg * math.Pi / 180.0
 }
+
+// GetStopByCode busca un paradero por su código (ej: "PC1237")
+func GetStopByCode(c *fiber.Ctx) error {
+	if dbConn == nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(models.ErrorResponse{Error: "database not ready"})
+	}
+
+	code := strings.ToUpper(strings.TrimSpace(c.Params("code")))
+	if code == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(models.ErrorResponse{Error: "código de paradero requerido"})
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	var stop models.Stop
+	err := dbConn.QueryRowContext(ctx, `
+		SELECT stop_id, code, name, description, latitude, longitude, zone_id, wheelchair_boarding
+		FROM gtfs_stops
+		WHERE UPPER(code) = ?
+		LIMIT 1
+	`, code).Scan(&stop.StopID, &stop.Code, &stop.Name, &stop.Description, 
+		&stop.Latitude, &stop.Longitude, &stop.ZoneID, &stop.WheelchairBoarding)
+
+	if err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(models.ErrorResponse{
+			Error: "paradero no encontrado con código: " + code,
+		})
+	}
+
+	return c.Status(fiber.StatusOK).JSON(stop)
+}
