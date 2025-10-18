@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -35,6 +36,7 @@ type RedBusRoute struct {
 // BusStop representa una parada de bus
 type BusStop struct {
 	Name      string  `json:"name"`
+	Code      string  `json:"code,omitempty"` // Código del paradero (ej: "PC293")
 	Latitude  float64 `json:"latitude"`
 	Longitude float64 `json:"longitude"`
 	Sequence  int     `json:"sequence"`
@@ -104,6 +106,7 @@ type TripLeg struct {
 	DepartStop  *BusStop    `json:"depart_stop,omitempty"`
 	ArriveStop  *BusStop    `json:"arrive_stop,omitempty"`
 	StopCount   int         `json:"stop_count,omitempty"` // Numero de paradas en el viaje
+	Stops       []BusStop   `json:"stops,omitempty"`      // Lista completa de paradas (solo para buses)
 }
 
 // Scraper maneja el scraping de Moovit
@@ -113,6 +116,7 @@ type Scraper struct {
 	cache      map[string]*RedBusRoute
 	htmlCache  map[string]HTMLCacheEntry // Cache de HTML entre FASE 1 y FASE 2
 	db         *sql.DB                   // Conexión a base de datos GTFS
+	osrmURL    string                    // URL de OSRM para rutas peatonales
 }
 
 // HTMLCacheEntry representa un HTML cacheado con timestamp
@@ -127,6 +131,14 @@ type HTMLCacheEntry struct {
 
 // NewScraper crea una nueva instancia del scraper
 func NewScraper() *Scraper {
+	// Leer URL de OSRM desde variable de entorno
+	osrmURL := os.Getenv("OSRM_URL")
+	if osrmURL == "" {
+		osrmURL = "http://router.project-osrm.org" // Default: servidor público
+	}
+	
+	log.Printf("🗺️ [OSRM] Usando servidor: %s", osrmURL)
+	
 	return &Scraper{
 		baseURL: "https://moovitapp.com",
 		httpClient: &http.Client{
@@ -135,6 +147,7 @@ func NewScraper() *Scraper {
 		cache:     make(map[string]*RedBusRoute),
 		htmlCache: make(map[string]HTMLCacheEntry),
 		db:        nil, // Se configurará después con SetDB
+		osrmURL:   osrmURL,
 	}
 }
 
@@ -900,7 +913,7 @@ func (s *Scraper) parseItineraryPageWithStops(html string, stopCodes []string, o
 	geocodedStops := []BusStop{}
 	seenCodes := make(map[string]bool)
 	
-	for _, code := range stopCodes {
+	for i, code := range stopCodes {
 		code = strings.TrimSpace(code)
 		if code == "" || seenCodes[code] {
 			continue
@@ -909,6 +922,8 @@ func (s *Scraper) parseItineraryPageWithStops(html string, stopCodes []string, o
 		
 		stop, err := s.getStopByCode(code)
 		if err == nil && stop != nil {
+			// Asignar secuencia basada en orden en el array
+			stop.Sequence = i + 1
 			geocodedStops = append(geocodedStops, *stop)
 			log.Printf("   ✅ [GTFS] %s: %s (%.6f, %.6f)", code, stop.Name, stop.Latitude, stop.Longitude)
 		} else {
@@ -1035,11 +1050,30 @@ func (s *Scraper) buildItineraryFromStops(routeNumber string, duration int, stop
 	
 	log.Printf("   🚶 Caminata: %.0fm, %d min", walkDistance, walkDuration)
 	
-	// PIERNA 2: Bus con TODOS los paraderos como geometría
+	// PIERNA 2: Bus con geometría de PARADAS (NO usar OSRM, solo coordenadas de paradas)
+	// IMPORTANTE: Usar todas las paradas ordenadas por secuencia
+	log.Printf("🗺️ [GEOMETRY] Generando geometría de paradas para bus")
+	log.Printf("🗺️ [GEOMETRY] Parada origen: %s (seq: %d)", originStop.Name, originStop.Sequence)
+	log.Printf("🗺️ [GEOMETRY] Parada destino: %s (seq: %d)", destStop.Name, destStop.Sequence)
+	
+	// Ordenar paradas por secuencia
+	sort.Slice(stops, func(i, j int) bool {
+		return stops[i].Sequence < stops[j].Sequence
+	})
+	
+	log.Printf("🗺️ [GEOMETRY] Total de paradas ordenadas: %d", len(stops))
+	
 	busGeometry := [][]float64{}
-	for _, stop := range stops {
+	
+	// Agregar las coordenadas de TODAS las paradas
+	// El frontend se encargará de filtrar si es necesario
+	for i, stop := range stops {
 		busGeometry = append(busGeometry, []float64{stop.Longitude, stop.Latitude})
+		log.Printf("   📍 Parada %d/%d: %s (seq: %d, %.6f, %.6f)", 
+			i+1, len(stops), stop.Name, stop.Sequence, stop.Latitude, stop.Longitude)
 	}
+	
+	log.Printf("✅ [GEOMETRY] Geometría de bus: %d puntos (todas las paradas)", len(busGeometry))
 	
 	// NO agregar destino final aquí - eso va en la pierna de caminata final
 	
@@ -1065,6 +1099,7 @@ func (s *Scraper) buildItineraryFromStops(routeNumber string, duration int, stop
 		DepartStop:  &originStop,
 		ArriveStop:  &destStop,
 		StopCount:   len(stops),
+		Stops:       stops, // ⭐ Lista de TODAS las paradas ordenadas por secuencia
 	}
 	
 	itinerary.Legs = append(itinerary.Legs, busLeg)
@@ -2038,12 +2073,23 @@ func (s *Scraper) getStopByCode(stopCode string) (*BusStop, error) {
 		return nil, fmt.Errorf("error consultando GTFS: %v", err)
 	}
 	
-	log.Printf("✅ [GTFS] Paradero encontrado: %s (%.6f, %.6f)", stop.Name, stop.Latitude, stop.Longitude)
+	// Asignar el código del paradero (priorizar stop_id si code está vacío)
+	if code.Valid && code.String != "" {
+		stop.Code = code.String
+	} else if stopID.Valid && stopID.String != "" {
+		stop.Code = stopID.String
+	} else {
+		stop.Code = stopCode // Usar el código buscado como fallback
+	}
+	
+	log.Printf("✅ [GTFS] Paradero encontrado: %s-%s (%.6f, %.6f)", stop.Code, stop.Name, stop.Latitude, stop.Longitude)
 	
 	return &stop, nil
 }
 
 // generateBusRouteGeometry genera la geometría del recorrido del bus
+// NOTA: Solo usa coordenadas de paradas (NO OSRM) porque en frontend se visualizan
+// como marcadores individuales, no como una línea de ruta
 func (s *Scraper) generateBusRouteGeometry(origin, dest BusStop, allStops []BusStop) [][]float64 {
 	geometry := [][]float64{}
 	
@@ -2065,24 +2111,25 @@ func (s *Scraper) generateBusRouteGeometry(origin, dest BusStop, allStops []BusS
 		}
 	}
 	
-	// Si encontramos ambos, usar las paradas intermedias
+	// Si encontramos ambos, usar las paradas intermedias (solo coordenadas de paradas)
 	if startIdx >= 0 && endIdx >= 0 {
 		if startIdx > endIdx {
 			startIdx, endIdx = endIdx, startIdx
 		}
 		
-		log.Printf("🗺️  [GEOMETRY] Agregando %d paradas intermedias", endIdx-startIdx+1)
+		log.Printf("🗺️  [GEOMETRY] Agregando %d paradas entre origen y destino", endIdx-startIdx+1)
+		// SOLO agregar coordenadas de paradas (no usar OSRM para routing de calles)
 		for i := startIdx; i <= endIdx; i++ {
 			geometry = append(geometry, []float64{allStops[i].Longitude, allStops[i].Latitude})
 		}
 	} else {
-		// Si no, crear línea directa
+		// Si no encontramos índices, crear línea directa entre origen y destino
 		log.Printf("⚠️  [GEOMETRY] No se encontraron índices, usando línea directa")
 		geometry = append(geometry, []float64{origin.Longitude, origin.Latitude})
 		geometry = append(geometry, []float64{dest.Longitude, dest.Latitude})
 	}
 	
-	log.Printf("✅ [GEOMETRY] Geometría generada con %d puntos", len(geometry))
+	log.Printf("✅ [GEOMETRY] Geometría de bus generada con %d puntos (solo paradas)", len(geometry))
 	return geometry
 }
 
@@ -2641,3 +2688,49 @@ func (s *Scraper) parseStopsFromHTML(html string) []BusStop {
 	return stops
 }
 
+// getOSRMDrivingRoute obtiene la geometría real de calles entre dos puntos usando OSRM
+// Retorna un slice de coordenadas [lon, lat] que representan la ruta real
+func (s *Scraper) getOSRMDrivingRoute(lat1, lon1, lat2, lon2 float64) ([][]float64, error) {
+	// URL de OSRM configurada (servidor público o local)
+	osrmURL := fmt.Sprintf(
+		"%s/route/v1/driving/%f,%f;%f,%f?overview=full&geometries=geojson",
+		s.osrmURL, lon1, lat1, lon2, lat2,
+	)
+
+	// Crear request con timeout
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get(osrmURL)
+	if err != nil {
+		return nil, fmt.Errorf("error conectando a OSRM: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("OSRM retornó status %d", resp.StatusCode)
+	}
+
+	// Parsear respuesta OSRM
+	var osrmResp struct {
+		Code   string `json:"code"`
+		Routes []struct {
+			Geometry struct {
+				Coordinates [][]float64 `json:"coordinates"` // [lon, lat] pairs
+			} `json:"geometry"`
+		} `json:"routes"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&osrmResp); err != nil {
+		return nil, fmt.Errorf("error parseando respuesta OSRM: %w", err)
+	}
+
+	if osrmResp.Code != "Ok" || len(osrmResp.Routes) == 0 {
+		return nil, fmt.Errorf("OSRM no encontró ruta (code: %s)", osrmResp.Code)
+	}
+
+	geometry := osrmResp.Routes[0].Geometry.Coordinates
+	if len(geometry) == 0 {
+		return nil, fmt.Errorf("geometría OSRM vacía")
+	}
+
+	return geometry, nil
+}

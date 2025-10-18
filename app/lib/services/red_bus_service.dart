@@ -17,12 +17,14 @@ class RedBusStop {
   final double latitude;
   final double longitude;
   final int sequence;
+  final String? code; // Código del paradero (ej: "PC293", "PB456")
 
   RedBusStop({
     required this.name,
     required this.latitude,
     required this.longitude,
     required this.sequence,
+    this.code,
   });
 
   factory RedBusStop.fromJson(Map<String, dynamic> json) {
@@ -31,6 +33,7 @@ class RedBusStop {
       latitude: (json['latitude'] as num?)?.toDouble() ?? 0.0,
       longitude: (json['longitude'] as num?)?.toDouble() ?? 0.0,
       sequence: json['sequence'] as int? ?? 0,
+      code: json['code'] as String?, // Código de parada
     );
   }
 
@@ -111,6 +114,7 @@ class RedBusLeg {
   final RedBusStop? departStop;
   final RedBusStop? arriveStop;
   final int? stopCount; // Número de paradas en el viaje
+  final List<RedBusStop>? stops; // Lista completa de paradas (solo para buses)
 
   RedBusLeg({
     required this.type,
@@ -125,6 +129,7 @@ class RedBusLeg {
     this.departStop,
     this.arriveStop,
     this.stopCount,
+    this.stops,
   });
 
   factory RedBusLeg.fromJson(Map<String, dynamic> json) {
@@ -154,6 +159,14 @@ class RedBusLeg {
       );
     }
 
+    List<RedBusStop>? stops;
+    if (json['stops'] != null) {
+      final stopsData = json['stops'] as List<dynamic>;
+      stops = stopsData.map((stopJson) {
+        return RedBusStop.fromJson(stopJson as Map<String, dynamic>);
+      }).toList();
+    }
+
     return RedBusLeg(
       type: json['type'] as String? ?? 'walk',
       mode: json['mode'] as String? ?? 'walk',
@@ -167,13 +180,21 @@ class RedBusLeg {
       departStop: departStop,
       arriveStop: arriveStop,
       stopCount: json['stop_count'] as int?,
+      stops: stops,
     )..debugStopCount(); // Debug: imprimir stopCount
   }
 
   // Debug method para verificar el conteo de paradas
   void debugStopCount() {
-    if (type == 'bus' && stopCount != null) {
-      print('🚏 Leg de bus ${routeNumber ?? "?"} tiene $stopCount paradas');
+    if (type == 'bus') {
+      if (stopCount != null) {
+        print('🚏 Leg de bus ${routeNumber ?? "?"} tiene $stopCount paradas');
+      }
+      if (stops != null) {
+        print(
+          '🚏 Lista de ${stops!.length} paraderos cargada para bus ${routeNumber ?? "?"}',
+        );
+      }
     }
   }
 

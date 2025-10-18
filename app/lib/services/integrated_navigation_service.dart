@@ -250,6 +250,10 @@ class IntegratedNavigationService {
   int? _lastProximityAnnouncedStepIndex;
   int? _lastArrivalAnnouncedStepIndex;
 
+  // Control de paradas visitadas durante ride_bus
+  final Set<String> _announcedStops = {}; // IDs de paradas ya anunciadas
+  int _currentBusStopIndex = 0; // Índice de la parada actual en el viaje
+
   /// Inicia navegación completa desde ubicación actual a destino
   Future<ActiveNavigation> startNavigation({
     required double originLat,
@@ -331,6 +335,8 @@ class IntegratedNavigationService {
     // 7. Reiniciar control de anuncios
     _lastProximityAnnouncedStepIndex = null;
     _lastArrivalAnnouncedStepIndex = null;
+    _announcedStops.clear(); // Limpiar paradas anunciadas
+    _currentBusStopIndex = 0; // Resetear índice de parada
 
     // 8. Anunciar inicio de navegación
     _announceNavigationStart(destinationName, itinerary);
@@ -373,30 +379,41 @@ class IntegratedNavigationService {
           final osrmRoute = await _getOSRMWalkingRoute(walkFrom, walkTo);
 
           if (osrmRoute != null && osrmRoute['steps'] != null) {
-            // Agregar cada paso de OSRM como un paso de navegación
+            // Consolidar todos los pasos OSRM en una sola instrucción de navegación
             final osrmSteps = osrmRoute['steps'] as List<dynamic>;
             print('✅ ${osrmSteps.length} pasos OSRM obtenidos');
 
-            for (var osrmStep in osrmSteps) {
-              final instruction = osrmStep['instruction'] as String?;
-              final duration = osrmStep['duration'] as num?;
+            // Crear una instrucción consolidada con el primer paso significativo
+            String consolidatedInstruction = leg.instruction.isNotEmpty
+                ? leg.instruction
+                : 'Camina ${(leg.distanceKm * 1000).toInt()} metros hasta ${leg.arriveStop?.name}';
 
-              if (instruction != null &&
-                  !instruction.toLowerCase().contains('arrive')) {
-                steps.add(
-                  NavigationStep(
-                    type: 'walk',
-                    instruction: instruction,
-                    location: walkTo, // Usar destino como referencia
-                    stopName: leg.arriveStop?.name,
-                    estimatedDuration: duration != null
-                        ? (duration / 60).ceil()
-                        : 1,
-                  ),
-                );
+            // Si hay un primer paso OSRM útil, usarlo como instrucción principal
+            if (osrmSteps.isNotEmpty) {
+              final firstStep = osrmSteps[0];
+              final firstInstruction = firstStep['instruction'] as String?;
+              if (firstInstruction != null &&
+                  !firstInstruction.toLowerCase().contains('arrive') &&
+                  !firstInstruction.toLowerCase().contains(
+                    'you have arrived',
+                  )) {
+                consolidatedInstruction = firstInstruction;
               }
             }
-            print('✅ Pasos WALK detallados agregados desde OSRM');
+
+            // Crear un ÚNICO paso de navegación para toda la caminata
+            steps.add(
+              NavigationStep(
+                type: 'walk',
+                instruction: consolidatedInstruction,
+                location: walkTo,
+                stopName: leg.arriveStop?.name,
+                estimatedDuration: leg.durationMinutes,
+              ),
+            );
+            print(
+              '✅ Paso WALK consolidado agregado (${osrmSteps.length} instrucciones OSRM integradas)',
+            );
           } else {
             // Fallback: usar instrucción simple del backend
             steps.add(
@@ -498,6 +515,105 @@ class IntegratedNavigationService {
 
   double _degreesToRadians(double degrees) {
     return degrees * math.pi / 180;
+  }
+
+  /// Extrae un segmento de geometría entre dos puntos (origen y destino)
+  /// Esto es crucial para buses donde la geometría completa puede contener toda la ruta
+  /// pero solo queremos el segmento entre el paradero de abordaje y el de bajada
+  List<LatLng> _extractRouteSegment(
+    List<LatLng> fullGeometry,
+    LatLng startPoint,
+    LatLng endPoint,
+  ) {
+    if (fullGeometry.length < 2) return fullGeometry;
+
+    print('🔍 [SEGMENT] Extrayendo segmento de ${fullGeometry.length} puntos');
+    print(
+      '🔍 [SEGMENT] Desde: ${startPoint.latitude}, ${startPoint.longitude}',
+    );
+    print('🔍 [SEGMENT] Hasta: ${endPoint.latitude}, ${endPoint.longitude}');
+
+    // Encontrar el índice del punto más cercano al origen
+    int startIndex = 0;
+    double minStartDistance = double.infinity;
+    for (int i = 0; i < fullGeometry.length; i++) {
+      final point = fullGeometry[i];
+      final distance = _calculateDistance(
+        startPoint.latitude,
+        startPoint.longitude,
+        point.latitude,
+        point.longitude,
+      );
+      if (distance < minStartDistance) {
+        minStartDistance = distance;
+        startIndex = i;
+      }
+    }
+
+    // Encontrar el índice del punto más cercano al destino
+    int endIndex = fullGeometry.length - 1;
+    double minEndDistance = double.infinity;
+    for (int i = startIndex; i < fullGeometry.length; i++) {
+      final point = fullGeometry[i];
+      final distance = _calculateDistance(
+        endPoint.latitude,
+        endPoint.longitude,
+        point.latitude,
+        point.longitude,
+      );
+      if (distance < minEndDistance) {
+        minEndDistance = distance;
+        endIndex = i;
+      }
+    }
+
+    // Validar que el orden sea correcto
+    if (endIndex <= startIndex) {
+      print(
+        '⚠️ [SEGMENT] Orden incorrecto: startIndex=$startIndex, endIndex=$endIndex',
+      );
+      // Buscar hacia atrás si es necesario
+      endIndex = fullGeometry.length - 1;
+      for (int i = fullGeometry.length - 1; i > startIndex; i--) {
+        final point = fullGeometry[i];
+        final distance = _calculateDistance(
+          endPoint.latitude,
+          endPoint.longitude,
+          point.latitude,
+          point.longitude,
+        );
+        if (distance < minEndDistance) {
+          minEndDistance = distance;
+          endIndex = i;
+        }
+      }
+    }
+
+    // Validar distancias
+    print(
+      '🔍 [SEGMENT] startIndex=$startIndex (distancia: ${minStartDistance.toStringAsFixed(1)}m)',
+    );
+    print(
+      '🔍 [SEGMENT] endIndex=$endIndex (distancia: ${minEndDistance.toStringAsFixed(1)}m)',
+    );
+
+    // Si las distancias son muy grandes (>200m), la geometría podría no corresponder
+    if (minStartDistance > 200 || minEndDistance > 200) {
+      print('⚠️ [SEGMENT] Distancias muy grandes, usando geometría completa');
+      return fullGeometry;
+    }
+
+    // Extraer el segmento
+    if (endIndex > startIndex) {
+      final segment = fullGeometry.sublist(startIndex, endIndex + 1);
+      print('✅ [SEGMENT] Segmento extraído: ${segment.length} puntos');
+      return segment;
+    }
+
+    print(
+      '⚠️ [SEGMENT] No se pudo extraer segmento, usando geometría completa',
+    );
+    return fullGeometry;
   }
 
   /// Encuentra el paradero más cercano usando GTFS
@@ -911,20 +1027,30 @@ class IntegratedNavigationService {
           break;
 
         case 'ride_bus':
-          // Geometría del bus: PRIORIZAR geometría del backend (paraderos reales)
-          print('   🚌 RIDE_BUS: Buscando geometría de paraderos reales...');
+          // Geometría del bus: usar geometría del backend (ya viene con ruta real de calles desde OSRM)
+          print('   🚌 RIDE_BUS: Buscando geometría de ruta real...');
 
-          // PRIMERO: Intentar usar geometría del backend con paraderos reales
+          // Usar geometría del backend que ya incluye la ruta real de calles
           bool foundBackendGeometry = false;
           for (var leg in itinerary.legs) {
             if (leg.type == 'bus' &&
                 leg.routeNumber == step.busRoute &&
                 leg.geometry != null &&
                 leg.geometry!.isNotEmpty) {
+              // ✅ El backend ahora genera geometría REAL de calles usando OSRM
+              // entre cada par de paraderos consecutivos, NO solo puntos de paraderos
               stepGeometry.addAll(leg.geometry!);
+
               print(
-                '   ✅ RIDE_BUS: Geometría con paraderos reales del backend (${leg.geometry!.length} puntos)',
+                '   ✅ RIDE_BUS: Geometría de ruta real cargada (${leg.geometry!.length} puntos)',
               );
+
+              if (leg.departStop != null && leg.arriveStop != null) {
+                print(
+                  '   📍 Desde: ${leg.departStop!.name} hasta ${leg.arriveStop!.name}',
+                );
+              }
+
               foundBackendGeometry = true;
               break;
             }
@@ -1288,6 +1414,11 @@ Te iré guiando paso a paso.
     if (currentStep.type == 'wait_bus') {
       _detectNearbyBuses(currentStep, userLocation);
     }
+
+    // Si está en el bus (ride_bus), detectar y anunciar paradas intermedias
+    if (currentStep.type == 'ride_bus') {
+      _checkBusStopsProgress(currentStep, userLocation);
+    }
   }
 
   /// Obtiene una posición suavizada usando el promedio de las últimas posiciones
@@ -1391,7 +1522,16 @@ Te iré guiando paso a paso.
 
     // Avanzar al siguiente paso
     _activeNavigation!.advanceToNextStep();
-    onStepChanged?.call(_activeNavigation!.currentStep ?? step);
+
+    // Si el siguiente paso es ride_bus, resetear control de paradas
+    final nextStep = _activeNavigation!.currentStep;
+    if (nextStep?.type == 'ride_bus') {
+      _announcedStops.clear();
+      _currentBusStopIndex = 0;
+      print('🚌 [BUS_STOPS] Iniciando nuevo viaje en bus - resetear paradas');
+    }
+
+    onStepChanged?.call(nextStep ?? step);
 
     // Combinar anuncio actual con el siguiente paso
     String fullAnnouncement = announcement;
@@ -1415,10 +1555,157 @@ Te iré guiando paso a paso.
     // usando datos de GPS de los buses o información de la API de Transantiago
   }
 
+  /// Verifica progreso a través de paradas de bus durante ride_bus
+  /// Anuncia cada parada cuando el usuario pasa cerca
+  void _checkBusStopsProgress(NavigationStep step, LatLng userLocation) {
+    // Obtener lista de paradas del leg actual
+    final currentLegIndex = _activeNavigation?.currentStepIndex;
+    if (currentLegIndex == null) {
+      print('⚠️ [BUS_STOPS] currentLegIndex es null');
+      return;
+    }
+
+    print('🚌 [BUS_STOPS] currentLegIndex: $currentLegIndex');
+    print(
+      '🚌 [BUS_STOPS] Total legs en itinerario: ${_activeNavigation!.itinerary.legs.length}',
+    );
+
+    // Buscar el leg de bus correspondiente en el itinerario
+    final busLegs = _activeNavigation!.itinerary.legs
+        .where((leg) => leg.type == 'bus')
+        .toList();
+
+    if (busLegs.isEmpty) {
+      print('⚠️ [BUS_STOPS] No se encontró ningún leg de bus en el itinerario');
+      return;
+    }
+
+    print('🚌 [BUS_STOPS] Encontrados ${busLegs.length} legs de bus');
+
+    // Usar el primer leg de bus (normalmente solo hay uno)
+    final busLeg = busLegs.first;
+    final stops = busLeg.stops;
+
+    if (stops == null || stops.isEmpty) {
+      print('⚠️ [BUS_STOPS] No hay paradas disponibles en el leg de bus');
+      print('⚠️ [BUS_STOPS] busLeg.type: ${busLeg.type}');
+      print('⚠️ [BUS_STOPS] busLeg.routeNumber: ${busLeg.routeNumber}');
+      return;
+    }
+
+    print(
+      '🚌 [BUS_STOPS] Verificando progreso: ${stops.length} paradas totales, índice actual: $_currentBusStopIndex',
+    );
+
+    // Verificar cercanía a cada parada (en orden)
+    for (int i = _currentBusStopIndex; i < stops.length; i++) {
+      final stop = stops[i];
+      final stopLocation = stop.location;
+
+      final distanceToStop = _distance.as(
+        LengthUnit.Meter,
+        userLocation,
+        stopLocation,
+      );
+
+      print('🚌 [STOP $i] ${stop.name}: ${distanceToStop.toStringAsFixed(0)}m');
+
+      // Si está cerca de esta parada (50m) y no se ha anunciado
+      final stopId = '${stop.name}_${stop.sequence}';
+      if (distanceToStop <= 50.0 && !_announcedStops.contains(stopId)) {
+        print(
+          '✅ [BUS_STOPS] Parada detectada a ${distanceToStop.toStringAsFixed(0)}m - Anunciando...',
+        );
+        _announceCurrentBusStop(stop, i + 1, stops.length);
+        _announcedStops.add(stopId);
+        _currentBusStopIndex = i + 1; // Avanzar al siguiente índice
+        break; // Solo anunciar una parada a la vez
+      }
+    }
+  }
+
+  /// Anuncia la parada actual del bus
+  void _announceCurrentBusStop(
+    RedBusStop stop,
+    int stopNumber,
+    int totalStops,
+  ) {
+    final isLastStop = stopNumber == totalStops;
+    final isFirstStop = stopNumber == 1;
+
+    // OPTIMIZACIÓN: Si hay más de 10 paradas, solo anunciar paradas clave
+    // para demostración (primeras 3, algunas intermedias, últimas 2)
+    if (totalStops > 10 && !isFirstStop && !isLastStop) {
+      // Calcular si esta parada debe ser anunciada
+      final shouldAnnounce = _shouldAnnounceStop(stopNumber, totalStops);
+      if (!shouldAnnounce) {
+        print(
+          '⏭️ [TTS] Parada $stopNumber omitida (solo anuncio de paradas clave)',
+        );
+        return; // Saltar esta parada
+      }
+    }
+
+    String announcement;
+    if (isLastStop) {
+      final stopCode = stop.code != null && stop.code!.isNotEmpty
+          ? 'código ${stop.code}, '
+          : '';
+      announcement =
+          'Próxima parada: $stopCode${stop.name}. Es tu parada de bajada. Prepárate para descender.';
+    } else if (isFirstStop) {
+      final stopCode = stop.code != null && stop.code!.isNotEmpty
+          ? 'código ${stop.code}, '
+          : '';
+      announcement =
+          'Primera parada: $stopCode${stop.name}. Ahora estás en el bus.';
+    } else {
+      final stopCode = stop.code != null && stop.code!.isNotEmpty
+          ? 'código ${stop.code}, '
+          : '';
+      announcement = 'Parada $stopNumber de $totalStops: $stopCode${stop.name}';
+    }
+
+    print('🔔 [TTS] $announcement');
+    TtsService.instance.speak(announcement);
+  }
+
+  /// Determina si una parada debe ser anunciada para demostración
+  /// Cuando hay más de 10 paradas, solo anuncia:
+  /// - Primeras 3 paradas (índices 1, 2, 3)
+  /// - Algunas intermedias (2-3 paradas en el medio)
+  /// - Últimas 2 paradas (penúltima y última)
+  bool _shouldAnnounceStop(int stopNumber, int totalStops) {
+    // Primera parada
+    if (stopNumber == 1) return true;
+
+    // Primeras 3 paradas
+    if (stopNumber <= 3) return true;
+
+    // Últimas 2 paradas
+    if (stopNumber >= totalStops - 1) return true;
+
+    // Paradas intermedias estratégicas
+    final middlePoint = (totalStops / 2).round();
+    final quarterPoint = (totalStops / 4).round();
+    final threeQuarterPoint = ((totalStops * 3) / 4).round();
+
+    // Anunciar paradas en cuartos del recorrido
+    if (stopNumber == quarterPoint ||
+        stopNumber == middlePoint ||
+        stopNumber == threeQuarterPoint) {
+      return true;
+    }
+
+    return false; // Omitir el resto de paradas
+  }
+
   /// Detiene la navegación activa
   void stopNavigation() {
     _positionStream?.cancel();
     _activeNavigation = null;
+    _announcedStops.clear(); // Limpiar paradas anunciadas
+    _currentBusStopIndex = 0; // Resetear índice
     print('🛑 Navegación detenida');
   }
 
