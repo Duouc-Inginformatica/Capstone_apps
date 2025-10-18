@@ -6,7 +6,6 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:flutter_compass/flutter_compass.dart';
 import 'package:vibration/vibration.dart';
 import '../services/tts_service.dart';
 import '../services/api_client.dart';
@@ -241,6 +240,13 @@ class _MapScreenState extends State<MapScreen> {
   // CAP-12: Instrucciones de ruta
   List<String> _currentInstructions = [];
   int _currentInstructionStep = 0;
+  bool _isCalculatingRoute = false;
+  bool _showInstructionsPanel = false;
+
+  // Lectura automática de instrucciones
+  bool _autoReadInstructions = true; // Por defecto ON para no videntes
+  Timer? _instructionReadTimer;
+  int _lastAnnouncedInstruction = -1;
 
   // CAP-29: Confirmación de micro abordada
   bool _waitingBoardingConfirmation = false;
@@ -253,15 +259,13 @@ class _MapScreenState extends State<MapScreen> {
   List<LatLng> _selectedPlannedRoute = [];
   String? _selectedDestinationName;
 
-  // Compass and orientation
-  StreamSubscription<CompassEvent>? _compassSubscription;
-  double _heading = 0.0;
-  String _currentDirection = 'Norte';
-  Timer? _orientationTimer;
-
   // Accessibility features
   final bool _isAccessibilityMode = true;
   Timer? _feedbackTimer;
+
+  // Auto-center durante simulación
+  bool _autoCenter = true; // Por defecto activado
+  bool _userManuallyMoved = false; // Detecta si el usuario movió el mapa
 
   // Notification system
   final List<NotificationData> _activeNotifications = [];
@@ -418,152 +422,16 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   Future<void> _initCompass() async {
-    try {
-      // Verificar si el compass está disponible
-      if (FlutterCompass.events == null) {
-        TtsService.instance.speak('Brújula no disponible en este dispositivo');
-        return;
-      }
-
-      // Suscribirse a los eventos del compass
-      _compassSubscription = FlutterCompass.events?.listen((
-        CompassEvent event,
-      ) {
-        if (!mounted) return;
-
-        final newHeading = event.heading;
-        if (newHeading != null) {
-          setState(() {
-            _heading = newHeading;
-            _currentDirection = _getDirection(newHeading);
-          });
-
-          // Rotar el mapa con la orientación del usuario
-          final rotation = -_heading;
-          if (_isMapReady) {
-            _mapController.rotate(rotation);
-          } else {
-            _pendingRotation = rotation;
-          }
-
-          // Proporcionar feedback de orientación cada 3 segundos
-          _provideOrientationFeedback();
-        }
-      });
-
-      if (_isAccessibilityMode) {
-        TtsService.instance.speak(
-          'Brújula activada. Te informaré sobre tu orientación mientras navegas.',
-        );
-      }
-    } catch (e) {
-      TtsService.instance.speak('Error activando brújula');
-    }
-  }
-
-  String _getDirection(double heading) {
-    if (heading >= 337.5 || heading < 22.5) return 'Norte';
-    if (heading >= 22.5 && heading < 67.5) return 'Noreste';
-    if (heading >= 67.5 && heading < 112.5) return 'Este';
-    if (heading >= 112.5 && heading < 157.5) return 'Sureste';
-    if (heading >= 157.5 && heading < 202.5) return 'Sur';
-    if (heading >= 202.5 && heading < 247.5) return 'Suroeste';
-    if (heading >= 247.5 && heading < 292.5) return 'Oeste';
-    if (heading >= 292.5 && heading < 337.5) return 'Noroeste';
-    return 'Norte';
+    // Brújula deshabilitada para mejorar rendimiento
+    print('🧭 Brújula deshabilitada para optimización de rendimiento');
   }
 
   void _provideOrientationFeedback() {
-    if (!_isAccessibilityMode || !_hasActiveTrip) return;
-
-    // Cancelar timer anterior
-    _orientationTimer?.cancel();
-
-    // Proporcionar feedback cada 3 segundos
-    _orientationTimer = Timer(const Duration(seconds: 3), () {
-      if (mounted && _isAccessibilityMode) {
-        _showOrientationNotification('Mirando hacia el $_currentDirection');
-        _describeNearbyElements();
-      }
-    });
+    // Brújula deshabilitada para mejorar rendimiento
   }
 
   void _describeNearbyElements() {
-    if (!_showStops || _nearbyStops.isEmpty || _currentPosition == null) return;
-
-    // Encontrar la parada más cercana en la dirección actual
-    final userLat = _currentPosition!.latitude;
-    final userLon = _currentPosition!.longitude;
-
-    List<Map<String, dynamic>> stopsWithBearing = [];
-
-    for (var stop in _nearbyStops) {
-      final stopLat = stop['latitude'] as double?;
-      final stopLon = stop['longitude'] as double?;
-
-      if (stopLat != null && stopLon != null) {
-        final bearing = _calculateBearing(userLat, userLon, stopLat, stopLon);
-        final distance = Geolocator.distanceBetween(
-          userLat,
-          userLon,
-          stopLat,
-          stopLon,
-        );
-
-        stopsWithBearing.add({
-          'stop': stop,
-          'bearing': bearing,
-          'distance': distance,
-        });
-      }
-    }
-
-    // Filtrar paradas en un cono de 45 grados hacia donde mira el usuario
-    final userHeading = _heading;
-    final nearbyInDirection = stopsWithBearing.where((item) {
-      final bearing = item['bearing'] as double;
-      final angleDiff = _angleDifference(userHeading, bearing);
-      return angleDiff <= 45; // 45 grados de tolerancia
-    }).toList();
-
-    if (nearbyInDirection.isNotEmpty) {
-      // Ordenar por distancia
-      nearbyInDirection.sort(
-        (a, b) => (a['distance'] as double).compareTo(b['distance'] as double),
-      );
-
-      final closest = nearbyInDirection.first;
-      final stop = closest['stop'];
-      final distance = (closest['distance'] as double).round();
-
-      TtsService.instance.speak(
-        'Parada ${stop['name']} a $distance metros en tu dirección',
-      );
-    }
-  }
-
-  double _calculateBearing(
-    double startLat,
-    double startLon,
-    double endLat,
-    double endLon,
-  ) {
-    final dLon = (endLon - startLon) * (math.pi / 180);
-    final startLatRad = startLat * (math.pi / 180);
-    final endLatRad = endLat * (math.pi / 180);
-
-    final y = math.sin(dLon) * math.cos(endLatRad);
-    final x =
-        math.cos(startLatRad) * math.sin(endLatRad) -
-        math.sin(startLatRad) * math.cos(endLatRad) * math.cos(dLon);
-
-    final bearing = math.atan2(y, x) * (180 / math.pi);
-    return (bearing + 360) % 360;
-  }
-
-  double _angleDifference(double angle1, double angle2) {
-    final diff = (angle2 - angle1).abs();
-    return diff > 180 ? 360 - diff : diff;
+    // Brújula deshabilitada - función no utilizada
   }
 
   void _announceCurrentLocation() {
@@ -577,8 +445,7 @@ class _MapScreenState extends State<MapScreen> {
 
     TtsService.instance.speak(
       'Te encuentras en latitud ${lat.toStringAsFixed(4)}, '
-      'longitud ${lon.toStringAsFixed(4)}. '
-      'Mirando hacia el $_currentDirection.',
+      'longitud ${lon.toStringAsFixed(4)}.',
     );
 
     if (_nearbyStops.isNotEmpty && _showStops) {
@@ -646,11 +513,552 @@ class _MapScreenState extends State<MapScreen> {
     return 'Pulsa para hablar';
   }
 
+  /// Construye el panel de instrucciones detalladas de navegación
+  Widget _buildInstructionsPanel() {
+    final activeNav = IntegratedNavigationService.instance.activeNavigation;
+    if (activeNav == null) return const SizedBox.shrink();
+
+    final currentStep = activeNav.currentStep;
+    if (currentStep == null) return const SizedBox.shrink();
+
+    // Solo mostrar para pasos de caminata con instrucciones
+    if (currentStep.type != 'walk' ||
+        currentStep.streetInstructions == null ||
+        currentStep.streetInstructions!.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    return Card(
+      elevation: 8,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: Container(
+        constraints: const BoxConstraints(maxHeight: 250),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(16),
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [Colors.blue[700]!, Colors.blue[900]!],
+          ),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Encabezado
+            Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Row(
+                children: [
+                  const Icon(
+                    Icons.directions_walk,
+                    color: Colors.white,
+                    size: 28,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Instrucciones de Caminata',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        if (currentStep.realDistanceMeters != null)
+                          Text(
+                            '${(currentStep.realDistanceMeters! / 1000).toStringAsFixed(2)} km • ${(currentStep.realDurationSeconds! / 60).toStringAsFixed(0)} min',
+                            style: const TextStyle(
+                              color: Colors.white70,
+                              fontSize: 14,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.volume_up, color: Colors.white),
+                    onPressed: () {
+                      // Leer todas las instrucciones
+                      TtsService.instance.speak(
+                        'Instrucciones de caminata: ${currentStep.streetInstructions!.join(". ")}',
+                      );
+                    },
+                    tooltip: 'Escuchar instrucciones',
+                  ),
+                ],
+              ),
+            ),
+
+            const Divider(color: Colors.white30, height: 1),
+
+            // Lista de instrucciones
+            Flexible(
+              child: ListView.builder(
+                shrinkWrap: true,
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                itemCount: currentStep.streetInstructions!.length,
+                itemBuilder: (context, index) {
+                  final instruction = currentStep.streetInstructions![index];
+                  final isFirst = index == 0;
+
+                  return InkWell(
+                    onTap: () {
+                      // Leer instrucción individual
+                      TtsService.instance.speak(instruction);
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 12,
+                      ),
+                      decoration: BoxDecoration(
+                        color: isFirst
+                            ? Colors.white.withOpacity(0.2)
+                            : Colors.transparent,
+                        border: Border(
+                          left: BorderSide(
+                            color: isFirst ? Colors.yellow : Colors.white30,
+                            width: 4,
+                          ),
+                        ),
+                      ),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Container(
+                            width: 28,
+                            height: 28,
+                            decoration: BoxDecoration(
+                              color: isFirst ? Colors.yellow : Colors.white24,
+                              shape: BoxShape.circle,
+                            ),
+                            child: Center(
+                              child: Text(
+                                '${index + 1}',
+                                style: TextStyle(
+                                  color: isFirst ? Colors.black : Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 14,
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Text(
+                              instruction,
+                              style: TextStyle(
+                                color: isFirst
+                                    ? Colors.white
+                                    : Colors.white.withOpacity(0.87),
+                                fontSize: 15,
+                                height: 1.4,
+                                fontWeight: isFirst
+                                    ? FontWeight.w600
+                                    : FontWeight.normal,
+                              ),
+                            ),
+                          ),
+                          if (isFirst)
+                            const Icon(
+                              Icons.arrow_forward,
+                              color: Colors.yellow,
+                              size: 20,
+                            ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   void _announceCurrentOrientation() {
-    final message =
-        'Estás mirando hacia $_currentDirection, ${_heading.toInt()} grados. Toca para activar comando de voz.';
+    final message = 'Toca para activar comando de voz.';
     TtsService.instance.speak(message);
     _announce(message);
+  }
+
+  // Timer para simular caminata
+  Timer? _walkSimulationTimer;
+  int _currentWalkInstructionIndex = 0;
+
+  /// Devuelve el texto del botón de test según el paso actual
+  String _getTestButtonLabel() {
+    final activeNav = IntegratedNavigationService.instance.activeNavigation;
+    if (activeNav == null) return 'TEST';
+
+    final currentStep = activeNav.currentStep;
+    if (currentStep == null) return 'TEST';
+
+    switch (currentStep.type) {
+      case 'walk':
+        return 'Paradero';
+      case 'wait_bus':
+        return 'Bus';
+      case 'ride_bus':
+        return 'Destino';
+      default:
+        return 'TEST';
+    }
+  }
+
+  /// TEST: Simula caminata al paradero con anuncios TTS de instrucciones
+  void _simulateArrivalAtStop() {
+    final activeNav = IntegratedNavigationService.instance.activeNavigation;
+
+    if (activeNav == null) {
+      TtsService.instance.speak('No hay navegación activa');
+      _showWarningNotification(
+        'Primero inicia una navegación diciendo "ir a costanera center"',
+      );
+      return;
+    }
+
+    final currentStep = activeNav.steps[activeNav.currentStepIndex];
+
+    if (currentStep.type == 'walk') {
+      // Iniciar simulación de caminata
+      _startWalkSimulation(currentStep);
+    } else if (currentStep.type == 'wait_bus') {
+      // Simular llegada del bus
+      print('🚌 [TEST] Simulando llegada del bus');
+
+      // Obtener info del bus
+      final busRoute = currentStep.busRoute ?? 'el bus';
+      TtsService.instance.speak(
+        'Ha llegado el bus $busRoute. Subiendo al bus.',
+      );
+
+      // Avanzar al paso de viaje en bus
+      Future.delayed(const Duration(seconds: 2), () {
+        IntegratedNavigationService.instance.advanceToNextStep();
+        setState(() {
+          _updateNavigationMapState(activeNav);
+        });
+
+        // Anunciar que estamos en el bus
+        Future.delayed(const Duration(seconds: 1), () {
+          TtsService.instance.speak(
+            'Ahora estás en el bus $busRoute. Simula el recorrido presionando el botón nuevamente.',
+          );
+        });
+      });
+    } else if (currentStep.type == 'ride_bus') {
+      // Simular viaje en bus hasta destino
+      print('🚌 [TEST] Simulando viaje en bus');
+
+      final busRoute = currentStep.busRoute ?? 'el bus';
+      TtsService.instance.speak(
+        'Simulando viaje en $busRoute hacia tu destino.',
+      );
+
+      // Simular llegada a destino
+      Future.delayed(const Duration(seconds: 3), () {
+        // Obtener el último paso (arrival)
+        final lastStep = activeNav.steps.last;
+        if (lastStep.location != null) {
+          final arrivalPosition = Position(
+            latitude: lastStep.location!.latitude,
+            longitude: lastStep.location!.longitude,
+            timestamp: DateTime.now(),
+            accuracy: 10,
+            altitude: 0,
+            altitudeAccuracy: 0,
+            heading: 0,
+            headingAccuracy: 0,
+            speed: 0,
+            speedAccuracy: 0,
+          );
+
+          IntegratedNavigationService.instance.simulatePosition(
+            arrivalPosition,
+          );
+
+          // Centrar mapa en destino
+          _moveMap(
+            LatLng(lastStep.location!.latitude, lastStep.location!.longitude),
+            16.0,
+          );
+
+          // Avanzar al último paso
+          IntegratedNavigationService.instance.advanceToNextStep();
+          setState(() {
+            _updateNavigationMapState(activeNav);
+          });
+
+          // Anunciar llegada
+          TtsService.instance.speak(
+            'Has llegado a tu destino: ${activeNav.destination}. Navegación completada.',
+          );
+        }
+      });
+    } else {
+      TtsService.instance.speak('Paso actual: ${currentStep.type}');
+    }
+  }
+
+  /// Simula caminata progresiva al paradero con instrucciones OSRM
+  void _startWalkSimulation(NavigationStep walkStep) {
+    // Cancelar simulación previa si existe
+    _walkSimulationTimer?.cancel();
+
+    if (walkStep.location == null || _currentPosition == null) {
+      TtsService.instance.speak('Error: no se puede simular la caminata');
+      return;
+    }
+
+    final stepGeometry =
+        IntegratedNavigationService.instance.currentStepGeometry;
+
+    if (stepGeometry.isEmpty) {
+      print('⚠️ No hay geometría disponible para simular');
+      TtsService.instance.speak('No hay ruta disponible para simular');
+      return;
+    }
+
+    print(
+      '🚶 Iniciando simulación de caminata con ${stepGeometry.length} puntos',
+    );
+
+    // Anunciar inicio
+    TtsService.instance.speak('Comenzando navegación.');
+    _showSuccessNotification('Simulación de caminata iniciada');
+
+    // Esperar 2 segundos y leer primera instrucción de calle
+    Timer(const Duration(seconds: 2), () {
+      if (walkStep.streetInstructions != null &&
+          walkStep.streetInstructions!.isNotEmpty) {
+        final firstInstruction = walkStep.streetInstructions!.first;
+        print('🗣️ Primera instrucción: $firstInstruction');
+        TtsService.instance.speak(firstInstruction, urgent: true);
+        _currentWalkInstructionIndex = 1;
+      }
+    });
+
+    // Calcular puntos por instrucción para distribuir anuncios
+    final pointsPerInstruction = walkStep.streetInstructions != null
+        ? (stepGeometry.length / walkStep.streetInstructions!.length).ceil()
+        : stepGeometry.length;
+
+    print('📊 Puntos por instrucción: $pointsPerInstruction');
+
+    // Simular movimiento a lo largo de la geometría
+    int currentPointIndex = 0;
+    final totalPoints = stepGeometry.length;
+    int pointsSinceLastAnnouncement = 0;
+
+    // Velocidad variable: más lento al inicio y en cambios de dirección
+    int baseIntervalMs = 2000; // 2 segundos base
+    int currentIntervalMs = baseIntervalMs;
+
+    void scheduleNextStep() {
+      if (currentPointIndex >= totalPoints) {
+        // Llegó al final
+        _onWalkSimulationComplete(walkStep);
+        return;
+      }
+
+      // Actualizar posición simulada
+      final currentPoint = stepGeometry[currentPointIndex];
+
+      // Calcular velocidad basada en el cambio de dirección
+      if (currentPointIndex > 0 && currentPointIndex < totalPoints - 1) {
+        final prevPoint = stepGeometry[currentPointIndex - 1];
+        final nextPoint = stepGeometry[currentPointIndex + 1];
+
+        // Detectar cambio brusco de dirección (posible giro)
+        final angle1 = _calculateBearing(prevPoint, currentPoint);
+        final angle2 = _calculateBearing(currentPoint, nextPoint);
+        final angleDiff = (angle2 - angle1).abs();
+
+        // Si hay un giro significativo (>30 grados), ir más lento
+        if (angleDiff > 30 && angleDiff < 330) {
+          currentIntervalMs = (baseIntervalMs * 1.5).toInt(); // 50% más lento
+        } else {
+          currentIntervalMs = baseIntervalMs; // Velocidad normal
+        }
+      }
+
+      final simulatedPosition = Position(
+        latitude: currentPoint.latitude,
+        longitude: currentPoint.longitude,
+        timestamp: DateTime.now(),
+        accuracy: 5.0,
+        altitude: 0.0,
+        altitudeAccuracy: 0.0,
+        heading: currentPointIndex > 0
+            ? _calculateBearing(
+                stepGeometry[currentPointIndex - 1],
+                currentPoint,
+              )
+            : 0.0,
+        headingAccuracy: 0.0,
+        speed: 1.4, // ~5 km/h velocidad de caminata
+        speedAccuracy: 0.0,
+      );
+
+      // Inyectar posición
+      IntegratedNavigationService.instance.simulatePosition(simulatedPosition);
+
+      setState(() {
+        _currentPosition = simulatedPosition;
+      });
+
+      final progress = ((currentPointIndex / totalPoints) * 100)
+          .toStringAsFixed(0);
+      print(
+        '🚶 Punto $currentPointIndex/$totalPoints ($progress%) - Intervalo: ${currentIntervalMs}ms',
+      );
+
+      pointsSinceLastAnnouncement++;
+
+      // Anunciar siguiente instrucción de calle progresivamente
+      if (walkStep.streetInstructions != null &&
+          _currentWalkInstructionIndex < walkStep.streetInstructions!.length &&
+          pointsSinceLastAnnouncement >= pointsPerInstruction) {
+        final nextInstruction =
+            walkStep.streetInstructions![_currentWalkInstructionIndex];
+        print(
+          '🗣️ Anunciando instrucción ${_currentWalkInstructionIndex + 1}/${walkStep.streetInstructions!.length}: $nextInstruction',
+        );
+        TtsService.instance.speak(nextInstruction, urgent: true);
+        _currentWalkInstructionIndex++;
+        pointsSinceLastAnnouncement = 0;
+      }
+
+      // Programar siguiente paso
+      currentPointIndex++;
+      _walkSimulationTimer = Timer(
+        Duration(milliseconds: currentIntervalMs),
+        scheduleNextStep,
+      );
+    }
+
+    // Iniciar simulación
+    scheduleNextStep();
+  }
+
+  /// Calcula el ángulo de dirección entre dos puntos (bearing)
+  double _calculateBearing(LatLng from, LatLng to) {
+    final lat1 = from.latitude * math.pi / 180;
+    final lat2 = to.latitude * math.pi / 180;
+    final dLon = (to.longitude - from.longitude) * math.pi / 180;
+
+    final y = math.sin(dLon) * math.cos(lat2);
+    final x =
+        math.cos(lat1) * math.sin(lat2) -
+        math.sin(lat1) * math.cos(lat2) * math.cos(dLon);
+
+    final bearing = math.atan2(y, x) * 180 / math.pi;
+    return (bearing + 360) % 360; // Normalizar a 0-360
+  }
+
+  /// Finaliza la simulación de caminata
+  void _onWalkSimulationComplete(NavigationStep walkStep) {
+    print('✅ Simulación de caminata completada');
+
+    // Forzar posición final en el paradero
+    if (walkStep.location != null) {
+      final finalPosition = Position(
+        latitude: walkStep.location!.latitude,
+        longitude: walkStep.location!.longitude,
+        timestamp: DateTime.now(),
+        accuracy: 3.0,
+        altitude: 0.0,
+        altitudeAccuracy: 0.0,
+        heading: 0.0,
+        headingAccuracy: 0.0,
+        speed: 0.0,
+        speedAccuracy: 0.0,
+      );
+
+      print(
+        '🚌 [ARRIVAL] Forzando posición en paradero: ${walkStep.location!.latitude}, ${walkStep.location!.longitude}',
+      );
+
+      IntegratedNavigationService.instance.simulatePosition(finalPosition);
+
+      setState(() {
+        _currentPosition = finalPosition;
+      });
+
+      // Centrar mapa en el paradero
+      _moveMap(
+        LatLng(finalPosition.latitude, finalPosition.longitude),
+        16.0, // Zoom cercano para ver el paradero
+      );
+      print('🗺️ [ARRIVAL] Mapa centrado en paradero');
+    }
+
+    // Esperar 1 segundo antes de anunciar para evitar interrupciones
+    Future.delayed(const Duration(seconds: 1), () {
+      // Anunciar llegada al paradero + información de la micro
+      String arrivalMessage = 'Has llegado al paradero';
+
+      // Buscar el siguiente paso para ver qué micro tomar
+      final activeNav = IntegratedNavigationService.instance.activeNavigation;
+      print('🚌 [ARRIVAL] activeNavigation: ${activeNav != null}');
+
+      if (activeNav != null) {
+        final currentStepIndex = activeNav.currentStepIndex;
+        print('🚌 [ARRIVAL] currentStepIndex: $currentStepIndex');
+        print('🚌 [ARRIVAL] total steps: ${activeNav.steps.length}');
+
+        if (currentStepIndex + 1 < activeNav.steps.length) {
+          final nextStep = activeNav.steps[currentStepIndex + 1];
+          print('🚌 [ARRIVAL] nextStep.type: ${nextStep.type}');
+          print('🚌 [ARRIVAL] nextStep.busRoute: ${nextStep.busRoute}');
+
+          if (nextStep.type == 'wait_bus' && nextStep.busRoute != null) {
+            // Tiempo estimado de llegada de la micro (entre 5-10 minutos)
+            final estimatedArrivalMinutes = 7; // Promedio
+            arrivalMessage += '. Debes tomar el bus ${nextStep.busRoute}. ';
+            arrivalMessage +=
+                'Tiempo estimado de llegada: $estimatedArrivalMinutes minutos';
+
+            print('🚌 [ARRIVAL] Mensaje completo: $arrivalMessage');
+
+            // Mostrar notificación con la información
+            _showSuccessNotification(
+              'Bus ${nextStep.busRoute} en $estimatedArrivalMinutes min',
+            );
+
+            // ⭐ AVANZAR AL SIGUIENTE PASO (wait_bus)
+            print('🚌 [ARRIVAL] Avanzando al paso wait_bus');
+            IntegratedNavigationService.instance.advanceToNextStep();
+
+            // Actualizar mapa con el nuevo estado
+            setState(() {
+              final updatedNav =
+                  IntegratedNavigationService.instance.activeNavigation;
+              if (updatedNav != null) {
+                _updateNavigationMapState(updatedNav);
+              }
+            });
+          } else {
+            print('🚌 [ARRIVAL] No es wait_bus o no tiene busRoute');
+          }
+        } else {
+          print('🚌 [ARRIVAL] No hay siguiente paso');
+        }
+      } else {
+        print('🚌 [ARRIVAL] activeNavigation es NULL');
+      }
+
+      print('🚌 [ARRIVAL] Anunciando: $arrivalMessage');
+      TtsService.instance.speak(arrivalMessage, urgent: true);
+      _currentWalkInstructionIndex = 0;
+    });
   }
 
   void _centerOnUserLocation() {
@@ -665,6 +1073,12 @@ class _MapScreenState extends State<MapScreen> {
 
     _moveMap(target, 14.0);
     _showNavigationNotification('Centrando mapa en tu ubicación');
+
+    // Reactivar auto-centrado cuando el usuario presiona el botón
+    setState(() {
+      _autoCenter = true;
+      _userManuallyMoved = false;
+    });
   }
 
   void _moveMap(LatLng target, double zoom) {
@@ -1857,6 +2271,9 @@ class _MapScreenState extends State<MapScreen> {
 
   /// 🚌 NAVEGACIÓN INTEGRADA CON MOOVIT 🚌
   /// Inicia navegación completa usando scraping de Moovit + GTFS + GPS
+  /// Inicia navegación integrada usando Moovit + IntegratedNavigationService
+  /// Este método configura toda la navegación paso a paso con actualización
+  /// automática del mapa según el progreso del usuario
   Future<void> _startIntegratedMoovitNavigation(
     String destination,
     double destLat,
@@ -1868,11 +2285,15 @@ class _MapScreenState extends State<MapScreen> {
       return;
     }
 
-    // Anunciar inicio
-    TtsService.instance.speak('Buscando ruta hacia $destination usando Red');
-
     try {
-      // Iniciar navegación integrada con Moovit
+      // Anunciar inicio de búsqueda
+      TtsService.instance.speak('Buscando ruta hacia $destination');
+
+      // Iniciar navegación integrada
+      // Este servicio maneja: scraping Moovit, construcción de pasos,
+      // geometrías separadas por paso, y anuncios TTS
+      print('🗺️ [MAP] Antes de llamar startNavigation...');
+
       final navigation = await IntegratedNavigationService.instance
           .startNavigation(
             originLat: _currentPosition!.latitude,
@@ -1882,28 +2303,73 @@ class _MapScreenState extends State<MapScreen> {
             destinationName: destination,
           );
 
-      // Configurar callbacks para actualizar UI
+      print('🗺️ [MAP] startNavigation completado exitosamente');
+      print('🗺️ [MAP] Navigation tiene ${navigation.steps.length} pasos');
+
+      // ══════════════════════════════════════════════════════════════
+      // CONFIGURAR CALLBACKS PARA ACTUALIZAR UI CUANDO CAMBIA EL PASO
+      // ══════════════════════════════════════════════════════════════
+
+      print('🗺️ [MAP] Configurando callbacks...');
+
       IntegratedNavigationService.instance.onStepChanged = (step) {
         if (!mounted) return;
 
         setState(() {
           _hasActiveTrip = true;
 
-          // Actualizar geometría al paso actual
-          _polylines = [
-            Polyline(
-              points: IntegratedNavigationService.instance.currentStepGeometry,
-              color: const Color(0xFFE30613),
-              strokeWidth: 5.0,
-            ),
-          ];
+          // Actualizar polyline con geometría del paso ACTUAL únicamente
+          final stepGeometry =
+              IntegratedNavigationService.instance.currentStepGeometry;
+          _polylines = stepGeometry.isNotEmpty
+              ? [
+                  Polyline(
+                    points: stepGeometry,
+                    color: const Color(0xFFE30613), // Color Red
+                    strokeWidth: 5.0,
+                  ),
+                ]
+              : [];
+
+          // Actualizar marcadores: solo paso actual + destino final
+          final activeNav =
+              IntegratedNavigationService.instance.activeNavigation;
+          if (activeNav != null) {
+            _updateNavigationMarkers(step, activeNav);
+          }
+
+          // Actualizar instrucciones: usar instrucciones detalladas de OSRM si están disponibles
+          if (step.streetInstructions != null &&
+              step.streetInstructions!.isNotEmpty) {
+            _currentInstructions = [
+              step.instruction, // Instrucción principal
+              '', // Línea en blanco
+              'Sigue estos pasos:', // Encabezado
+              ...step.streetInstructions!, // Instrucciones detalladas por calle
+            ];
+            _currentInstructionStep = 0;
+            print(
+              '📝 Instrucciones detalladas actualizadas: ${step.streetInstructions!.length} pasos',
+            );
+          } else {
+            // Fallback: solo instrucción principal
+            _currentInstructions = [step.instruction];
+            _currentInstructionStep = 0;
+          }
         });
 
-        // Actualizar notificación con paso actual
+        // Anunciar nuevo paso y mostrar notificación
         _showNavigationNotification(step.instruction);
         print('📍 Paso actual: ${step.instruction}');
+
+        // Si hay instrucciones detalladas, anunciar la primera
+        if (step.streetInstructions != null &&
+            step.streetInstructions!.isNotEmpty) {
+          print('🗣️ Primera instrucción: ${step.streetInstructions!.first}');
+        }
       };
 
+      // Callback cuando llega a un paradero
       IntegratedNavigationService.instance.onArrivalAtStop = (stopId) {
         if (!mounted) return;
         print('✅ Llegaste al paradero: $stopId');
@@ -1933,50 +2399,64 @@ class _MapScreenState extends State<MapScreen> {
         Vibration.vibrate(duration: 1000);
       };
 
-      // Dibujar ruta en el mapa con estilo Red
-      setState(() {
-        _polylines = [
-          Polyline(
-            points: IntegratedNavigationService.instance.currentStepGeometry,
-            color: const Color(0xFFE30613), // Color característico de buses Red
-            strokeWidth: 5.0,
-          ),
-        ];
+      // Callback cuando la geometría se actualiza (posición del usuario cambia)
+      IntegratedNavigationService.instance.onGeometryUpdated = () {
+        if (!mounted) return;
 
-        // Agregar marcadores de paraderos y puntos de interés
-        _markers = navigation.steps.where((s) => s.location != null).map((s) {
-          IconData icon;
-          Color color;
+        setState(() {
+          // Actualizar polyline con geometría recortada según posición actual
+          final stepGeometry =
+              IntegratedNavigationService.instance.currentStepGeometry;
 
-          switch (s.type) {
-            case 'wait_bus':
-              icon = Icons.directions_bus;
-              color = Colors.orange;
-              break;
-            case 'ride_bus':
-              icon = Icons.drive_eta;
-              color = Colors.red;
-              break;
-            case 'transfer':
-              icon = Icons.swap_horiz;
-              color = Colors.purple;
-              break;
-            case 'arrival':
-              icon = Icons.flag;
-              color = Colors.green;
-              break;
-            default: // walk
-              icon = Icons.directions_walk;
-              color = Colors.blue;
+          if (stepGeometry.isNotEmpty) {
+            _polylines = [
+              Polyline(
+                points: stepGeometry,
+                color: const Color(0xFFE30613), // Color Red
+                strokeWidth: 5.0,
+              ),
+            ];
+            print(
+              '🗺️ [GEOMETRY] Polyline actualizada: ${stepGeometry.length} puntos',
+            );
           }
 
-          return Marker(
-            point: s.location!,
-            child: Icon(icon, color: color, size: 30),
-          );
-        }).toList();
+          // Actualizar posición del usuario
+          final position = IntegratedNavigationService.instance.lastPosition;
+          if (position != null) {
+            _currentPosition = position;
 
+            // Actualizar marcadores sin cambiar el paso
+            final activeNav =
+                IntegratedNavigationService.instance.activeNavigation;
+            if (activeNav != null && activeNav.currentStep != null) {
+              _updateNavigationMarkers(activeNav.currentStep!, activeNav);
+            }
+
+            // AUTO-CENTRAR el mapa si está en simulación y no se ha desactivado manualmente
+            if (_autoCenter && !_userManuallyMoved) {
+              final target = LatLng(position.latitude, position.longitude);
+              _moveMap(target, _mapController.camera.zoom);
+              print('🗺️ [AUTO-CENTER] Centrando en posición simulada');
+            }
+          }
+        });
+      };
+
+      // Dibujar mapa inicial con geometría del primer paso
+      setState(() {
+        _hasActiveTrip = true;
         _selectedDestinationName = destination;
+
+        print('🗺️ [MAP] Llamando _updateNavigationMapState...');
+
+        // Configurar polyline y marcadores iniciales
+        _updateNavigationMapState(navigation);
+
+        print(
+          '🗺️ [MAP] Polylines después de actualizar: ${_polylines.length}',
+        );
+        print('🗺️ [MAP] Markers después de actualizar: ${_markers.length}');
       });
 
       _showSuccessNotification(
@@ -1990,13 +2470,189 @@ class _MapScreenState extends State<MapScreen> {
     }
   }
 
+  /// Actualiza el estado del mapa (polylines y marcadores) para la navegación activa
+  void _updateNavigationMapState(ActiveNavigation navigation) {
+    final stepGeometry =
+        IntegratedNavigationService.instance.currentStepGeometry;
+
+    print(
+      '🗺️ [MAP] Actualizando mapa - Geometría: ${stepGeometry.length} puntos',
+    );
+
+    // Actualizar polyline del paso actual
+    _polylines = stepGeometry.isNotEmpty
+        ? [
+            Polyline(
+              points: stepGeometry,
+              color: const Color(0xFFE30613), // Color Red
+              strokeWidth: 5.0,
+            ),
+          ]
+        : [];
+
+    // Actualizar marcadores
+    _updateNavigationMarkers(navigation.currentStep, navigation);
+  }
+
+  /// Actualiza los marcadores del mapa durante la navegación
+  /// Muestra: (1) marcador del paso actual, (2) bandera del destino final, (3) ubicación del usuario
+  void _updateNavigationMarkers(
+    NavigationStep? currentStep,
+    ActiveNavigation navigation,
+  ) {
+    _markers = [];
+
+    // Marcador de la ubicación del usuario (azul, siempre visible)
+    if (_currentPosition != null) {
+      _markers.add(
+        Marker(
+          point: LatLng(
+            _currentPosition!.latitude,
+            _currentPosition!.longitude,
+          ),
+          child: Container(
+            decoration: BoxDecoration(
+              color: Colors.blue,
+              shape: BoxShape.circle,
+              border: Border.all(color: Colors.white, width: 3),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.blue.withOpacity(0.5),
+                  blurRadius: 8,
+                  spreadRadius: 2,
+                ),
+              ],
+            ),
+            child: const Icon(Icons.navigation, color: Colors.white, size: 20),
+          ),
+        ),
+      );
+    }
+
+    // Marcador del paso actual (paradero o punto de acción)
+    if (currentStep?.location != null) {
+      final Widget markerWidget;
+
+      if (currentStep!.type == 'walk' || currentStep.type == 'wait_bus') {
+        // Icono de paradero de bus
+        markerWidget = Container(
+          width: 40,
+          height: 40,
+          decoration: BoxDecoration(
+            color: Colors.orange,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Colors.white, width: 2),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.orange.withOpacity(0.5),
+                blurRadius: 8,
+                spreadRadius: 2,
+              ),
+            ],
+          ),
+          child: const Icon(
+            Icons.directions_bus,
+            color: Colors.white,
+            size: 24,
+          ),
+        );
+      } else {
+        final (icon, color) = _getStepMarkerStyle(currentStep.type);
+        markerWidget = Icon(icon, color: color, size: 30);
+      }
+
+      _markers.add(Marker(point: currentStep.location!, child: markerWidget));
+    }
+
+    // Marcador del destino final (siempre visible)
+    final lastStep = navigation.steps.last;
+    if (lastStep.location != null) {
+      _markers.add(
+        Marker(
+          point: lastStep.location!,
+          child: Container(
+            decoration: BoxDecoration(
+              color: Colors.green,
+              shape: BoxShape.circle,
+              border: Border.all(color: Colors.white, width: 3),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.green.withOpacity(0.5),
+                  blurRadius: 8,
+                  spreadRadius: 2,
+                ),
+              ],
+            ),
+            child: const Icon(Icons.flag, color: Colors.white, size: 24),
+          ),
+        ),
+      );
+    }
+  }
+
+  /// Retorna el icono y color apropiado para cada tipo de paso
+  (IconData, Color) _getStepMarkerStyle(String stepType) {
+    return switch (stepType) {
+      'walk' => (Icons.directions_walk, Colors.blue),
+      'wait_bus' => (Icons.directions_bus, Colors.orange),
+      'ride_bus' => (Icons.drive_eta, Colors.red),
+      'transfer' => (Icons.swap_horiz, Colors.purple),
+      'arrival' => (Icons.flag, Colors.green),
+      _ => (Icons.navigation, Colors.grey),
+    };
+  }
+
   /// Comando de voz para controlar navegación integrada
   void _onIntegratedNavigationVoiceCommand(String command) async {
     final normalized = command.toLowerCase();
 
+    // Comandos para leer instrucciones
+    if (normalized.contains('dónde estoy') ||
+        normalized.contains('dónde me encuentro') ||
+        normalized.contains('ubicación actual')) {
+      _repeatCurrentInstruction();
+      return;
+    }
+
+    if (normalized.contains('todas las instrucciones') ||
+        normalized.contains('resumen de ruta') ||
+        normalized.contains('leer ruta completa')) {
+      _readAllInstructions();
+      return;
+    }
+
+    if (normalized.contains('siguiente paso') ||
+        normalized.contains('próximo paso') ||
+        normalized.contains('siguiente instrucción')) {
+      _readNextInstruction();
+      return;
+    }
+
     if (normalized.contains('repetir') ||
+        normalized.contains('otra vez') ||
         normalized.contains('qué debo hacer')) {
-      IntegratedNavigationService.instance.repeatCurrentInstruction();
+      _repeatCurrentInstruction();
+      return;
+    }
+
+    // Comando para ocultar/mostrar panel visual (para acompañantes)
+    if (normalized.contains('mostrar instrucciones') ||
+        normalized.contains('ver instrucciones')) {
+      setState(() {
+        _showInstructionsPanel = true;
+        _autoReadInstructions = false;
+      });
+      TtsService.instance.speak('Mostrando panel de instrucciones');
+      return;
+    }
+
+    if (normalized.contains('ocultar instrucciones') ||
+        normalized.contains('cerrar panel')) {
+      setState(() {
+        _showInstructionsPanel = false;
+        _autoReadInstructions = true;
+      });
+      TtsService.instance.speak('Panel ocultado, usando modo audio');
       return;
     }
 
@@ -2008,16 +2664,11 @@ class _MapScreenState extends State<MapScreen> {
         _isTrackingRoute = false;
         _polylines.clear();
         _markers.clear();
+        _currentInstructions.clear();
+        _showInstructionsPanel = false;
       });
       _showWarningNotification('Navegación cancelada');
-      return;
-    }
-
-    if (normalized.contains('siguiente paso')) {
-      // El servicio automáticamente avanza cuando llegas a cada punto
-      TtsService.instance.speak(
-        'Continúa siguiendo las instrucciones actuales',
-      );
+      TtsService.instance.speak('Navegación cancelada');
       return;
     }
 
@@ -2544,6 +3195,11 @@ class _MapScreenState extends State<MapScreen> {
       return;
     }
 
+    // Mostrar loading en el botón del micrófono
+    setState(() {
+      _isCalculatingRoute = true;
+    });
+
     // Mostrar notificación visual simple
     _showSuccessNotification('Calculando ruta');
 
@@ -2561,18 +3217,128 @@ class _MapScreenState extends State<MapScreen> {
 
       // Iniciar navegación integrada
       // Este método ya se encarga de anunciar el resumen y el primer paso
-      await IntegratedNavigationService.instance.startNavigation(
-        originLat: originLat,
-        originLon: originLon,
-        destLat: destLat,
-        destLon: destLon,
-        destinationName: destName,
+      print('🗺️ [ANNOUNCE_NAV] Llamando startNavigation...');
+      final navigation = await IntegratedNavigationService.instance
+          .startNavigation(
+            originLat: originLat,
+            originLon: originLon,
+            destLat: destLat,
+            destLon: destLon,
+            destinationName: destName,
+            existingItinerary:
+                route.redBusItinerary, // ✅ Pasar itinerario ya obtenido
+          );
+
+      print(
+        '🗺️ [ANNOUNCE_NAV] startNavigation completado, actualizando mapa...',
       );
 
-      // Mostrar ruta en el mapa
-      _displayCombinedRoute(route);
+      // ✅ Extraer instrucciones de caminata
+      final currentStep = navigation.currentStep;
+      if (currentStep?.streetInstructions != null &&
+          currentStep!.streetInstructions!.isNotEmpty) {
+        setState(() {
+          _currentInstructions = currentStep.streetInstructions!;
+          _currentInstructionStep = 0;
+          // Solo mostrar panel si NO está en modo auto-lectura (para videntes)
+          _showInstructionsPanel = !_autoReadInstructions;
+        });
+        print(
+          '🗺️ [INSTRUCCIONES] Cargadas ${_currentInstructions.length} instrucciones',
+        );
+
+        // Para usuarios no videntes: anunciar que hay instrucciones disponibles
+        if (_autoReadInstructions) {
+          TtsService.instance.speak(
+            'Ruta calculada con ${_currentInstructions.length} pasos. '
+            'Di "todas las instrucciones" para escucharlas, '
+            'o "siguiente paso" para avanzar.',
+            urgent: true,
+          );
+        }
+      }
+
+      // ✅ ACTUALIZAR MAPA: Configurar callbacks y dibujar geometría del paso actual
+      IntegratedNavigationService.instance.onStepChanged = (step) {
+        print('🗺️ [CALLBACK] Paso cambiado a: ${step.type}');
+
+        // Actualizar instrucciones si el nuevo paso tiene instrucciones de calle
+        if (step.streetInstructions != null &&
+            step.streetInstructions!.isNotEmpty) {
+          setState(() {
+            _currentInstructions = step.streetInstructions!;
+            _currentInstructionStep = 0;
+            // Solo mostrar panel si está en modo visual
+            _showInstructionsPanel = !_autoReadInstructions;
+          });
+
+          // Anunciar cambio de paso para usuarios no videntes
+          if (_autoReadInstructions && step.instruction.isNotEmpty) {
+            TtsService.instance.speak(
+              'Nuevo paso: ${step.instruction}',
+              urgent: true,
+            );
+          }
+        }
+
+        setState(() {
+          final activeNav =
+              IntegratedNavigationService.instance.activeNavigation;
+          if (activeNav != null) {
+            _updateNavigationMapState(activeNav);
+          }
+        });
+      };
+
+      // Callback para actualizar geometría en tiempo real
+      IntegratedNavigationService.instance.onGeometryUpdated = () {
+        if (!mounted) return;
+
+        setState(() {
+          // Actualizar polyline con geometría recortada según posición actual
+          final stepGeometry =
+              IntegratedNavigationService.instance.currentStepGeometry;
+
+          if (stepGeometry.isNotEmpty) {
+            _polylines = [
+              Polyline(
+                points: stepGeometry,
+                color: const Color(0xFFE30613), // Color Red
+                strokeWidth: 5.0,
+              ),
+            ];
+          }
+
+          // Actualizar posición del usuario y marcadores
+          final position = IntegratedNavigationService.instance.lastPosition;
+          if (position != null) {
+            _currentPosition = position;
+
+            final activeNav =
+                IntegratedNavigationService.instance.activeNavigation;
+            if (activeNav != null && activeNav.currentStep != null) {
+              _updateNavigationMarkers(activeNav.currentStep!, activeNav);
+            }
+          }
+        });
+      };
+
+      setState(() {
+        print('🗺️ [ANNOUNCE_NAV] Llamando _updateNavigationMapState...');
+        _updateNavigationMapState(navigation);
+        _isCalculatingRoute = false; // Terminar loading
+      });
+
+      print('🗺️ [ANNOUNCE_NAV] Mapa actualizado exitosamente');
+
+      // NO llamar _displayCombinedRoute aquí porque IntegratedNavigationService
+      // ya maneja el dibujo del mapa paso a paso según el progreso de la navegación
+      // _displayCombinedRoute(route); // ❌ COMENTADO - causa conflicto
     } catch (e) {
       print('Error al iniciar navegación: $e');
+      setState(() {
+        _isCalculatingRoute = false; // Terminar loading en caso de error
+      });
       await TtsService.instance.speak(
         'Error al iniciar navegación. Intenta nuevamente.',
         urgent: true,
@@ -2968,6 +3734,126 @@ class _MapScreenState extends State<MapScreen> {
     }
   }
 
+  void _showWalkingInstructions() {
+    if (_currentInstructions.isEmpty) {
+      TtsService.instance.speak('No hay instrucciones de caminata disponibles');
+      return;
+    }
+
+    // Para usuarios no videntes: leer resumen en lugar de mostrar panel
+    if (_autoReadInstructions) {
+      _readAllInstructions();
+    } else {
+      // Solo para acompañantes videntes
+      setState(() {
+        _showInstructionsPanel = !_showInstructionsPanel;
+      });
+
+      if (_showInstructionsPanel) {
+        TtsService.instance.speak(
+          'Mostrando ${_currentInstructions.length} instrucciones de caminata',
+        );
+      } else {
+        TtsService.instance.speak('Ocultando instrucciones');
+      }
+    }
+  }
+
+  void _readAllInstructions() {
+    final total = _currentInstructions.length;
+    TtsService.instance.speak(
+      'Tienes $total pasos en tu ruta. Voy a leerlos.',
+      urgent: true,
+    );
+
+    Future.delayed(const Duration(seconds: 2), () {
+      for (int i = 0; i < _currentInstructions.length; i++) {
+        Future.delayed(Duration(seconds: i * 4), () {
+          TtsService.instance.speak(
+            'Paso ${i + 1} de $total: ${_currentInstructions[i]}',
+            urgent: false,
+          );
+        });
+      }
+    });
+  }
+
+  Widget _buildMicrophoneContent() {
+    if (_isCalculatingRoute) {
+      return const Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          CircularProgressIndicator(color: Colors.white, strokeWidth: 3),
+          SizedBox(height: 12),
+          Text(
+            'Calculando ruta...',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 14,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ],
+      );
+    }
+
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Icon(
+          _isListening ? Icons.mic : Icons.mic_off,
+          color: Colors.white,
+          size: 48,
+        ),
+
+        // Mostrar instrucciones disponibles en modo audio
+        if (_currentInstructions.isNotEmpty &&
+            _autoReadInstructions &&
+            !_isListening) ...[
+          const SizedBox(height: 8),
+          Text(
+            '${_currentInstructions.length} pasos',
+            style: const TextStyle(
+              color: Colors.white70,
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          const Text(
+            'Presiona para hablar',
+            style: TextStyle(color: Colors.white60, fontSize: 10),
+          ),
+        ],
+
+        if (_currentPosition?.heading != null) ...[
+          const SizedBox(height: 8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Transform.rotate(
+                angle: _currentPosition!.heading * 3.14159 / 180,
+                child: const Icon(
+                  Icons.navigation,
+                  color: Colors.white70,
+                  size: 20,
+                ),
+              ),
+              const SizedBox(width: 6),
+              Text(
+                '${_currentPosition!.heading.toStringAsFixed(0)}°',
+                style: const TextStyle(
+                  color: Colors.white70,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ],
+    );
+  }
+
   void _startMicrophoneCalibration() async {
     if (_isListening) {
       _showWarningNotification('Detén la grabación antes de calibrar');
@@ -3068,10 +3954,9 @@ class _MapScreenState extends State<MapScreen> {
   @override
   void dispose() {
     _resultDebounce?.cancel();
-    _orientationTimer?.cancel();
     _feedbackTimer?.cancel();
-    _compassSubscription?.cancel();
     _confirmationTimer?.cancel();
+    _walkSimulationTimer?.cancel(); // Cancelar simulación de caminata
 
     // Liberar servicios de tracking
     RouteTrackingService.instance.dispose();
@@ -3135,7 +4020,7 @@ class _MapScreenState extends State<MapScreen> {
                       minZoom: 10.0,
                       maxZoom: 18.0,
                       initialRotation:
-                          -_heading, // Rota el mapa según orientación
+                          0.0, // Sin rotación para mejor rendimiento
                       onMapReady: () {
                         _isMapReady = true;
 
@@ -3150,6 +4035,19 @@ class _MapScreenState extends State<MapScreen> {
                         if (_pendingRotation != null) {
                           _mapController.rotate(_pendingRotation!);
                           _pendingRotation = null;
+                        }
+                      },
+                      // Detectar cuando el usuario mueve el mapa manualmente
+                      onPositionChanged: (position, hasGesture) {
+                        if (hasGesture && _autoCenter) {
+                          // Usuario movió el mapa con gesto -> desactivar auto-centrado
+                          setState(() {
+                            _userManuallyMoved = true;
+                            _autoCenter = false;
+                          });
+                          print(
+                            '🗺️ [MANUAL] Auto-centrado desactivado por gesto del usuario',
+                          );
                         }
                       },
                       // Optimizaciones de rendimiento
@@ -3172,19 +4070,23 @@ class _MapScreenState extends State<MapScreen> {
                   ),
           ),
 
-          // Indicador de brújula con orientación actual
+          // Botón de TEST: Simular llegada al paradero o bus
           Positioned(
             left: 20,
-            bottom: 400, // Movido más arriba desde 280 a 430
+            bottom: 400,
             child: GestureDetector(
-              onTap: _announceCurrentOrientation,
+              onTap: _simulateArrivalAtStop,
               child: Container(
                 width: 60,
                 height: 80,
-                decoration: const BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.all(Radius.circular(10)),
-                  boxShadow: [
+                decoration: BoxDecoration(
+                  color:
+                      IntegratedNavigationService.instance.activeNavigation !=
+                          null
+                      ? Colors.green
+                      : Colors.grey,
+                  borderRadius: const BorderRadius.all(Radius.circular(10)),
+                  boxShadow: const [
                     BoxShadow(
                       color: Colors.black26,
                       blurRadius: 4,
@@ -3195,25 +4097,19 @@ class _MapScreenState extends State<MapScreen> {
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Transform.rotate(
-                      angle: _heading * (3.14159 / 180), // Convertir a radianes
-                      child: const Icon(
-                        Icons.navigation,
-                        color: Colors.red,
-                        size: 28,
-                      ),
-                    ),
+                    const Icon(Icons.bug_report, color: Colors.white, size: 28),
                     const SizedBox(height: 4),
                     Text(
-                      _currentDirection,
+                      _getTestButtonLabel(),
                       style: const TextStyle(
                         fontSize: 10,
                         fontWeight: FontWeight.bold,
+                        color: Colors.white,
                       ),
                     ),
-                    Text(
-                      '${_heading.toInt()}°',
-                      style: const TextStyle(fontSize: 8, color: Colors.grey),
+                    const Text(
+                      'Simular',
+                      style: TextStyle(fontSize: 8, color: Colors.white70),
                     ),
                   ],
                 ),
@@ -3351,6 +4247,15 @@ class _MapScreenState extends State<MapScreen> {
             ),
           ),
 
+          // Panel de instrucciones detalladas (OSRM)
+          if (_hasActiveTrip)
+            Positioned(
+              left: 12,
+              right: 12,
+              bottom: 180,
+              child: _buildInstructionsPanel(),
+            ),
+
           // Panel inferior
           Positioned(
             left: 0,
@@ -3457,7 +4362,7 @@ class _MapScreenState extends State<MapScreen> {
                   ),
                   const SizedBox(height: 16),
 
-                  // Botón del micrófono
+                  // Botón del micrófono (con instrucciones de caminata integradas)
                   Semantics(
                     label: _isListening
                         ? 'Botón micrófono, escuchando'
@@ -3469,12 +4374,17 @@ class _MapScreenState extends State<MapScreen> {
                     enabled: true,
                     child: GestureDetector(
                       onTap: _toggleMicrophone,
+                      onLongPress: _showWalkingInstructions,
                       child: AnimatedContainer(
                         duration: const Duration(milliseconds: 300),
                         width: double.infinity,
                         height: 120,
                         decoration: BoxDecoration(
-                          color: _isListening ? Colors.red : Colors.black,
+                          color: _isCalculatingRoute
+                              ? Colors.blue.shade700
+                              : _isListening
+                              ? Colors.red
+                              : Colors.black,
                           borderRadius: BorderRadius.circular(24),
                           boxShadow: _isListening
                               ? [
@@ -3484,17 +4394,199 @@ class _MapScreenState extends State<MapScreen> {
                                     spreadRadius: 5,
                                   ),
                                 ]
+                              : _isCalculatingRoute
+                              ? [
+                                  BoxShadow(
+                                    color: Colors.blue.withValues(alpha: 0.3),
+                                    blurRadius: 20,
+                                    spreadRadius: 5,
+                                  ),
+                                ]
                               : null,
                         ),
-                        child: Icon(
-                          _isListening ? Icons.mic : Icons.mic_off,
-                          color: Colors.white,
-                          size: 48,
-                        ),
+                        child: _buildMicrophoneContent(),
                       ),
                     ),
                   ),
                   const SizedBox(height: 12),
+
+                  // Panel expandible de instrucciones de caminata
+                  AnimatedSize(
+                    duration: const Duration(milliseconds: 300),
+                    curve: Curves.easeInOut,
+                    child:
+                        _showInstructionsPanel &&
+                            _currentInstructions.isNotEmpty
+                        ? Container(
+                            margin: const EdgeInsets.only(bottom: 12),
+                            padding: const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                colors: [
+                                  Colors.blue.shade600,
+                                  Colors.blue.shade800,
+                                ],
+                                begin: Alignment.topLeft,
+                                end: Alignment.bottomRight,
+                              ),
+                              borderRadius: BorderRadius.circular(20),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.blue.withValues(alpha: 0.3),
+                                  blurRadius: 15,
+                                  offset: const Offset(0, 5),
+                                ),
+                              ],
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  mainAxisAlignment:
+                                      MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    const Row(
+                                      children: [
+                                        Icon(
+                                          Icons.directions_walk,
+                                          color: Colors.white,
+                                          size: 24,
+                                        ),
+                                        SizedBox(width: 8),
+                                        Text(
+                                          'Instrucciones',
+                                          style: TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 18,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    GestureDetector(
+                                      onTap: () {
+                                        setState(() {
+                                          _showInstructionsPanel = false;
+                                        });
+                                      },
+                                      child: Container(
+                                        padding: const EdgeInsets.all(4),
+                                        decoration: BoxDecoration(
+                                          color: Colors.white.withValues(
+                                            alpha: 0.2,
+                                          ),
+                                          borderRadius: BorderRadius.circular(
+                                            8,
+                                          ),
+                                        ),
+                                        child: const Icon(
+                                          Icons.close,
+                                          color: Colors.white,
+                                          size: 20,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 16),
+                                ListView.builder(
+                                  shrinkWrap: true,
+                                  physics: const NeverScrollableScrollPhysics(),
+                                  itemCount: _currentInstructions.length,
+                                  itemBuilder: (context, index) {
+                                    final instruction =
+                                        _currentInstructions[index];
+                                    final isFirst = index == 0;
+                                    return GestureDetector(
+                                      onTap: () {
+                                        TtsService.instance.speak(instruction);
+                                      },
+                                      child: Container(
+                                        margin: const EdgeInsets.only(
+                                          bottom: 12,
+                                        ),
+                                        padding: const EdgeInsets.all(12),
+                                        decoration: BoxDecoration(
+                                          color: isFirst
+                                              ? Colors.yellow.shade700
+                                              : Colors.white.withValues(
+                                                  alpha: 0.15,
+                                                ),
+                                          borderRadius: BorderRadius.circular(
+                                            12,
+                                          ),
+                                          border: Border.all(
+                                            color: isFirst
+                                                ? Colors.yellow.shade900
+                                                : Colors.white.withValues(
+                                                    alpha: 0.3,
+                                                  ),
+                                            width: 2,
+                                          ),
+                                        ),
+                                        child: Row(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Container(
+                                              width: 28,
+                                              height: 28,
+                                              decoration: BoxDecoration(
+                                                color: isFirst
+                                                    ? Colors.yellow.shade900
+                                                    : Colors.white.withValues(
+                                                        alpha: 0.3,
+                                                      ),
+                                                shape: BoxShape.circle,
+                                              ),
+                                              child: Center(
+                                                child: Text(
+                                                  '${index + 1}',
+                                                  style: TextStyle(
+                                                    color: isFirst
+                                                        ? Colors.white
+                                                        : Colors.white,
+                                                    fontSize: 14,
+                                                    fontWeight: FontWeight.bold,
+                                                  ),
+                                                ),
+                                              ),
+                                            ),
+                                            const SizedBox(width: 12),
+                                            Expanded(
+                                              child: Text(
+                                                instruction,
+                                                style: TextStyle(
+                                                  color: isFirst
+                                                      ? Colors.black87
+                                                      : Colors.white,
+                                                  fontSize: 15,
+                                                  fontWeight: isFirst
+                                                      ? FontWeight.w600
+                                                      : FontWeight.w500,
+                                                  height: 1.3,
+                                                ),
+                                              ),
+                                            ),
+                                            const SizedBox(width: 8),
+                                            Icon(
+                                              Icons.volume_up,
+                                              color: isFirst
+                                                  ? Colors.black54
+                                                  : Colors.white70,
+                                              size: 20,
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                ),
+                              ],
+                            ),
+                          )
+                        : const SizedBox.shrink(),
+                  ),
 
                   // Botón de calibración del micrófono
                   Row(

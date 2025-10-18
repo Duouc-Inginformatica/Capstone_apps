@@ -9,18 +9,39 @@ class ServerConfig {
   static final ServerConfig instance = ServerConfig._();
 
   static const String _prefsKey = 'server_base_url';
+  static const String _osrmPrefsKey = 'osrm_base_url';
   static const int _defaultPort = 8080;
   static const String _defaultScheme = 'http';
   static const String _fallbackHost = '127.0.0.1';
   static const String _fallbackBaseUrl = 'http://127.0.0.1:8080';
 
+  // OSRM Configuration
+  static const String _defaultOsrmUrl = 'https://router.project-osrm.org';
+  static const String _osrmProfile = 'foot'; // foot, car, bike
+
   final ValueNotifier<String> _baseUrlNotifier = ValueNotifier<String>('');
+  final ValueNotifier<String> _osrmUrlNotifier = ValueNotifier<String>(
+    _defaultOsrmUrl,
+  );
   SharedPreferences? _prefs;
   String? _cachedDefaultBaseUrl;
 
   ValueListenable<String> get baseUrlListenable => _baseUrlNotifier;
+  ValueListenable<String> get osrmUrlListenable => _osrmUrlNotifier;
 
   String get baseUrl => _baseUrlNotifier.value;
+  String get osrmUrl => _osrmUrlNotifier.value;
+  String get osrmProfile => _osrmProfile;
+
+  /// Construye URL de OSRM para routing
+  String getOsrmRouteUrl(
+    double originLon,
+    double originLat,
+    double destLon,
+    double destLat,
+  ) {
+    return '$osrmUrl/route/v1/$osrmProfile/$originLon,$originLat;$destLon,$destLat?overview=full&geometries=geojson';
+  }
 
   String get defaultBaseUrl => _cachedDefaultBaseUrl ?? _fallbackBaseUrl;
 
@@ -28,12 +49,36 @@ class ServerConfig {
     _prefs = await SharedPreferences.getInstance();
     await _ensureDefaultBaseUrl();
 
+    // Cargar URL del servidor backend
     final stored = _prefs?.getString(_prefsKey);
     if (stored != null && stored.trim().isNotEmpty) {
       final normalized = _normalizeBaseUrl(stored);
       _baseUrlNotifier.value = normalized;
     } else {
       _baseUrlNotifier.value = defaultBaseUrl;
+    }
+
+    // Cargar URL de OSRM (API pública por defecto)
+    final osrmStored = _prefs?.getString(_osrmPrefsKey);
+    if (osrmStored != null && osrmStored.trim().isNotEmpty) {
+      _osrmUrlNotifier.value = osrmStored;
+    } else {
+      _osrmUrlNotifier.value = _defaultOsrmUrl;
+    }
+  }
+
+  Future<void> updateOsrmUrl(String url) async {
+    final trimmed = url.trim();
+    _osrmUrlNotifier.value = trimmed.isEmpty ? _defaultOsrmUrl : trimmed;
+    if (_prefs != null) {
+      await _prefs!.setString(_osrmPrefsKey, _osrmUrlNotifier.value);
+    }
+  }
+
+  Future<void> resetOsrmToDefault() async {
+    _osrmUrlNotifier.value = _defaultOsrmUrl;
+    if (_prefs != null) {
+      await _prefs!.remove(_osrmPrefsKey);
     }
   }
 

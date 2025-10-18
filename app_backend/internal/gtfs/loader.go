@@ -190,7 +190,10 @@ func importStops(ctx context.Context, tx *sql.Tx, feedID int64, file *zip.File) 
 	defer rc.Close()
 
 	reader := csv.NewReader(rc)
-	reader.FieldsPerRecord = -1
+	reader.FieldsPerRecord = -1      // Permitir registros con diferente número de campos
+	reader.LazyQuotes = true         // Permitir comillas no escapadas
+	reader.TrimLeadingSpace = true   // Remover espacios al inicio
+	
 	header, err := reader.Read()
 	if err != nil {
 		return 0, fmt.Errorf("gtfs loader: read stops header: %w", err)
@@ -212,16 +215,29 @@ func importStops(ctx context.Context, tx *sql.Tx, feedID int64, file *zip.File) 
 	defer stmt.Close()
 
 	count := 0
+	skipped := 0
+	errorCount := 0
+	lineNum := 1 // Header es línea 1
+	
 	for {
+		lineNum++
 		record, err := reader.Read()
 		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
-			return count, fmt.Errorf("gtfs loader: read stop row: %w", err)
+			errorCount++
+			// Log solo los primeros 20 errores de parsing
+			if errorCount <= 20 {
+				fmt.Printf("gtfs loader: error reading line %d: %v\n", lineNum, err)
+			}
+			// NO retornar error, continuar con la siguiente línea
+			continue
 		}
+		
 		stopID := safeField(record, idx, "stop_id")
 		if stopID == "" {
+			skipped++
 			continue
 		}
 		name := safeField(record, idx, "stop_name")
@@ -229,10 +245,18 @@ func importStops(ctx context.Context, tx *sql.Tx, feedID int64, file *zip.File) 
 		lonStr := safeField(record, idx, "stop_lon")
 		lat, err := strconv.ParseFloat(latStr, 64)
 		if err != nil {
+			skipped++
+			if skipped <= 20 {
+				fmt.Printf("gtfs loader: line %d - invalid latitude '%s' for stop %s\n", lineNum, latStr, stopID)
+			}
 			continue
 		}
 		lon, err := strconv.ParseFloat(lonStr, 64)
 		if err != nil {
+			skipped++
+			if skipped <= 20 {
+				fmt.Printf("gtfs loader: line %d - invalid longitude '%s' for stop %s\n", lineNum, lonStr, stopID)
+			}
 			continue
 		}
 		desc := safeField(record, idx, "stop_desc")
@@ -246,10 +270,25 @@ func importStops(ctx context.Context, tx *sql.Tx, feedID int64, file *zip.File) 
 		}
 
 		if _, err := stmt.ExecContext(ctx, stopID, feedID, code, name, desc, lat, lon, zone, wheelchair); err != nil {
-			return count, fmt.Errorf("gtfs loader: insert stop %s: %w", stopID, err)
+			errorCount++
+			// Log solo los primeros 10 errores de inserción
+			if errorCount <= 30 {
+				fmt.Printf("gtfs loader: line %d - error inserting stop %s: %v\n", lineNum, stopID, err)
+			}
+			// No retornar error, continuar con el siguiente
+			continue
 		}
 		count++
+		
+		// Log progreso cada 50,000 registros para feeds grandes
+		if count%50000 == 0 {
+			fmt.Printf("gtfs loader: imported %d stops so far (line %d)...\n", count, lineNum)
+		} else if count%10000 == 0 {
+			fmt.Printf("gtfs loader: imported %d stops so far...\n", count)
+		}
 	}
+	
+	fmt.Printf("gtfs loader: import complete - success: %d, skipped: %d, errors: %d, total lines: %d\n", count, skipped, errorCount, lineNum)
 	return count, nil
 }
 

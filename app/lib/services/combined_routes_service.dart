@@ -108,12 +108,14 @@ class CombinedRoute {
     required this.totalDistanceMeters,
     required this.totalDurationSeconds,
     required this.transferCount,
+    this.redBusItinerary, // Almacenar itinerario original para evitar re-fetching
   });
 
   final List<RouteSegment> segments;
   final double totalDistanceMeters;
   final int totalDurationSeconds;
   final int transferCount;
+  final RedBusItinerary? redBusItinerary; // Itinerario de Red Bus original
 
   Duration get totalDuration => Duration(seconds: totalDurationSeconds);
 
@@ -208,10 +210,19 @@ class CombinedRoutesService {
       final transitData = _convertRedBusItineraryToTransitFormat(
         moovitItinerary,
       );
-      return await calculateCombinedRoute(
+      final route = await calculateCombinedRoute(
         origin: origin,
         destination: destination,
         transitData: transitData,
+      );
+
+      // Adjuntar itinerario original para evitar re-fetching en navegación
+      return CombinedRoute(
+        segments: route.segments,
+        totalDistanceMeters: route.totalDistanceMeters,
+        totalDurationSeconds: route.totalDurationSeconds,
+        transferCount: route.transferCount,
+        redBusItinerary: moovitItinerary, // ✅ Adjuntar itinerario original
       );
     } catch (e) {
       print('❌ Error en ruta de transporte público: $e');
@@ -517,11 +528,6 @@ class CombinedRoutesService {
   ) {
     final convertedLegs = itinerary.legs
         .map((leg) {
-          // Solo incluir segmentos de bus, NO caminatas
-          if (leg.type != 'bus') {
-            return null;
-          }
-
           // Convertir geometría de List<LatLng> a List<List<double>> formato [lon, lat]
           List<List<double>>? geometryArray;
           if (leg.geometry != null && leg.geometry!.isNotEmpty) {
@@ -530,22 +536,34 @@ class CombinedRoutesService {
                 .toList();
           }
 
+          // Incluir TODOS los legs (walk y bus) para mostrar ruta completa
           return {
-            'type': 'bus',
+            'type': leg.type, // 'walk' o 'bus'
             'distance': leg.distanceKm * 1000, // km a metros
             'time': leg.durationMinutes * 60 * 1000, // minutos a ms
             'geometry':
                 geometryArray, // Ahora en formato correcto [[lon, lat], ...]
             'instructions': leg.instruction,
             'route_short_name': leg.routeNumber,
-            'route_type': 'bus',
-            'mode': 'Red',
+            'route_type': leg.type == 'bus' ? 'bus' : 'walk',
+            'mode': leg.mode,
             'departureLocation': leg.departStop?.name ?? leg.from,
             'arrivalLocation': leg.arriveStop?.name ?? leg.to,
           };
         })
         .whereType<Map<String, dynamic>>()
         .toList(); // Filtrar nulls
+
+    // LOG: Verificar total de geometría combinada
+    int totalGeometryPoints = 0;
+    for (var leg in convertedLegs) {
+      if (leg['geometry'] != null) {
+        totalGeometryPoints += (leg['geometry'] as List).length;
+      }
+    }
+    print(
+      '🗺️ [GEOMETRY] Convertido a formato tránsito: ${convertedLegs.length} legs, $totalGeometryPoints puntos totales',
+    );
 
     return {
       'paths': [

@@ -367,6 +367,17 @@ func (s *Scraper) GetRouteItinerary(originLat, originLon, destLat, destLon float
 	
 	log.Printf("[INFO] Se generaron %d opciones de rutas", len(routeOptions.Options))
 	
+	// LOG DETALLADO: Verificar que todas las opciones tienen sus legs completos
+	for optIdx, option := range routeOptions.Options {
+		log.Printf("📋 [OPCIÓN %d] Legs: %d, Duración: %d min, Distancia: %.2f km", 
+			optIdx+1, len(option.Legs), option.TotalDuration, option.TotalDistance)
+		for legIdx, leg := range option.Legs {
+			geometryPoints := len(leg.Geometry)
+			log.Printf("   └─ Leg %d: type=%s, mode=%s, route=%s, geometry=%d pts, from='%s', to='%s'", 
+				legIdx+1, leg.Type, leg.Mode, leg.RouteNumber, geometryPoints, leg.From, leg.To)
+		}
+	}
+	
 	return routeOptions, nil
 }
 
@@ -475,16 +486,248 @@ func (s *Scraper) scrapeMovitWithCorrectURL(originName, destName string, originL
 	// Variable para capturar el HTML
 	var htmlContent string
 	
-	// Ejecutar navegación y esperar a que se cargue el contenido
+	// ESTRATEGIA CENTRALIZADA - JavaScript extrae paraderos directamente
+	log.Printf("🌐 [MOOVIT] Iniciando extracción CENTRALIZADA con JavaScript...")
+	
+	var htmlStage1, htmlStage2, htmlStage3 string
+	
 	err := chromedp.Run(browserCtx,
+		// ETAPA 1: Cargar página inicial
 		chromedp.Navigate(moovitURL),
-		// Esperar a que aparezca el contenedor de rutas sugeridas
 		chromedp.WaitVisible(`mv-suggested-route`, chromedp.ByQuery),
-		// Esperar un poco más para que se cargue todo el contenido
+		chromedp.Sleep(3*time.Second),
+		chromedp.OuterHTML(`html`, &htmlStage1, chromedp.ByQuery),
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			log.Printf("   � ETAPA 1: HTML inicial capturado (%d chars)", len(htmlStage1))
+			return nil
+		}),
+		
+		// ETAPA 2: Extraer URL de la primera ruta y navegar a la página de detalles
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			log.Printf("   🔍 ETAPA 2: Extrayendo URL del itinerario...")
+			var itineraryURL string
+			_ = chromedp.Evaluate(`
+				(function() {
+					// Buscar el primer mv-suggested-route y hacer clic
+					const firstRoute = document.querySelector('mv-suggested-route:first-child');
+					if (firstRoute) {
+						firstRoute.click();
+						console.log('[EXTRACTOR] Clicked first route');
+					}
+					// Esperar un momento para que Angular actualice la URL
+					return window.location.href;
+				})();
+			`, &itineraryURL).Do(ctx)
+			log.Printf("      ✅ URL actual: %s", itineraryURL)
+			return nil
+		}),
+		chromedp.Sleep(5*time.Second), // Esperar a que Angular actualice la URL y renderice contenido
+		
+		// ETAPA 3: Capturar HTML después de la navegación
+		chromedp.OuterHTML(`html`, &htmlStage2, chromedp.ByQuery),
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			log.Printf("   📄 ETAPA 3: HTML de itinerario capturado (%d chars)", len(htmlStage2))
+			return nil
+		}),
+		
+		// ETAPA 3.5: Expandir detalles de las paradas haciendo clic en "X paradas"
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			log.Printf("   🔍 ETAPA 3.5: Expandiendo detalles de paradas...")
+			var clicksResult interface{}
+			_ = chromedp.Evaluate(`
+				(function() {
+					console.log('[EXPANDER] Buscando botones de "paradas" para expandir...');
+					let clickCount = 0;
+					
+					// ESTRATEGIA 1: Buscar elementos .details-title que contengan "paradas"
+					const detailsTitles = document.querySelectorAll('.details-title');
+					console.log('[EXPANDER] Encontrados', detailsTitles.length, '.details-title');
+					
+					detailsTitles.forEach((el, index) => {
+						const text = el.textContent.toLowerCase();
+						if (text.includes('parada') || text.includes('stop')) {
+							try {
+								console.log('[EXPANDER] Click en .details-title:', text.substring(0, 50));
+								el.click();
+								clickCount++;
+							} catch(e) {
+								console.log('[EXPANDER] Error:', e);
+							}
+						}
+					});
+					
+					// ESTRATEGIA 2: Buscar elementos con clase toggle-details
+					const toggles = document.querySelectorAll('.toggle-details, [class*="toggle"]');
+					console.log('[EXPANDER] Encontrados', toggles.length, 'toggles');
+					
+					toggles.forEach((el, index) => {
+						if (el.offsetParent !== null) {
+							try {
+								const parent = el.closest('.details-title, .details-wrapper');
+								if (parent) {
+									console.log('[EXPANDER] Click en toggle');
+									parent.click();
+									clickCount++;
+								}
+							} catch(e) {}
+						}
+					});
+					
+					// ESTRATEGIA 3: Buscar spans con texto "X paradas" y hacer clic en su padre
+					const allSpans = document.querySelectorAll('span');
+					allSpans.forEach(span => {
+						const text = span.textContent.trim();
+						if (/\d+\s*parada/i.test(text)) {
+							try {
+								const clickable = span.closest('[tabindex], a, button, .details-title');
+								if (clickable && clickable.offsetParent !== null) {
+									console.log('[EXPANDER] Click en span con paradas:', text);
+									clickable.click();
+									clickCount++;
+								}
+							} catch(e) {}
+						}
+					});
+					
+					console.log('[EXPANDER] Total clicks realizados:', clickCount);
+					return clickCount;
+				})();
+			`, &clicksResult).Do(ctx)
+			log.Printf("      ✅ Clicks para expandir: %v", clicksResult)
+			return nil
+		}),
+		chromedp.Sleep(3*time.Second), // Esperar a que se expandan los detalles
+		
+		// ETAPA 4: Hacer scroll hacia abajo para cargar toda la lista de paradas (lazy loading)
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			log.Printf("   � ETAPA 4: Haciendo scroll para cargar todas las paradas...")
+			var scrollResult interface{}
+			_ = chromedp.Evaluate(`
+				(function() {
+					console.log('[SCROLLER] Iniciando scroll para cargar contenido lazy...');
+					
+					// Scroll gradual hacia abajo para forzar carga de contenido lazy
+					const scrollHeight = document.documentElement.scrollHeight;
+					const scrollStep = 500;
+					let scrolled = 0;
+					
+					// Simular scroll de usuario real
+					for (let i = 0; i < scrollHeight; i += scrollStep) {
+						window.scrollTo(0, i);
+						scrolled = i;
+					}
+					
+					// Scroll final al fondo
+					window.scrollTo(0, scrollHeight);
+					
+					console.log('[SCROLLER] Scroll completado:', scrolled, 'px');
+					return scrolled;
+				})();
+			`, &scrollResult).Do(ctx)
+			log.Printf("      ✅ Scroll realizado: %v px", scrollResult)
+			return nil
+		}),
+		chromedp.Sleep(2*time.Second), // Esperar a que cargue contenido lazy
+		
+		// ETAPA 5: Extraer paraderos con JavaScript detallado
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			log.Printf("   🔍 ETAPA 5: Extrayendo paraderos con JavaScript...")
+			var result interface{}
+			_ = chromedp.Evaluate(`
+				(function() {
+					console.log('[EXTRACTOR] Iniciando extracción detallada...');
+					
+					// Buscar códigos PC en TODO el HTML
+					const stopPattern = /\b(P[CABDEIJLRSUX]\d{3,5})\b/gi;
+					const foundStops = new Set();
+					
+					// 1. Buscar en innerText (más confiable)
+					const bodyText = document.body.innerText;
+					console.log('[EXTRACTOR] Tamaño de innerText:', bodyText.length);
+					console.log('[EXTRACTOR] Muestra de texto:', bodyText.substring(0, 500));
+					
+					let match;
+					stopPattern.lastIndex = 0;
+					let matchCount = 0;
+					while ((match = stopPattern.exec(bodyText)) !== null) {
+						foundStops.add(match[1].toUpperCase());
+						matchCount++;
+					}
+					console.log('[EXTRACTOR] Matches en innerText:', matchCount);
+					
+					// 2. Buscar en outerHTML
+					const htmlSource = document.documentElement.outerHTML;
+					console.log('[EXTRACTOR] Tamaño de outerHTML:', htmlSource.length);
+					stopPattern.lastIndex = 0;
+					let htmlMatchCount = 0;
+					while ((match = stopPattern.exec(htmlSource)) !== null) {
+						foundStops.add(match[1].toUpperCase());
+						htmlMatchCount++;
+					}
+					console.log('[EXTRACTOR] Matches en outerHTML:', htmlMatchCount);
+					
+					// 3. Buscar específicamente en elementos mv-suggested-route
+					const routeElements = document.querySelectorAll('mv-suggested-route');
+					console.log('[EXTRACTOR] Elementos mv-suggested-route encontrados:', routeElements.length);
+					routeElements.forEach((el, idx) => {
+						const elText = el.innerText;
+						console.log('[EXTRACTOR] Ruta', idx, 'texto:', elText.substring(0, 200));
+						stopPattern.lastIndex = 0;
+						while ((match = stopPattern.exec(elText)) !== null) {
+							foundStops.add(match[1].toUpperCase());
+						}
+					});
+					
+					const stops = Array.from(foundStops).sort();
+					console.log('[EXTRACTOR] TOTAL paraderos únicos:', stops.length);
+					console.log('[EXTRACTOR] Lista:', stops);
+					
+					// Inyectar en HTML
+					if (stops.length > 0) {
+						const injectedDiv = document.createElement('div');
+						injectedDiv.id = 'moovit-extracted-stops';
+						injectedDiv.textContent = 'EXTRACTED_STOPS: ' + stops.join(', ');
+						document.body.appendChild(injectedDiv);
+						console.log('[EXTRACTOR] Inyectado en HTML');
+					}
+					
+					return {
+						clicks: 0,
+						stops: stops
+					};
+				})();
+			`, &result).Do(ctx)
+			
+			if result != nil {
+				if resultMap, ok := result.(map[string]interface{}); ok {
+					clicks := resultMap["clicks"]
+					stops := resultMap["stops"]
+					log.Printf("      ✅ Clicks: %v, Paraderos extraídos: %v", clicks, stops)
+				} else {
+					log.Printf("      ℹ️  Resultado: %v", result)
+				}
+			}
+			return nil
+		}),
 		chromedp.Sleep(2*time.Second),
-		// Obtener el HTML completo
-		chromedp.OuterHTML(`html`, &htmlContent, chromedp.ByQuery),
+		chromedp.OuterHTML(`html`, &htmlStage3, chromedp.ByQuery),
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			log.Printf("   📄 ETAPA 6: HTML final capturado (%d chars)", len(htmlStage3))
+			return nil
+		}),
 	)
+	
+	// Usar el HTML que tenga más contenido (probablemente tiene más paraderos)
+	if len(htmlStage3) > len(htmlStage2) {
+		htmlContent = htmlStage3
+		log.Printf("   ✅ Usando HTML de ETAPA 3 (más completo)")
+	} else if len(htmlStage2) > len(htmlStage1) {
+		htmlContent = htmlStage2
+		log.Printf("   ✅ Usando HTML de ETAPA 2")
+	} else {
+		htmlContent = htmlStage1
+		log.Printf("   ✅ Usando HTML de ETAPA 1 (inicial)")
+	}
 	
 	if err != nil {
 		log.Printf("❌ [MOOVIT] Error en Chrome: %v", err)
@@ -523,12 +766,44 @@ func (s *Scraper) scrapeMovitRoute(originName, destName string, originLat, origi
 func (s *Scraper) parseMovitHTML(html string, originLat, originLon, destLat, destLon float64) (*RouteOptions, error) {
 	log.Printf("🔍 Iniciando parseado de HTML de Moovit...")
 	
-	// Buscar TODOS los contenedores de rutas sugeridas
+	// Guardar HTML completo para búsquedas posteriores
+	fullHTML := html
+	
+	// PRIORIDAD 1: Buscar div inyectado con paraderos extraídos desde página de itinerario
+	extractedStopsRegex := regexp.MustCompile(`<div id="moovit-extracted-stops"[^>]*>EXTRACTED_STOPS:\s*([^<]+)</div>`)
+	extractedStopsMatch := extractedStopsRegex.FindStringSubmatch(html)
+	
+	if len(extractedStopsMatch) > 1 {
+		log.Printf("✅ [ITINERARIO] Encontrado div con paraderos extraídos por JavaScript")
+		stopsText := strings.TrimSpace(extractedStopsMatch[1])
+		stopCodes := strings.Split(stopsText, ",")
+		
+		// Limpiar códigos
+		cleanedStops := []string{}
+		for _, code := range stopCodes {
+			cleaned := strings.TrimSpace(code)
+			if len(cleaned) > 0 {
+				cleanedStops = append(cleanedStops, cleaned)
+			}
+		}
+		
+		if len(cleanedStops) > 0 {
+			log.Printf("✅ [ITINERARIO] Paraderos extraídos: %d - %v", len(cleanedStops), cleanedStops)
+			
+			// Crear opción de ruta usando los paraderos extraídos
+			return s.parseItineraryPageWithStops(html, cleanedStops, originLat, originLon, destLat, destLon)
+		}
+	}
+	
+	// FALLBACK: Buscar mv-suggested-route (página de resultados)
+	log.Printf("[INFO] No se encontraron paraderos extraídos, buscando mv-suggested-route...")
+	log.Printf("[INFO] Esto puede ocurrir si Moovit sugiere caminar en lugar de tomar bus (distancia corta)")
 	suggestedRouteRegex := regexp.MustCompile(`<mv-suggested-route[^>]*>([\s\S]*?)</mv-suggested-route>`)
 	containerMatches := suggestedRouteRegex.FindAllStringSubmatch(html, -1)
 	
 	if len(containerMatches) == 0 {
 		log.Printf("[WARN] No se encontro mv-suggested-route en el HTML renderizado")
+		log.Printf("[WARN] Moovit probablemente sugiere caminar o no hay rutas disponibles para esta combinación origen-destino")
 		return nil, fmt.Errorf("no se encontraron rutas en la respuesta de Moovit")
 	}
 	
@@ -582,9 +857,9 @@ func (s *Scraper) parseMovitHTML(html string, originLat, originLon, destLat, des
 			idx+1, routeNumber, duration, stopCount, stopCode)
 		
 		// Generar itinerario para esta opción
-		// IMPORTANTE: Pasar también la duración de Moovit, número de paradas y código de paradero
+		// IMPORTANTE: Pasar también la duración de Moovit, número de paradas, código de paradero, HTML fragmento Y HTML COMPLETO
 		itinerary := s.generateItineraryWithRouteFromMovit(
-			routeNumber, duration, stopCount, stopCode, 
+			routeNumber, duration, stopCount, stopCode, routeHTML, fullHTML,
 			originLat, originLon, destLat, destLon)
 		
 		// SIEMPRE agregar si tenemos número de ruta, incluso si GTFS falla
@@ -599,6 +874,257 @@ func (s *Scraper) parseMovitHTML(html string, originLat, originLon, destLat, des
 	
 	log.Printf("[INFO] Total de opciones generadas: %d", len(routeOptions.Options))
 	return routeOptions, nil
+}
+
+// parseItineraryPageWithStops procesa paraderos extraídos de página de itinerario
+func (s *Scraper) parseItineraryPageWithStops(html string, stopCodes []string, originLat, originLon, destLat, destLon float64) (*RouteOptions, error) {
+	log.Printf("🔍 [ITINERARIO] Procesando %d paraderos extraídos...", len(stopCodes))
+	
+	// Buscar número de ruta en el HTML de itinerario
+	routeNumber := s.extractRouteNumberFromItinerary(html)
+	if routeNumber == "" {
+		log.Printf("[WARN] No se pudo extraer número de ruta del HTML de itinerario")
+		routeNumber = "Red" // Fallback genérico
+	}
+	
+	// Buscar duración en el HTML
+	durationRegex := regexp.MustCompile(`(\d+)\s*min`)
+	durationMatch := durationRegex.FindStringSubmatch(html)
+	duration := 30 // default
+	if len(durationMatch) > 1 {
+		fmt.Sscanf(durationMatch[1], "%d", &duration)
+	}
+	log.Printf("   ⏱️  Duración estimada: %d min", duration)
+	
+	// Geocodificar paraderos usando GTFS
+	geocodedStops := []BusStop{}
+	seenCodes := make(map[string]bool)
+	
+	for _, code := range stopCodes {
+		code = strings.TrimSpace(code)
+		if code == "" || seenCodes[code] {
+			continue
+		}
+		seenCodes[code] = true
+		
+		stop, err := s.getStopByCode(code)
+		if err == nil && stop != nil {
+			geocodedStops = append(geocodedStops, *stop)
+			log.Printf("   ✅ [GTFS] %s: %s (%.6f, %.6f)", code, stop.Name, stop.Latitude, stop.Longitude)
+		} else {
+			log.Printf("   ⚠️  [GTFS] No encontrado: %s", code)
+		}
+	}
+	
+	log.Printf("✅ [MOOVIT-HTML] Total paraderos geocodificados: %d de %d", len(geocodedStops), len(stopCodes))
+	
+	if len(geocodedStops) < 2 {
+		return nil, fmt.Errorf("no se pudieron geocodificar suficientes paraderos (%d)", len(geocodedStops))
+	}
+	
+	// Crear RouteOptions con una sola opción de ruta
+	routeOptions := &RouteOptions{
+		Origin:      Coordinate{Latitude: originLat, Longitude: originLon},
+		Destination: Coordinate{Latitude: destLat, Longitude: destLon},
+		Options:     []RouteItinerary{},
+	}
+	
+	// Construir itinerario con los paraderos geocodificados
+	itinerary := s.buildItineraryFromStops(routeNumber, duration, geocodedStops, originLat, originLon, destLat, destLon)
+	routeOptions.Options = append(routeOptions.Options, *itinerary)
+	
+	log.Printf("✅ [ITINERARIO] Ruta generada: %s con %d piernas y %d puntos de geometría", 
+		routeNumber, len(itinerary.Legs), s.countGeometryPoints(itinerary))
+	
+	return routeOptions, nil
+}
+
+// extractRouteNumberFromItinerary extrae número de ruta de página de itinerario
+func (s *Scraper) extractRouteNumberFromItinerary(html string) string {
+	patterns := []struct {
+		name  string
+		regex *regexp.Regexp
+	}{
+		{"line-name class", regexp.MustCompile(`class="[^"]*line-name[^"]*"[^>]*>([A-Z]?\d{2,3})</`)},
+		{"route-number class", regexp.MustCompile(`class="[^"]*route-number[^"]*"[^>]*>([A-Z]?\d{2,3})</`)},
+		{"data-line attribute", regexp.MustCompile(`data-line=["']([A-Z]?\d{2,3})["']`)},
+		{"badge/text class", regexp.MustCompile(`class="[^"]*(?:badge|text)[^"]*"[^>]*>([A-Z]?\d{2,3})</`)},
+		{"span con número", regexp.MustCompile(`<span[^>]*>([A-Z]?\d{2,3})</span>`)},
+	}
+	
+	for _, pattern := range patterns {
+		matches := pattern.regex.FindStringSubmatch(html)
+		if len(matches) > 1 {
+			routeNum := strings.TrimSpace(matches[1])
+			if len(routeNum) >= 2 && len(routeNum) <= 4 {
+				log.Printf("   ✅ [RUTA] Encontrado '%s' con patrón '%s'", routeNum, pattern.name)
+				return routeNum
+			}
+		}
+	}
+	
+	log.Printf("   ⚠️  [RUTA] No se encontró número de ruta en HTML de itinerario")
+	return ""
+}
+
+// buildItineraryFromStops construye itinerario completo desde lista de paraderos
+func (s *Scraper) buildItineraryFromStops(routeNumber string, duration int, stops []BusStop, originLat, originLon, destLat, destLon float64) *RouteItinerary {
+	log.Printf("🚌 [GEOMETRY] Construyendo geometría con %d paraderos reales...", len(stops))
+	
+	itinerary := &RouteItinerary{
+		Origin:        Coordinate{Latitude: originLat, Longitude: originLon},
+		Destination:   Coordinate{Latitude: destLat, Longitude: destLon},
+		Legs:          []TripLeg{},
+		RedBusRoutes:  []string{routeNumber},
+		TotalDuration: duration,
+	}
+	
+	// Encontrar paradero más cercano al origen
+	originStop := stops[0]
+	minDist := s.calculateDistance(originLat, originLon, stops[0].Latitude, stops[0].Longitude)
+	for _, stop := range stops {
+		dist := s.calculateDistance(originLat, originLon, stop.Latitude, stop.Longitude)
+		if dist < minDist {
+			minDist = dist
+			originStop = stop
+		}
+	}
+	
+	// Encontrar paradero más cercano al destino
+	destStop := stops[len(stops)-1]
+	minDist = s.calculateDistance(destLat, destLon, stops[len(stops)-1].Latitude, stops[len(stops)-1].Longitude)
+	for _, stop := range stops {
+		dist := s.calculateDistance(destLat, destLon, stop.Latitude, stop.Longitude)
+		if dist < minDist {
+			minDist = dist
+			destStop = stop
+		}
+	}
+	
+	log.Printf("   📍 Paradero origen: %s (%.6f, %.6f)", originStop.Name, originStop.Latitude, originStop.Longitude)
+	log.Printf("   📍 Paradero destino: %s (%.6f, %.6f)", destStop.Name, destStop.Latitude, destStop.Longitude)
+	
+	// PIERNA 1: Caminata al paradero de origen
+	walkDistance := s.calculateDistance(originLat, originLon, originStop.Latitude, originStop.Longitude)
+	walkDuration := int((walkDistance / 80) / 60) // 80 m/min
+	if walkDuration < 1 {
+		walkDuration = 1
+	}
+	
+	walkLeg := TripLeg{
+		Type:        "walk",
+		Mode:        "walk",
+		Duration:    walkDuration,
+		Distance:    walkDistance / 1000,
+		Instruction: fmt.Sprintf("Camina hacia el paradero %s", originStop.Name),
+		Geometry: [][]float64{
+			{originLon, originLat},
+			{originStop.Longitude, originStop.Latitude},
+		},
+		DepartStop: &BusStop{
+			Name:      "Tu ubicación",
+			Latitude:  originLat,
+			Longitude: originLon,
+		},
+		ArriveStop: &originStop,
+	}
+	
+	itinerary.Legs = append(itinerary.Legs, walkLeg)
+	itinerary.TotalDuration += walkDuration
+	itinerary.TotalDistance += walkDistance / 1000
+	
+	log.Printf("   🚶 Caminata: %.0fm, %d min", walkDistance, walkDuration)
+	
+	// PIERNA 2: Bus con TODOS los paraderos como geometría
+	busGeometry := [][]float64{}
+	for _, stop := range stops {
+		busGeometry = append(busGeometry, []float64{stop.Longitude, stop.Latitude})
+	}
+	
+	// NO agregar destino final aquí - eso va en la pierna de caminata final
+	
+	busDistance := 0.0
+	for i := 0; i < len(busGeometry)-1; i++ {
+		dist := s.calculateDistance(
+			busGeometry[i][1], busGeometry[i][0],
+			busGeometry[i+1][1], busGeometry[i+1][0],
+		)
+		busDistance += dist
+	}
+	
+	busLeg := TripLeg{
+		Type:        "bus",
+		Mode:        "Red",
+		RouteNumber: routeNumber,
+		From:        originStop.Name,
+		To:          destStop.Name,
+		Duration:    duration,
+		Distance:    busDistance / 1000,
+		Instruction: fmt.Sprintf("Toma el bus Red %s en %s hacia %s", routeNumber, originStop.Name, destStop.Name),
+		Geometry:    busGeometry,
+		DepartStop:  &originStop,
+		ArriveStop:  &destStop,
+		StopCount:   len(stops),
+	}
+	
+	itinerary.Legs = append(itinerary.Legs, busLeg)
+	itinerary.TotalDistance += busDistance / 1000
+	
+	log.Printf("   🚌 Bus: %.2fkm, %d min, %d paradas, %d puntos de geometría", 
+		busDistance/1000, duration, len(stops), len(busGeometry))
+	
+	// PIERNA 3: Caminata del paradero de destino al destino final
+	finalWalkDistance := s.calculateDistance(destStop.Latitude, destStop.Longitude, destLat, destLon)
+	if finalWalkDistance > 10 { // Solo agregar si hay al menos 10 metros de caminata
+		finalWalkDuration := int((finalWalkDistance / 80) / 60) // 80 m/min
+		if finalWalkDuration < 1 {
+			finalWalkDuration = 1
+		}
+		
+		finalWalkLeg := TripLeg{
+			Type:        "walk",
+			Mode:        "walk",
+			Duration:    finalWalkDuration,
+			Distance:    finalWalkDistance / 1000,
+			Instruction: fmt.Sprintf("Camina hacia tu destino"),
+			Geometry: [][]float64{
+				{destStop.Longitude, destStop.Latitude},
+				{destLon, destLat},
+			},
+			DepartStop: &destStop,
+			ArriveStop: &BusStop{
+				Name:      "Tu destino",
+				Latitude:  destLat,
+				Longitude: destLon,
+			},
+		}
+		
+		itinerary.Legs = append(itinerary.Legs, finalWalkLeg)
+		itinerary.TotalDuration += finalWalkDuration
+		itinerary.TotalDistance += finalWalkDistance / 1000
+		
+		log.Printf("   🚶 Caminata final: %.0fm, %d min", finalWalkDistance, finalWalkDuration)
+	} else {
+		log.Printf("   ℹ️  Sin caminata final (destino muy cercano al paradero: %.0fm)", finalWalkDistance)
+	}
+	
+	// LOG DETALLADO: Mostrar todos los legs que se van a enviar
+	log.Printf("📋 [ITINERARIO FINAL] Total de legs: %d", len(itinerary.Legs))
+	for i, leg := range itinerary.Legs {
+		log.Printf("   Leg %d: type=%s, mode=%s, geometry=%d puntos, from=%s, to=%s", 
+			i+1, leg.Type, leg.Mode, len(leg.Geometry), leg.From, leg.To)
+	}
+	
+	return itinerary
+}
+
+// countGeometryPoints cuenta el total de puntos de geometría en un itinerario
+func (s *Scraper) countGeometryPoints(itinerary *RouteItinerary) int {
+	total := 0
+	for _, leg := range itinerary.Legs {
+		total += len(leg.Geometry)
+	}
+	return total
 }
 
 // extractRouteNumber extrae el número de ruta del HTML de una opción
@@ -882,7 +1408,7 @@ func (s *Scraper) generateItineraryWithRoute(routeNumber string, originLat, orig
 
 // generateItineraryWithRouteFromMovit genera un itinerario usando datos de Moovit
 // NO depende de GTFS - usa la duración y número de ruta extraídos del HTML
-func (s *Scraper) generateItineraryWithRouteFromMovit(routeNumber string, durationMinutes int, stopCount int, stopCode string, originLat, originLon, destLat, destLon float64) *RouteItinerary {
+func (s *Scraper) generateItineraryWithRouteFromMovit(routeNumber string, durationMinutes int, stopCount int, stopCode string, routeHTML string, fullHTML string, originLat, originLon, destLat, destLon float64) *RouteItinerary {
 	log.Printf("🚌 Generando itinerario básico con datos de Moovit: Ruta %s, %d min, %d paradas, Paradero: %s", 
 		routeNumber, durationMinutes, stopCount, stopCode)
 	
@@ -912,7 +1438,12 @@ func (s *Scraper) generateItineraryWithRouteFromMovit(routeNumber string, durati
 	var useExactStop bool = false
 	
 	if stopCode != "" {
-		log.Printf("🔍 [GTFS] Buscando paradero con código exacto: %s", stopCode)
+		log.Printf("🔍 [GTFS] Buscando paradero con código exacto: '%s' (len=%d)", stopCode, len(stopCode))
+		// DEBUGGING: Mostrar cada carácter
+		for i, ch := range stopCode {
+			log.Printf("   [DEBUG] Antes de getStopByCode - stopCode[%d] = '%c' (byte=%d)", i, ch, ch)
+		}
+		
 		exactStop, err := s.getStopByCode(stopCode)
 		if err == nil && exactStop != nil {
 			log.Printf("✅ [GTFS] Paradero encontrado por código: %s - %s (%.6f, %.6f)", 
@@ -941,41 +1472,38 @@ func (s *Scraper) generateItineraryWithRouteFromMovit(routeNumber string, durati
 		// Calcular distancia de caminata al paradero de origen
 		walkDistance := s.calculateDistance(originLat, originLon, originStop.Latitude, originStop.Longitude)
 		
-		// Si el usuario está a más de 50m del paradero, agregar pierna de caminata
-		if walkDistance > 50 {
-			walkDuration := int((walkDistance / 80) / 60) // 80 m/min velocidad de caminata
-			if walkDuration < 1 {
-				walkDuration = 1 // Mínimo 1 minuto
-			}
-			
-			walkGeometry := [][]float64{
-				{originLon, originLat},
-				{originStop.Longitude, originStop.Latitude},
-			}
-			
-			walkLeg := TripLeg{
-				Type:        "walk",
-				Mode:        "walk",
-				Duration:    walkDuration,
-				Distance:    walkDistance / 1000,
-				Instruction: fmt.Sprintf("Camina hacia el paradero %s", originStop.Name),
-				Geometry:    walkGeometry,
-				DepartStop: &BusStop{
-					Name:      "Tu ubicación",
-					Latitude:  originLat,
-					Longitude: originLon,
-				},
-				ArriveStop: &originStop,
-			}
-			
-			itinerary.Legs = append(itinerary.Legs, walkLeg)
-			itinerary.TotalDuration += walkDuration
-			itinerary.TotalDistance += walkDistance / 1000
-			
-			log.Printf("🚶 Agregada pierna de caminata: %.0fm, %d min", walkDistance, walkDuration)
-		} else {
-			log.Printf("✅ Usuario ya está en el paradero (%.0fm de distancia)", walkDistance)
+		// SIEMPRE agregar pierna de caminata (incluso si está cerca)
+		// El frontend decidirá si saltarla basado en GPS real
+		walkDuration := int((walkDistance / 80) / 60) // 80 m/min velocidad de caminata
+		if walkDuration < 1 {
+			walkDuration = 1 // Mínimo 1 minuto
 		}
+		
+		walkGeometry := [][]float64{
+			{originLon, originLat},
+			{originStop.Longitude, originStop.Latitude},
+		}
+		
+		walkLeg := TripLeg{
+			Type:        "walk",
+			Mode:        "walk",
+			Duration:    walkDuration,
+			Distance:    walkDistance / 1000,
+			Instruction: fmt.Sprintf("Camina hacia el paradero %s", originStop.Name),
+			Geometry:    walkGeometry,
+			DepartStop: &BusStop{
+				Name:      "Tu ubicación",
+				Latitude:  originLat,
+				Longitude: originLon,
+			},
+			ArriveStop: &originStop,
+		}
+		
+		itinerary.Legs = append(itinerary.Legs, walkLeg)
+		itinerary.TotalDuration += walkDuration
+		itinerary.TotalDistance += walkDistance / 1000
+		
+		log.Printf("🚶 Agregada pierna de caminata: %.0fm, %d min (distancia al paradero)", walkDistance, walkDuration)
 		
 		busDistance := s.calculateDistance(originStop.Latitude, originStop.Longitude, destStop.Latitude, destStop.Longitude)
 		busGeometry := s.generateBusRouteGeometry(originStop, destStop, routeInfo.Stops)
@@ -1002,27 +1530,161 @@ func (s *Scraper) generateItineraryWithRouteFromMovit(routeNumber string, durati
 		itinerary.Legs = append(itinerary.Legs, busLeg)
 		itinerary.TotalDistance += busDistance / 1000
 	} else {
-		// GTFS falló - generar itinerario básico solo con coordenadas
-		log.Printf("[WARN] GTFS no disponible para ruta %s - generando itinerario basico SIN paradas", routeNumber)
+		// GTFS falló - intentar extraer paraderos reales desde HTML de Moovit
+		log.Printf("[WARN] GTFS no disponible para ruta %s - intentando extraer paraderos desde HTML de Moovit", routeNumber)
 		
 		distance := s.calculateDistance(originLat, originLon, destLat, destLon)
 		
-		// Generar geometría simple con puntos intermedios para mejor visualización
-		simpleGeometry := s.generateStraightLineGeometry(originLat, originLon, destLat, destLon, 5)
+		// Intentar extraer nombres de paraderos desde el HTML COMPLETO
+		// Buscar patrones comunes de códigos de paraderos en Moovit
+		// Patrones a buscar (ordenados por especificidad):
+		stopPatterns := []*regexp.Regexp{
+			// Patrón 1: Código dentro de <span> con guion (ej: <span>PC115-Avenida...)
+			regexp.MustCompile(`<span[^>]*>(P[CABDEIJLRSUX]\d{3,5})-`),
+			// Patrón 2: Código con guion y nombre (ej: PC615-Avenida Las Condes)
+			regexp.MustCompile(`(P[CABDEIJLRSUX]\d{3,5})-[A-Za-zÁ-ú\s/\.]+`),
+			// Patrón 3: Código entre delimitadores (>, espacio, comilla)
+			regexp.MustCompile(`[>\s"'](P[CABDEIJLRSUX]\d{3,5})[-\s<"']`),
+			// Patrón 4: Código en texto general
+			regexp.MustCompile(`\b(P[CABDEIJLRSUX]\d{3,5})\b`),
+		}
+		
+		geocodedStops := make([]BusStop, 0)
+		seenCodes := make(map[string]bool) // Evitar duplicados
+		
+		// DEBUG: Buscar manualmente el código de paradero que sabemos que existe
+		if strings.Contains(fullHTML, "PC1237") {
+			log.Printf("   🔍 [DEBUG] HTML contiene 'PC1237', buscando contexto...")
+			// Encontrar la posición y mostrar contexto
+			idx := strings.Index(fullHTML, "PC1237")
+			if idx >= 0 {
+				start := idx - 100
+				if start < 0 {
+					start = 0
+				}
+				end := idx + 150
+				if end > len(fullHTML) {
+					end = len(fullHTML)
+				}
+				log.Printf("   📄 [CONTEXT] ...%s...", fullHTML[start:end])
+			}
+		} else {
+			log.Printf("   ⚠️  [DEBUG] HTML NO contiene 'PC1237'")
+		}
+		
+		// Buscar en HTML completo primero
+		for patternIdx, pattern := range stopPatterns {
+			matches := pattern.FindAllStringSubmatch(fullHTML, -1)
+			if len(matches) > 0 {
+				log.Printf("   🔍 [PATTERN %d] Encontrados %d matches en HTML completo", patternIdx+1, len(matches))
+				
+				for _, match := range matches {
+					if len(match) < 2 {
+						continue
+					}
+					stopCode := match[1]
+					
+					// Evitar duplicados
+					if seenCodes[stopCode] {
+						continue
+					}
+					seenCodes[stopCode] = true
+					
+					// Intentar buscar por código en GTFS
+					gtfsStop, err := s.getStopByCode(stopCode)
+					if err == nil && gtfsStop != nil {
+						geocodedStop := BusStop{
+							Name:      gtfsStop.Name,
+							Latitude:  gtfsStop.Latitude,
+							Longitude: gtfsStop.Longitude,
+							Sequence:  len(geocodedStops),
+						}
+						geocodedStops = append(geocodedStops, geocodedStop)
+						log.Printf("      ✅ %s: %s (%.6f, %.6f)", stopCode, gtfsStop.Name, gtfsStop.Latitude, gtfsStop.Longitude)
+						
+						// Limitar a máximo 50 paraderos para evitar exceso
+						if len(geocodedStops) >= 50 {
+							break
+						}
+					}
+				}
+				
+				// Si encontramos suficientes paraderos con este patrón, no probar los siguientes
+				if len(geocodedStops) >= 5 {
+					break
+				}
+			}
+		}
+		
+		if len(geocodedStops) > 0 {
+			log.Printf("✅ [MOOVIT-HTML] Total paraderos geocodificados: %d", len(geocodedStops))
+		} else {
+			log.Printf("⚠️  [MOOVIT-HTML] No se encontraron paraderos en HTML")
+		}
+		
+		var geometry [][]float64
+		
+		// Si obtuvimos suficientes paraderos geocodificados, usarlos para geometría
+		if len(geocodedStops) >= 2 {
+			log.Printf("✅ [GEOMETRY] Construyendo geometría con %d paraderos reales", len(geocodedStops))
+			geometry = make([][]float64, 0, len(geocodedStops))
+			for _, stop := range geocodedStops {
+				geometry = append(geometry, []float64{stop.Longitude, stop.Latitude})
+			}
+		} else {
+			log.Printf("⚠️  [GEOMETRY] Solo %d paraderos geocodificados, usando geometría simple", len(geocodedStops))
+			geometry = s.generateStraightLineGeometry(originLat, originLon, destLat, destLon, 5)
+		}
+		
+		simpleGeometry := geometry
+		
+		// IMPORTANTE: Si encontramos el paradero por código, usarlo aunque la ruta no exista
+		var departStop *BusStop
+		if useExactStop {
+			// Usar el paradero real encontrado por código
+			departStop = &BusStop{
+				Name:      originStop.Name,
+				Latitude:  originStop.Latitude,
+				Longitude: originStop.Longitude,
+				Sequence:  0,
+			}
+			log.Printf("✅ [FALLBACK] Usando paradero real encontrado: %s (%.6f, %.6f)", departStop.Name, departStop.Latitude, departStop.Longitude)
+		} else {
+			// Si no encontramos paradero, usar coordenadas de origen (subóptimo)
+			departStop = &BusStop{
+				Name:      fmt.Sprintf("Paradero cercano (%s)", stopCode),
+				Latitude:  originLat,
+				Longitude: originLon,
+				Sequence:  0,
+			}
+			log.Printf("⚠️  [FALLBACK] Usando coordenadas de origen como paradero: %s (%.6f, %.6f)", departStop.Name, departStop.Latitude, departStop.Longitude)
+		}
+		
+		arriveStop := &BusStop{
+			Name:      "Paradero de destino",
+			Latitude:  destLat,
+			Longitude: destLon,
+			Sequence:  1,
+		}
+		
+		log.Printf("✅ [FALLBACK] Creado arriveStop: %s (%.6f, %.6f)", arriveStop.Name, arriveStop.Latitude, arriveStop.Longitude)
 		
 		busLeg := TripLeg{
 			Type:        "bus",
 			Mode:        "Red",
 			RouteNumber: routeNumber,
-			From:        "Origen",  // Nombre genérico
-			To:          "Destino", // Nombre genérico
+			From:        departStop.Name,
+			To:          arriveStop.Name,
 			Duration:    durationMinutes,
 			Distance:    distance / 1000,
 			Instruction: fmt.Sprintf("Tomar bus Red %s hacia el destino", routeNumber),
 			Geometry:    simpleGeometry,
 			StopCount:   stopCount, // Número de paradas desde Moovit
-			// DepartStop y ArriveStop quedan nil - NO hay paradas disponibles
+			DepartStop:  departStop, // CRÍTICO: Siempre tener paradero de origen
+			ArriveStop:  arriveStop, // CRÍTICO: Siempre tener paradero de destino
 		}
+		
+		log.Printf("✅ [FALLBACK] busLeg creado - DepartStop: %v, ArriveStop: %v", busLeg.DepartStop != nil, busLeg.ArriveStop != nil)
 		
 		itinerary.Legs = append(itinerary.Legs, busLeg)
 		itinerary.TotalDistance = distance / 1000
@@ -1328,23 +1990,32 @@ func (s *Scraper) getStopByCode(stopCode string) (*BusStop, error) {
 		return nil, fmt.Errorf("base de datos no disponible")
 	}
 	
-	log.Printf("🔍 [GTFS] Consultando base de datos para código: %s", stopCode)
+	log.Printf("🔍 [GTFS] Consultando base de datos para código: '%s' (len=%d bytes)", stopCode, len(stopCode))
+	
+	// DEBUGGING: Mostrar cada carácter del código
+	for i, ch := range stopCode {
+		log.Printf("   [DEBUG] stopCode[%d] = '%c' (byte=%d)", i, ch, ch)
+	}
 	
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	
 	var stop BusStop
-	var code, description, zoneID sql.NullString
+	var stopID, code, description, zoneID sql.NullString
 	
+	// CORREGIDO: Buscar en AMBOS campos (stop_id Y code) porque en GTFS de Santiago
+	// el código PC1237 está en stop_id, no en code
 	query := `
 		SELECT stop_id, code, name, description, latitude, longitude, zone_id
 		FROM gtfs_stops
-		WHERE UPPER(code) = UPPER(?)
+		WHERE UPPER(stop_id) = UPPER(?) OR UPPER(code) = UPPER(?)
 		LIMIT 1
 	`
 	
-	err := s.db.QueryRowContext(ctx, query, stopCode).Scan(
-		&code,        // stop_id (no lo necesitamos pero está en la query)
+	log.Printf("🔍 [GTFS] Ejecutando query con parámetro: '%s'", stopCode)
+	
+	err := s.db.QueryRowContext(ctx, query, stopCode, stopCode).Scan(
+		&stopID,      // stop_id
 		&code,        // code
 		&stop.Name,
 		&description,
@@ -1355,8 +2026,15 @@ func (s *Scraper) getStopByCode(stopCode string) (*BusStop, error) {
 	
 	if err != nil {
 		if err == sql.ErrNoRows {
+			log.Printf("❌ [GTFS] No se encontraron filas para código: '%s'", stopCode)
+			// DEBUGGING: Verificar si hay datos similares
+			var count int
+			s.db.QueryRow("SELECT COUNT(*) FROM gtfs_stops WHERE stop_id LIKE ? OR code LIKE ?", "%"+stopCode+"%", "%"+stopCode+"%").Scan(&count)
+			log.Printf("   [DEBUG] Paraderos con código similar: %d", count)
+			
 			return nil, fmt.Errorf("paradero con código %s no encontrado en GTFS", stopCode)
 		}
+		log.Printf("❌ [GTFS] Error de base de datos: %v", err)
 		return nil, fmt.Errorf("error consultando GTFS: %v", err)
 	}
 	

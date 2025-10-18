@@ -9,9 +9,12 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
 import 'red_bus_service.dart';
 import 'api_client.dart';
 import 'tts_service.dart';
+import 'server_config.dart';
 
 class NavigationStep {
   final String type; // 'walk', 'wait_bus', 'ride_bus', 'transfer', 'arrival'
@@ -25,6 +28,10 @@ class NavigationStep {
   final bool isCompleted;
   final int? totalStops; // Número total de paradas en el viaje
   final int? currentStop; // Parada actual (para contar progreso)
+  final double? realDistanceMeters; // Distancia real por calles (de OSRM)
+  final int? realDurationSeconds; // Duración real (de OSRM)
+  final List<String>?
+  streetInstructions; // Instrucciones detalladas por calle (de OSRM)
 
   NavigationStep({
     required this.type,
@@ -38,9 +45,18 @@ class NavigationStep {
     this.isCompleted = false,
     this.totalStops,
     this.currentStop,
+    this.realDistanceMeters,
+    this.realDurationSeconds,
+    this.streetInstructions,
   });
 
-  NavigationStep copyWith({bool? isCompleted, int? currentStop}) {
+  NavigationStep copyWith({
+    bool? isCompleted,
+    int? currentStop,
+    double? realDistanceMeters,
+    int? realDurationSeconds,
+    List<String>? streetInstructions,
+  }) {
     return NavigationStep(
       type: type,
       instruction: instruction,
@@ -53,6 +69,9 @@ class NavigationStep {
       isCompleted: isCompleted ?? this.isCompleted,
       totalStops: totalStops,
       currentStop: currentStop ?? this.currentStop,
+      realDistanceMeters: realDistanceMeters ?? this.realDistanceMeters,
+      realDurationSeconds: realDurationSeconds ?? this.realDurationSeconds,
+      streetInstructions: streetInstructions ?? this.streetInstructions,
     );
   }
 }
@@ -99,13 +118,45 @@ class ActiveNavigation {
         '🔍 Geometría encontrada para paso $currentStepIndex: ${geometry.length} puntos',
       );
 
-      // Si es paso de walk, actualizar el punto inicial con la posición actual
-      if (step.type == 'walk' && geometry.length >= 2) {
-        print('🔍 Paso WALK: Actualizando geometría con posición actual');
-        return [
-          currentPosition, // Posición actual actualizada
-          ...geometry.sublist(1), // Resto de la geometría
-        ];
+      // Si es paso de walk o ride_bus, recortar geometría desde el punto más cercano al usuario
+      if ((step.type == 'walk' || step.type == 'ride_bus') &&
+          geometry.length >= 2) {
+        print(
+          '🔍 Paso ${step.type.toUpperCase()}: Recortando geometría desde posición actual',
+        );
+
+        // Encontrar el punto más cercano en la ruta al usuario
+        int closestIndex = 0;
+        double minDistance = double.infinity;
+
+        for (int i = 0; i < geometry.length; i++) {
+          final point = geometry[i];
+          final distance = _calculateDistance(
+            currentPosition.latitude,
+            currentPosition.longitude,
+            point.latitude,
+            point.longitude,
+          );
+
+          if (distance < minDistance) {
+            minDistance = distance;
+            closestIndex = i;
+          }
+        }
+
+        print(
+          '🔍 Punto más cercano: índice $closestIndex (${minDistance.toStringAsFixed(0)}m)',
+        );
+
+        // Si el usuario está muy cerca del punto más cercano (< 10m), usar ese punto
+        // Si no, agregar la posición actual como primer punto
+        if (minDistance < 10) {
+          // Usuario muy cerca de la ruta, usar desde el punto más cercano
+          return geometry.sublist(closestIndex);
+        } else {
+          // Usuario lejos de la ruta, agregar su posición y continuar desde el punto más cercano
+          return [currentPosition, ...geometry.sublist(closestIndex)];
+        }
       }
 
       print('🔍 Retornando geometría pre-calculada');
@@ -124,6 +175,32 @@ class ActiveNavigation {
 
     print('⚠️ Sin geometría para este paso');
     return []; // Sin geometría
+  }
+
+  /// Calcula distancia en metros entre dos coordenadas
+  double _calculateDistance(
+    double lat1,
+    double lon1,
+    double lat2,
+    double lon2,
+  ) {
+    const double earthRadius = 6371000; // Radio de la Tierra en metros
+    final dLat = _toRadians(lat2 - lat1);
+    final dLon = _toRadians(lon2 - lon1);
+
+    final a =
+        math.sin(dLat / 2) * math.sin(dLat / 2) +
+        math.cos(_toRadians(lat1)) *
+            math.cos(_toRadians(lat2)) *
+            math.sin(dLon / 2) *
+            math.sin(dLon / 2);
+
+    final c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a));
+    return earthRadius * c;
+  }
+
+  double _toRadians(double degrees) {
+    return degrees * math.pi / 180;
   }
 
   bool get isComplete => currentStepIndex >= steps.length;
@@ -153,6 +230,7 @@ class IntegratedNavigationService {
   Function(String)? onArrivalAtStop;
   Function()? onDestinationReached;
   Function(String)? onBusDetected;
+  Function()? onGeometryUpdated; // Nuevo: se llama cuando la geometría cambia
 
   // Configuración de umbrales adaptativos
   static const double ARRIVAL_THRESHOLD_METERS =
@@ -179,6 +257,7 @@ class IntegratedNavigationService {
     required double destLat,
     required double destLon,
     required String destinationName,
+    RedBusItinerary? existingItinerary, // Usar itinerario ya obtenido si existe
   }) async {
     print('🚀 Iniciando navegación integrada a $destinationName');
 
@@ -202,13 +281,20 @@ class IntegratedNavigationService {
       );
     }
 
-    // 1. Obtener itinerario de Moovit
-    final itinerary = await _redBusService.getRedBusItinerary(
-      originLat: originLat,
-      originLon: originLon,
-      destLat: destLat,
-      destLon: destLon,
-    );
+    // 1. Usar itinerario existente o solicitar uno nuevo
+    final RedBusItinerary itinerary;
+    if (existingItinerary != null) {
+      print('♻️ Usando itinerario ya obtenido (evita llamada duplicada)');
+      itinerary = existingItinerary;
+    } else {
+      print('🔄 Solicitando nuevo itinerario al backend...');
+      itinerary = await _redBusService.getRedBusItinerary(
+        originLat: originLat,
+        originLon: originLon,
+        destLat: destLat,
+        destLon: destLon,
+      );
+    }
 
     print('📋 Itinerario obtenido: ${itinerary.summary}');
     print('🚌 Buses Red recomendados: ${itinerary.redBusRoutes.join(", ")}');
@@ -263,62 +349,69 @@ class IntegratedNavigationService {
   ) async {
     final steps = <NavigationStep>[];
 
-    // SIEMPRE agregar paso inicial de caminata al primer paradero
-    // Esto es CRÍTICO para usuarios no videntes
-    final firstBusLeg = itinerary.legs.firstWhere(
-      (leg) => leg.type == 'bus',
-      orElse: () => itinerary.legs.first,
-    );
+    print('🚶 Construyendo pasos de navegación...');
+    print('🚶 Legs del itinerario: ${itinerary.legs.length}');
 
-    if (firstBusLeg.type == 'bus' && firstBusLeg.departStop != null) {
-      // Calcular distancia desde posición actual al paradero de partida
-      final stopLat = firstBusLeg.departStop!.location.latitude;
-      final stopLon = firstBusLeg.departStop!.location.longitude;
-      final distanceMeters = _calculateDistance(
-        currentLat,
-        currentLon,
-        stopLat,
-        stopLon,
-      );
-
-      // SIEMPRE agregar paso de caminata al inicio
-      // No confiar solo en GPS - el usuario debe confirmar llegada físicamente
-      final walkTimeMinutes = math.max(
-        1,
-        (distanceMeters / 80).ceil(),
-      ); // ~80m/min, mínimo 1 minuto
-
-      steps.add(
-        NavigationStep(
-          type: 'walk',
-          instruction:
-              'Camina hacia el paradero ${firstBusLeg.departStop!.name}',
-          location: firstBusLeg.departStop!.location,
-          stopId: null,
-          stopName: firstBusLeg.departStop!.name,
-          estimatedDuration: walkTimeMinutes,
-        ),
-      );
-    }
-
-    // Procesar los legs del itinerario
+    // Procesar TODOS los legs del itinerario tal como vienen del backend
     for (var i = 0; i < itinerary.legs.length; i++) {
       final leg = itinerary.legs[i];
 
       if (leg.type == 'walk') {
-        // Paso de caminata (solo si no es el primero que ya agregamos)
-        if (i > 0 || steps.isEmpty) {
-          steps.add(
-            NavigationStep(
-              type: 'walk',
-              instruction: leg.instruction.isNotEmpty
-                  ? leg.instruction
-                  : 'Camina ${(leg.distanceKm * 1000).toInt()} metros',
-              location: leg.arriveStop?.location,
-              stopName: leg.arriveStop?.name,
-              estimatedDuration: leg.durationMinutes,
-            ),
+        // Obtener ruta peatonal detallada desde OSRM
+        final walkFrom =
+            leg.departStop?.location ?? LatLng(currentLat, currentLon);
+        final walkTo = leg.arriveStop?.location;
+
+        if (walkTo != null) {
+          print('🚶 Obteniendo ruta peatonal detallada...');
+          print('   Desde: ${walkFrom.latitude},${walkFrom.longitude}');
+          print(
+            '   Hasta: ${walkTo.latitude},${walkTo.longitude} (${leg.arriveStop?.name})',
           );
+
+          // Solicitar ruta de OSRM en modo peatonal
+          final osrmRoute = await _getOSRMWalkingRoute(walkFrom, walkTo);
+
+          if (osrmRoute != null && osrmRoute['steps'] != null) {
+            // Agregar cada paso de OSRM como un paso de navegación
+            final osrmSteps = osrmRoute['steps'] as List<dynamic>;
+            print('✅ ${osrmSteps.length} pasos OSRM obtenidos');
+
+            for (var osrmStep in osrmSteps) {
+              final instruction = osrmStep['instruction'] as String?;
+              final duration = osrmStep['duration'] as num?;
+
+              if (instruction != null &&
+                  !instruction.toLowerCase().contains('arrive')) {
+                steps.add(
+                  NavigationStep(
+                    type: 'walk',
+                    instruction: instruction,
+                    location: walkTo, // Usar destino como referencia
+                    stopName: leg.arriveStop?.name,
+                    estimatedDuration: duration != null
+                        ? (duration / 60).ceil()
+                        : 1,
+                  ),
+                );
+              }
+            }
+            print('✅ Pasos WALK detallados agregados desde OSRM');
+          } else {
+            // Fallback: usar instrucción simple del backend
+            steps.add(
+              NavigationStep(
+                type: 'walk',
+                instruction: leg.instruction.isNotEmpty
+                    ? leg.instruction
+                    : 'Camina ${(leg.distanceKm * 1000).toInt()} metros hasta ${leg.arriveStop?.name}',
+                location: walkTo,
+                stopName: leg.arriveStop?.name,
+                estimatedDuration: leg.durationMinutes,
+              ),
+            );
+            print('⚠️ Paso WALK simple agregado (OSRM no disponible)');
+          }
         }
       } else if (leg.type == 'bus' && leg.isRedBus) {
         // Esperar el bus
@@ -330,7 +423,8 @@ class IntegratedNavigationService {
             type: 'wait_bus',
             instruction:
                 'Espera el bus Red ${leg.routeNumber} en ${leg.departStop?.name ?? 'este paradero'}',
-            location: leg.departStop?.location,
+            location:
+                null, // NO tiene location - el usuario ya llegó en el paso 'walk'
             stopId: stopInfo?['stop_id'],
             stopName: leg.departStop?.name,
             busRoute: leg.routeNumber,
@@ -365,6 +459,17 @@ class IntegratedNavigationService {
         estimatedDuration: 0,
       ),
     );
+
+    // Log de todos los pasos generados
+    print('🚶 ===== PASOS DE NAVEGACIÓN GENERADOS =====');
+    for (var i = 0; i < steps.length; i++) {
+      final step = steps[i];
+      print('🚶 Paso $i: ${step.type} - ${step.instruction}');
+      if (step.type == 'wait_bus') {
+        print('   └─ Bus: ${step.busRoute}, StopName: ${step.stopName}');
+      }
+    }
+    print('🚶 ==========================================');
 
     return steps;
   }
@@ -458,6 +563,301 @@ class IntegratedNavigationService {
     return geometry;
   }
 
+  /// Obtiene geometría de ruta peatonal usando OSRM
+  /// Retorna: (geometría, distancia en metros, duración en segundos, instrucciones detalladas)
+  Future<
+    ({
+      List<LatLng> geometry,
+      double distance,
+      int duration,
+      List<String> streetInstructions,
+    })?
+  >
+  _getWalkingRouteGeometry(LatLng origin, LatLng destination) async {
+    try {
+      // Solicitar múltiples rutas alternativas y elegir la mejor
+      // alternatives=true: pide hasta 3 rutas alternativas
+      // continue_straight=true: prefiere rutas sin giros innecesarios
+      final baseUrl = ServerConfig.instance.osrmUrl;
+      final profile = ServerConfig.instance.osrmProfile;
+      final url =
+          '$baseUrl/route/v1/$profile/${origin.longitude},${origin.latitude};${destination.longitude},${destination.latitude}?overview=full&geometries=geojson&steps=true&annotations=true&alternatives=true&continue_straight=true';
+
+      print('🗺️ [OSRM] Solicitando mejores rutas alternativas...');
+      print('🗺️ [OSRM] URL: $baseUrl');
+
+      final response = await http
+          .get(Uri.parse(url))
+          .timeout(
+            const Duration(seconds: 5),
+            onTimeout: () {
+              throw TimeoutException('OSRM request timeout');
+            },
+          );
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+
+        if (data['code'] == 'Ok' &&
+            data['routes'] != null &&
+            data['routes'].isNotEmpty) {
+          // Analizar todas las rutas alternativas
+          final routes = data['routes'] as List;
+          print(
+            '🗺️ [OSRM] Se encontraron ${routes.length} rutas alternativas',
+          );
+
+          // Seleccionar la mejor ruta basándose en criterios
+          var bestRoute = routes[0];
+          var bestScore = double.infinity;
+
+          for (var i = 0; i < routes.length; i++) {
+            final route = routes[i];
+            final distance = (route['distance'] as num).toDouble();
+            final duration = (route['duration'] as num).toInt();
+            final steps = (route['legs'][0]['steps'] as List).length;
+
+            // Calcular score: priorizar distancia (70%) y tiempo (30%)
+            // Menos giros (steps) es un bonus
+            final distanceScore = distance / 1000; // normalizar a km
+            final durationScore = duration / 60; // normalizar a minutos
+            final turnsScore = steps * 0.5; // penalizar giros extras
+
+            final score =
+                (distanceScore * 0.5) +
+                (durationScore * 0.3) +
+                (turnsScore * 0.2);
+
+            print(
+              '🗺️ [OSRM] Ruta $i: ${distance.toInt()}m, ${duration}s, $steps pasos, score: ${score.toStringAsFixed(2)}',
+            );
+
+            if (score < bestScore) {
+              bestScore = score;
+              bestRoute = route;
+            }
+          }
+
+          final coordinates = bestRoute['geometry']['coordinates'] as List;
+
+          // Convertir de [lon, lat] a LatLng
+          final geometry = coordinates.map<LatLng>((coord) {
+            return LatLng(coord[1] as double, coord[0] as double);
+          }).toList();
+
+          // Extraer distancia y duración de OSRM
+          final distanceMeters = (bestRoute['distance'] as num).toDouble();
+          final durationSeconds = (bestRoute['duration'] as num).toInt();
+
+          // Extraer instrucciones paso a paso con nombres de calles
+          final streetInstructions = <String>[];
+          if (bestRoute['legs'] != null && bestRoute['legs'].isNotEmpty) {
+            final legs = bestRoute['legs'] as List;
+            for (var leg in legs) {
+              if (leg['steps'] != null) {
+                final steps = leg['steps'] as List;
+                for (var step in steps) {
+                  final name = step['name'] ?? '';
+                  final maneuver = step['maneuver'];
+                  if (maneuver != null && name.isNotEmpty && name != '-') {
+                    final type = maneuver['type'] ?? '';
+                    final modifier = maneuver['modifier'] ?? '';
+                    final distance =
+                        (step['distance'] as num?)?.toDouble() ?? 0;
+
+                    // Crear instrucción legible
+                    String instruction = _buildStreetInstruction(
+                      type,
+                      modifier,
+                      name,
+                      distance,
+                    );
+                    if (instruction.isNotEmpty) {
+                      streetInstructions.add(instruction);
+                    }
+                  }
+                }
+              }
+            }
+          }
+
+          print('🗺️ [OSRM] Ruta obtenida: ${geometry.length} puntos');
+          print('🗺️ [OSRM] Instrucciones: ${streetInstructions.length} pasos');
+
+          // Mostrar todas las instrucciones para debugging
+          if (streetInstructions.isNotEmpty) {
+            print('📍 [OSRM] Instrucciones detalladas:');
+            for (int i = 0; i < streetInstructions.length; i++) {
+              print('   ${i + 1}. ${streetInstructions[i]}');
+            }
+          }
+
+          final distanceKm = distanceMeters / 1000;
+          final durationMin = durationSeconds / 60;
+          print(
+            '🗺️ [OSRM] Distancia: ${distanceKm.toStringAsFixed(2)}km, Duración: ${durationMin.toStringAsFixed(1)}min',
+          );
+
+          return (
+            geometry: geometry,
+            distance: distanceMeters,
+            duration: durationSeconds,
+            streetInstructions: streetInstructions,
+          );
+        }
+      }
+
+      print('⚠️ [OSRM] Error HTTP: ${response.statusCode}');
+    } catch (e) {
+      print('❌ [OSRM] Error obteniendo ruta: $e');
+    }
+
+    // Fallback: línea recta si falla OSRM
+    print('⚠️ [OSRM] Usando fallback: línea recta');
+    return null;
+  }
+
+  /// Obtiene geometría de ruta vehicular usando OSRM (para buses)
+  /// Usa el perfil 'driving' para seguir calles vehiculares
+  Future<({List<LatLng> geometry, double distance, int duration})?>
+  _getBusRouteGeometry(LatLng origin, LatLng destination) async {
+    try {
+      // Solicitar rutas alternativas y elegir la mejor para buses
+      final baseUrl = ServerConfig.instance.osrmUrl;
+      final url =
+          '$baseUrl/route/v1/driving/${origin.longitude},${origin.latitude};${destination.longitude},${destination.latitude}?overview=full&geometries=geojson&alternatives=true&continue_straight=true';
+
+      print('🚌 [OSRM-BUS] Solicitando mejores rutas vehiculares...');
+      print('🚌 [OSRM-BUS] De: ${origin.latitude},${origin.longitude}');
+      print(
+        '🚌 [OSRM-BUS] A: ${destination.latitude},${destination.longitude}',
+      );
+
+      final response = await http
+          .get(Uri.parse(url))
+          .timeout(
+            const Duration(seconds: 10),
+            onTimeout: () {
+              throw TimeoutException('OSRM bus route timeout');
+            },
+          );
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+
+        if (data['routes'] != null && data['routes'].isNotEmpty) {
+          final routes = data['routes'] as List;
+          print(
+            '🚌 [OSRM-BUS] Se encontraron ${routes.length} rutas alternativas',
+          );
+
+          // Para buses, priorizar la ruta más rápida (tiempo es más importante)
+          var bestRoute = routes[0];
+          var bestDuration = double.infinity;
+
+          for (var i = 0; i < routes.length; i++) {
+            final route = routes[i];
+            final distance = (route['distance'] as num).toDouble();
+            final duration = (route['duration'] as num).toInt();
+
+            print(
+              '🚌 [OSRM-BUS] Ruta $i: ${(distance / 1000).toStringAsFixed(2)}km, ${(duration / 60).toStringAsFixed(1)}min',
+            );
+
+            // Para buses, priorizar tiempo sobre distancia
+            if (duration < bestDuration) {
+              bestDuration = duration.toDouble();
+              bestRoute = route;
+            }
+          }
+
+          final geometryData = bestRoute['geometry'];
+
+          // Extraer distancia y duración
+          final distanceMeters = (bestRoute['distance'] as num).toDouble();
+          final durationSeconds = (bestRoute['duration'] as num).toInt();
+
+          // Decodificar geometría
+          final coordinates = geometryData['coordinates'] as List;
+          final geometry = coordinates
+              .map((coord) => LatLng(coord[1] as double, coord[0] as double))
+              .toList();
+
+          print('🚌 [OSRM-BUS] ✅ Mejor ruta: ${geometry.length} puntos');
+          print(
+            '🚌 [OSRM-BUS] Distancia: ${(distanceMeters / 1000).toStringAsFixed(2)}km, Duración: ${(durationSeconds / 60).toStringAsFixed(1)}min',
+          );
+
+          return (
+            geometry: geometry,
+            distance: distanceMeters,
+            duration: durationSeconds,
+          );
+        }
+      }
+
+      print('⚠️ [OSRM-BUS] Error HTTP: ${response.statusCode}');
+    } catch (e) {
+      print('❌ [OSRM-BUS] Error obteniendo ruta: $e');
+    }
+
+    // Fallback: retornar null para usar geometría del backend
+    print('⚠️ [OSRM-BUS] Usando fallback');
+    return null;
+  }
+
+  /// Construye una instrucción legible en español desde los datos de OSRM
+  String _buildStreetInstruction(
+    String type,
+    String modifier,
+    String name,
+    double distance,
+  ) {
+    String action = '';
+
+    switch (type) {
+      case 'depart':
+        action = 'Comienza en';
+        break;
+      case 'arrive':
+        action = 'Llegas a';
+        break;
+      case 'turn':
+        if (modifier.contains('left')) {
+          action = 'Gira a la izquierda en';
+        } else if (modifier.contains('right')) {
+          action = 'Gira a la derecha en';
+        } else if (modifier.contains('straight')) {
+          action = 'Continúa recto por';
+        } else {
+          action = 'Gira en';
+        }
+        break;
+      case 'new name':
+        action = 'Continúa por';
+        break;
+      case 'continue':
+        action = 'Continúa por';
+        break;
+      case 'merge':
+        action = 'Incorpórate a';
+        break;
+      case 'roundabout':
+        action = 'Toma la rotonda hacia';
+        break;
+      default:
+        action = 'Continúa por';
+    }
+
+    if (distance > 0 && distance < 10) {
+      return '$action $name';
+    } else if (distance >= 10) {
+      return '$action $name (${distance.toStringAsFixed(0)}m)';
+    }
+
+    return '$action $name';
+  }
+
   /// Construye geometrías individuales para cada paso de navegación
   Future<Map<int, List<LatLng>>> _buildStepGeometries(
     List<NavigationStep> steps,
@@ -476,18 +876,46 @@ class IntegratedNavigationService {
 
       switch (step.type) {
         case 'walk':
-          // Geometría de caminata: línea recta desde origen hasta paradero
+          // Geometría de caminata: obtener ruta peatonal real usando OSRM
           if (step.location != null) {
-            stepGeometry.add(origin); // Posición inicial
-            stepGeometry.add(step.location!); // Paradero destino
-            print(
-              '   ✅ WALK: Añadida geometría ${origin.latitude},${origin.longitude} → ${step.location!.latitude},${step.location!.longitude}',
+            print('   🚶 WALK: Obteniendo ruta peatonal desde OSRM...');
+            final walkRoute = await _getWalkingRouteGeometry(
+              origin,
+              step.location!,
             );
+
+            if (walkRoute != null) {
+              stepGeometry.addAll(walkRoute.geometry);
+              print(
+                '   ✅ WALK: Ruta peatonal obtenida (${walkRoute.geometry.length} puntos, ${walkRoute.distance.toStringAsFixed(0)}m, ${walkRoute.duration}s)',
+              );
+              print(
+                '   📍 Instrucciones: ${walkRoute.streetInstructions.length} pasos',
+              );
+
+              // Actualizar step con distancia, duración e instrucciones reales de OSRM
+              steps[i] = step.copyWith(
+                realDistanceMeters: walkRoute.distance,
+                realDurationSeconds: walkRoute.duration,
+                streetInstructions: walkRoute.streetInstructions,
+              );
+            } else {
+              // Fallback: línea recta si OSRM falla
+              stepGeometry.add(origin);
+              stepGeometry.add(step.location!);
+              print(
+                '   ⚠️ WALK: Usando fallback línea recta ${origin.latitude},${origin.longitude} → ${step.location!.latitude},${step.location!.longitude}',
+              );
+            }
           }
           break;
 
         case 'ride_bus':
-          // Geometría del bus: obtener del leg correspondiente del itinerario
+          // Geometría del bus: PRIORIZAR geometría del backend (paraderos reales)
+          print('   🚌 RIDE_BUS: Buscando geometría de paraderos reales...');
+
+          // PRIMERO: Intentar usar geometría del backend con paraderos reales
+          bool foundBackendGeometry = false;
           for (var leg in itinerary.legs) {
             if (leg.type == 'bus' &&
                 leg.routeNumber == step.busRoute &&
@@ -495,20 +923,64 @@ class IntegratedNavigationService {
                 leg.geometry!.isNotEmpty) {
               stepGeometry.addAll(leg.geometry!);
               print(
-                '   ✅ RIDE_BUS: Añadida geometría del leg (${leg.geometry!.length} puntos)',
+                '   ✅ RIDE_BUS: Geometría con paraderos reales del backend (${leg.geometry!.length} puntos)',
               );
+              foundBackendGeometry = true;
               break;
             }
           }
 
-          // Si no hay geometría del leg, crear línea entre paraderos
-          if (stepGeometry.isEmpty && step.location != null) {
-            // Buscar el paradero de inicio del bus
-            final prevStep = i > 0 ? steps[i - 1] : null;
-            if (prevStep?.location != null) {
-              stepGeometry.add(prevStep!.location!);
-              stepGeometry.add(step.location!);
-              print('   ⚠️ RIDE_BUS: Geometría fallback (línea recta)');
+          // SOLO si no hay geometría del backend, usar OSRM como fallback
+          if (!foundBackendGeometry) {
+            print(
+              '   ⚠️ RIDE_BUS: No hay geometría del backend, intentando OSRM...',
+            );
+
+            // Encontrar paradero de inicio (del paso anterior wait_bus)
+            LatLng? busStartLocation;
+            if (i > 0) {
+              final prevStep = steps[i - 1];
+              if (prevStep.type == 'wait_bus') {
+                // Buscar la ubicación del paradero de partida
+                for (var leg in itinerary.legs) {
+                  if (leg.type == 'bus' &&
+                      leg.routeNumber == step.busRoute &&
+                      leg.departStop != null) {
+                    busStartLocation = leg.departStop!.location;
+                    print('   🚌 Paradero inicio: ${leg.departStop!.name}');
+                    break;
+                  }
+                }
+              }
+            }
+
+            if (busStartLocation != null && step.location != null) {
+              // Usar OSRM con perfil 'driving' para obtener ruta vehicular
+              print('   🚌 Solicitando ruta vehicular a OSRM como fallback...');
+
+              final busRoute = await _getBusRouteGeometry(
+                busStartLocation,
+                step.location!,
+              );
+
+              if (busRoute != null && busRoute.geometry.length > 2) {
+                stepGeometry.addAll(busRoute.geometry);
+                print(
+                  '   ✅ RIDE_BUS: Ruta OSRM obtenida (${busRoute.geometry.length} puntos, ${(busRoute.distance / 1000).toStringAsFixed(2)}km)',
+                );
+              } else {
+                // Si OSRM también falla, usar línea recta
+                if (stepGeometry.isEmpty) {
+                  stepGeometry.add(busStartLocation);
+                  stepGeometry.add(step.location!);
+                  print('   ⚠️ RIDE_BUS: OSRM falló, usando línea recta');
+                }
+              }
+            } else {
+              // Sin ubicación de inicio o destino, no se puede calcular ruta
+              print(
+                '   ⚠️ RIDE_BUS: No se pudo determinar ubicaciones para OSRM',
+              );
             }
           }
           break;
@@ -535,13 +1007,29 @@ class IntegratedNavigationService {
 
   /// Anuncia el inicio de navegación por voz
   void _announceNavigationStart(String destination, RedBusItinerary itinerary) {
+    print('🔊 [TTS] _announceNavigationStart llamado');
+    print('🔊 [TTS] _activeNavigation != null? ${_activeNavigation != null}');
+
     // Construir mensaje detallado del viaje
     final busLegs = itinerary.legs.where((leg) => leg.type == 'bus').toList();
 
     String busInfo = '';
+    String arrivalInfo = '';
     if (busLegs.isNotEmpty) {
       final firstBusLeg = busLegs.first;
-      busInfo = 'Tomarás el bus ${firstBusLeg.routeNumber}';
+      busInfo = 'Debes tomar el bus ${firstBusLeg.routeNumber}';
+
+      // Calcular tiempo de llegada de la micro (estimado en base al tiempo de caminata)
+      int walkTimeMinutes = 0;
+      if (_activeNavigation?.currentStep?.type == 'walk') {
+        walkTimeMinutes = _activeNavigation!.currentStep!.estimatedDuration;
+      }
+
+      // Tiempo estimado hasta que llegue la micro (caminata + espera promedio de 5-10 min)
+      final estimatedArrivalMinutes =
+          walkTimeMinutes + 7; // Promedio 7 min de espera
+      arrivalInfo =
+          'La micro llegará en aproximadamente $estimatedArrivalMinutes minutos';
 
       if (busLegs.length > 1) {
         busInfo += ' y luego harás ${busLegs.length - 1} transbordo';
@@ -554,29 +1042,59 @@ class IntegratedNavigationService {
     String firstStepInstruction = '';
     if (_activeNavigation?.currentStep != null) {
       final step = _activeNavigation!.currentStep!;
+      print('🔊 [TTS] currentStep.type = ${step.type}');
+      print('🔊 [TTS] currentStep.stopName = ${step.stopName}');
+      print('🔊 [TTS] currentStep.instruction = ${step.instruction}');
 
       // SOLO anunciar el primer paso si es 'walk'
-      // Los otros pasos se anunciarán cuando se llegue a ellos
       if (step.type == 'walk' && step.stopName != null) {
         final distance = (step.estimatedDuration * 80).toInt();
         firstStepInstruction =
-            'Primer paso: Dirígete caminando hacia el paradero ${step.stopName}. '
+            'Dirígete caminando hacia el paradero ${step.stopName}. '
             'Distancia aproximada: $distance metros. '
             'Tiempo estimado: ${step.estimatedDuration} minuto';
         if (step.estimatedDuration > 1) firstStepInstruction += 's';
         firstStepInstruction += '. ';
+
+        // Agregar info de la micro
+        firstStepInstruction += '$busInfo$arrivalInfo. ';
+
+        // Agregar instrucciones de calle si están disponibles
+        if (step.streetInstructions != null &&
+            step.streetInstructions!.isNotEmpty) {
+          final firstStreetInstruction = step.streetInstructions!.first;
+          firstStepInstruction += 'Comienza así: $firstStreetInstruction. ';
+        }
+
+        print('🔊 [TTS] firstStepInstruction creado: $firstStepInstruction');
+      } else {
+        print(
+          '🔊 [TTS] NO se creó firstStepInstruction (type=${step.type}, stopName=${step.stopName})',
+        );
       }
-      // Si el primer paso NO es walk (caso raro), no anunciar nada extra
+    } else {
+      print('🔊 [TTS] currentStep es NULL');
     }
 
-    final message =
-        '''
+    // Mensaje inicial completo y directo
+    String message;
+    if (firstStepInstruction.isNotEmpty) {
+      message = firstStepInstruction.trim();
+    } else {
+      // Caso sin caminata (raro): anunciar info completa
+      message =
+          '''
 Ruta calculada hacia $destination. 
-$busInfo
+$busInfo$arrivalInfo
 Duración total estimada: ${itinerary.totalDurationMinutes} minutos. 
-$firstStepInstruction
 Te iré guiando paso a paso.
 ''';
+    }
+
+    print('🔊 [TTS] Mensaje completo a anunciar:');
+    print('🔊 [TTS] ===========================');
+    print(message);
+    print('🔊 [TTS] ===========================');
 
     // Una sola llamada TTS para todo el anuncio inicial
     TtsService.instance.speak(message, urgent: true);
@@ -663,6 +1181,11 @@ Te iré guiando paso a paso.
     // Guardar última posición
     _lastPosition = position;
 
+    // Notificar cambio de geometría (para actualizar el mapa en tiempo real)
+    if (onGeometryUpdated != null) {
+      onGeometryUpdated!();
+    }
+
     // Filtrar posiciones con baja precisión GPS
     if (position.accuracy > GPS_ACCURACY_THRESHOLD) {
       print(
@@ -690,11 +1213,51 @@ Te iré guiando paso a paso.
 
     // Verificar si llegó a la ubicación del paso actual
     if (currentStep.location != null) {
-      final distanceToTarget = _distance.as(
-        LengthUnit.Meter,
-        userLocation,
-        currentStep.location!,
-      );
+      double distanceToTarget;
+
+      // Si el paso tiene distancia real calculada por OSRM, usarla
+      // Para pasos de caminata, OSRM da la distancia real por calles
+      if (currentStep.type == 'walk' &&
+          currentStep.realDistanceMeters != null) {
+        // Para pasos walk con OSRM: calcular distancia restante basada en geometría de ruta
+        final geometry = _activeNavigation!.getCurrentStepGeometry(
+          userLocation,
+        );
+        if (geometry.isNotEmpty) {
+          // Sumar distancia punto a punto en la geometría restante
+          distanceToTarget = 0;
+          for (int i = 0; i < geometry.length - 1; i++) {
+            distanceToTarget += _distance.as(
+              LengthUnit.Meter,
+              geometry[i],
+              geometry[i + 1],
+            );
+          }
+          print(
+            '🗺️ Distancia real restante (OSRM): ${distanceToTarget.toStringAsFixed(1)}m',
+          );
+        } else {
+          // Fallback: línea recta
+          distanceToTarget = _distance.as(
+            LengthUnit.Meter,
+            userLocation,
+            currentStep.location!,
+          );
+          print(
+            '⚠️ Usando distancia línea recta (sin geometría): ${distanceToTarget.toStringAsFixed(1)}m',
+          );
+        }
+      } else {
+        // Para otros tipos de paso o sin OSRM: línea recta
+        distanceToTarget = _distance.as(
+          LengthUnit.Meter,
+          userLocation,
+          currentStep.location!,
+        );
+        print(
+          '📍 Distancia línea recta: ${distanceToTarget.toStringAsFixed(1)}m',
+        );
+      }
 
       print(
         '📍 Distancia al objetivo: ${distanceToTarget.toStringAsFixed(1)}m (GPS: ${position.accuracy.toStringAsFixed(1)}m)',
@@ -868,15 +1431,27 @@ Te iré guiando paso a paso.
   /// Obtiene la navegación activa
   ActiveNavigation? get activeNavigation => _activeNavigation;
 
+  /// Obtiene la última posición GPS conocida
+  Position? get lastPosition => _lastPosition;
+
   // Geometría del paso actual usando la última posición GPS
   List<LatLng> get currentStepGeometry {
-    if (_activeNavigation == null || _lastPosition == null) return [];
+    if (_activeNavigation == null || _lastPosition == null) {
+      print('🗺️ [GEOMETRY] activeNavigation o lastPosition es null');
+      return [];
+    }
 
     final currentPos = LatLng(
       _lastPosition!.latitude,
       _lastPosition!.longitude,
     );
-    return _activeNavigation!.getCurrentStepGeometry(currentPos);
+
+    final geometry = _activeNavigation!.getCurrentStepGeometry(currentPos);
+    print(
+      '🗺️ [GEOMETRY] Retornando geometría del paso ${_activeNavigation!.currentStepIndex}: ${geometry.length} puntos',
+    );
+
+    return geometry;
   }
 
   /// Repite la instrucción actual
@@ -889,9 +1464,170 @@ Te iré guiando paso a paso.
 
   /// Cancela la navegación
   void cancelNavigation() {
-    if (_activeNavigation != null) {
-      TtsService.instance.speak('Navegación cancelada');
-      stopNavigation();
+    stopNavigation();
+    TtsService.instance.speak('Navegación cancelada');
+  }
+
+  /// Obtiene ruta peatonal detallada desde OSRM
+  Future<Map<String, dynamic>?> _getOSRMWalkingRoute(
+    LatLng from,
+    LatLng to,
+  ) async {
+    try {
+      // Usar servidor OSRM público o local
+      final url = Uri.parse(
+        'https://router.project-osrm.org/route/v1/foot/${from.longitude},${from.latitude};${to.longitude},${to.latitude}?steps=true&overview=full&geometries=geojson',
+      );
+
+      final response = await http.get(url).timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        final routes = data['routes'] as List<dynamic>?;
+
+        if (routes != null && routes.isNotEmpty) {
+          final route = routes[0] as Map<String, dynamic>;
+          final legs = route['legs'] as List<dynamic>?;
+
+          if (legs != null && legs.isNotEmpty) {
+            final leg = legs[0] as Map<String, dynamic>;
+            final steps = leg['steps'] as List<dynamic>?;
+
+            if (steps != null) {
+              // Convertir pasos de OSRM a formato simple
+              final simpleSteps = <Map<String, dynamic>>[];
+
+              for (var step in steps) {
+                final maneuver = step['maneuver'] as Map<String, dynamic>?;
+                final type = maneuver?['type'] as String?;
+                final modifier = maneuver?['modifier'] as String?;
+                final distance = step['distance'] as num?;
+                final duration = step['duration'] as num?;
+                final name = step['name'] as String?;
+
+                // Generar instrucción legible
+                String instruction = _formatOSRMInstruction(
+                  type,
+                  modifier,
+                  name,
+                  distance,
+                );
+
+                simpleSteps.add({
+                  'instruction': instruction,
+                  'distance': distance,
+                  'duration': duration,
+                });
+              }
+
+              return {'steps': simpleSteps};
+            }
+          }
+        }
+      }
+
+      print('⚠️ OSRM no retornó ruta válida');
+      return null;
+    } catch (e) {
+      print('❌ Error obteniendo ruta OSRM: $e');
+      return null;
     }
+  }
+
+  /// Formatea instrucción de OSRM a texto legible en español
+  String _formatOSRMInstruction(
+    String? type,
+    String? modifier,
+    String? street,
+    num? distance,
+  ) {
+    String instruction = '';
+
+    // Interpretar tipo de maniobra
+    switch (type) {
+      case 'turn':
+        if (modifier == 'left')
+          instruction = 'Gira a la izquierda';
+        else if (modifier == 'right')
+          instruction = 'Gira a la derecha';
+        else if (modifier == 'slight left')
+          instruction = 'Gira ligeramente a la izquierda';
+        else if (modifier == 'slight right')
+          instruction = 'Gira ligeramente a la derecha';
+        else if (modifier == 'sharp left')
+          instruction = 'Gira bruscamente a la izquierda';
+        else if (modifier == 'sharp right')
+          instruction = 'Gira bruscamente a la derecha';
+        else
+          instruction = 'Gira';
+        break;
+      case 'new name':
+      case 'continue':
+        instruction = 'Continúa';
+        break;
+      case 'depart':
+        instruction = 'Sal';
+        break;
+      case 'arrive':
+        instruction = 'Has llegado';
+        break;
+      case 'roundabout':
+        instruction = 'Toma la rotonda';
+        break;
+      default:
+        instruction = 'Continúa recto';
+    }
+
+    // Agregar nombre de calle si existe
+    if (street != null && street.isNotEmpty && street != 'unknown') {
+      instruction += ' por $street';
+    }
+
+    // Agregar distancia
+    if (distance != null && distance > 0) {
+      if (distance < 100) {
+        instruction += ' durante ${distance.round()} metros';
+      } else {
+        instruction += ' durante ${(distance / 100).round() * 100} metros';
+      }
+    }
+
+    return instruction;
+  }
+
+  /// Avanza al siguiente paso de navegación
+  void advanceToNextStep() {
+    if (_activeNavigation == null) {
+      print('⚠️ No hay navegación activa');
+      return;
+    }
+
+    final currentIndex = _activeNavigation!.currentStepIndex;
+    if (currentIndex + 1 >= _activeNavigation!.steps.length) {
+      print('⚠️ Ya estás en el último paso de navegación');
+      return;
+    }
+
+    _activeNavigation!.currentStepIndex++;
+    final newStep = _activeNavigation!.currentStep;
+
+    print(
+      '📍 [STEP] Avanzando paso: $currentIndex → ${_activeNavigation!.currentStepIndex}',
+    );
+    print('📍 [STEP] Nuevo paso: ${newStep?.type} - ${newStep?.instruction}');
+
+    // Notificar cambio de paso
+    if (newStep != null && onStepChanged != null) {
+      onStepChanged!(newStep);
+    }
+  }
+
+  /// TEST: Simula una posición GPS para testing
+  /// Útil para probar la navegación sin caminar físicamente
+  void simulatePosition(Position position) {
+    print(
+      '🧪 [TEST] Inyectando posición simulada: ${position.latitude}, ${position.longitude}',
+    );
+    _onLocationUpdate(position);
   }
 }

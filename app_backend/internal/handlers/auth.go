@@ -61,7 +61,8 @@ func Setup(db *sql.DB) {
 
 	if auto := strings.TrimSpace(os.Getenv("GTFS_AUTO_SYNC")); strings.EqualFold(auto, "true") {
 		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+			log.Printf("gtfs auto-sync: starting (this may take several minutes for large feeds)...")
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute) // Aumentado a 30 minutos
 			defer cancel()
 			summary, err := gtfsLoader.Sync(ctx, dbConn)
 			if err != nil {
@@ -71,7 +72,7 @@ func Setup(db *sql.DB) {
 			gtfsSummaryMu.Lock()
 			gtfsLastSummary = summary
 			gtfsSummaryMu.Unlock()
-			log.Printf("gtfs auto-sync completed: %d stops", summary.StopsImported)
+			log.Printf("gtfs auto-sync completed: %d stops imported from %s", summary.StopsImported, summary.SourceURL)
 		}()
 	}
 }

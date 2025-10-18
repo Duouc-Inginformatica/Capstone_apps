@@ -226,6 +226,16 @@ class RedBusItinerary {
     final routesData = json['red_bus_routes'] as List<dynamic>? ?? [];
     final routes = routesData.map((r) => r.toString()).toList();
 
+    // LOG DETALLADO: Verificar todos los legs recibidos del backend
+    print('📋 [BACKEND→FRONTEND] Itinerario recibido con ${legs.length} legs:');
+    for (int i = 0; i < legs.length; i++) {
+      final leg = legs[i];
+      final geomPoints = leg.geometry?.length ?? 0;
+      print(
+        '   └─ Leg ${i + 1}: type=${leg.type}, mode=${leg.mode}, route=${leg.routeNumber ?? "N/A"}, geometry=$geomPoints pts, from="${leg.from}", to="${leg.to}"',
+      );
+    }
+
     return RedBusItinerary(
       origin: LatLng(
         (originData['latitude'] as num).toDouble(),

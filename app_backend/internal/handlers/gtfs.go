@@ -31,7 +31,7 @@ func SyncGTFS(c *fiber.Ctx) error {
 	gtfsSyncMu.Lock()
 	defer gtfsSyncMu.Unlock()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute) // Aumentado a 30 minutos
 	defer cancel()
 
 	summary, err := gtfsLoader.Sync(ctx, dbConn)
@@ -176,9 +176,9 @@ func GetStopByCode(c *fiber.Ctx) error {
 	err := dbConn.QueryRowContext(ctx, `
 		SELECT stop_id, code, name, description, latitude, longitude, zone_id, wheelchair_boarding
 		FROM gtfs_stops
-		WHERE UPPER(code) = ?
+		WHERE UPPER(stop_id) = ? OR UPPER(code) = ?
 		LIMIT 1
-	`, code).Scan(&stop.StopID, &stop.Code, &stop.Name, &stop.Description, 
+	`, code, code).Scan(&stop.StopID, &stop.Code, &stop.Name, &stop.Description, 
 		&stop.Latitude, &stop.Longitude, &stop.ZoneID, &stop.WheelchairBoarding)
 
 	if err != nil {
