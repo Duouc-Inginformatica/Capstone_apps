@@ -1,0 +1,51 @@
+﻿graphhopper:
+  datareader.file: data/santiago.osm.pbf
+  graph.location: graph-cache
+  
+  # ConfiguraciÃ³n de importaciÃ³n OSM - vacÃ­o para incluir todas las vÃ­as con perfil foot
+  import.osm.ignored_highways: ""
+  
+  # Encoded values necesarios para custom models
+  graph.encoded_values: road_class,road_environment,max_speed,road_access
+  
+  # Perfiles de routing
+  profiles:
+    - name: foot
+      custom_model:
+        speed:
+          - if: true
+            limit_to: 4.25  # 5 km/h * 0.85 = 4.25 km/h para accesibilidad
+        distance_influence: 70
+    
+    - name: car
+      custom_model:
+        speed:
+          - if: true
+            limit_to: 120  # Velocidad mÃ¡xima 120 km/h
+    
+    - name: pt
+      custom_model:
+        speed:
+          - if: true
+            limit_to: 80  # Velocidad mÃ¡xima buses 80 km/h
+
+  # Transporte PÃºblico (GTFS)
+  gtfs:
+    file: data/gtfs-santiago.zip
+
+  # Optimizaciones
+  prepare:
+    min_network_size: 200
+    min_one_way_network_size: 200
+    
+  routing:
+    max_visited_nodes: 1000000
+
+# ConfiguraciÃ³n del servidor DropWizard
+server:
+  application_connectors:
+    - type: http
+      port: 8989
+  admin_connectors:
+    - type: http
+      port: 8990
