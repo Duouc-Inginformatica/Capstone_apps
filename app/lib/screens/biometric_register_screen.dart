@@ -4,7 +4,7 @@ import 'package:speech_to_text/speech_to_text.dart' as stt;
 import '../services/biometric_auth_service.dart';
 import '../services/tts_service.dart';
 import '../services/api_client.dart';
-import 'home_screen.dart';
+import 'map_screen.dart';
 
 /// Pantalla de registro asistido por voz con huella dactilar
 /// Flujo: Huella verificada → Pedir nombre de usuario (voz) → Email opcional → Guardar en DB
@@ -197,28 +197,51 @@ class _BiometricRegisterScreenState extends State<BiometricRegisterScreen> {
 
       // Registrar en backend para persistencia cross-device
       // Usar el username como identificador único, sin password (biometric only)
+      var backendSynced = true;
       try {
         await _apiClient.biometricRegister(
           username: username,
           biometricToken: widget.biometricToken,
           email: email,
         );
-      } catch (backendError) {
-        // Si falla el backend, el registro local ya está hecho
-        debugPrint('⚠️ Registro backend falló pero local OK: $backendError');
+      } catch (backendError, stackTrace) {
+        backendSynced = false;
+        _log(
+          '⚠️ Registro backend falló pero local OK',
+          error: backendError,
+          stackTrace: stackTrace,
+        );
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'No fue posible sincronizar con el servidor. Tu cuenta quedó guardada en este dispositivo.',
+              ),
+              duration: Duration(seconds: 4),
+            ),
+          );
+        }
       }
 
-      await _ttsService.speak(
+      final successMessage = StringBuffer(
         'Cuenta creada exitosamente. Tu huella dactilar es ahora tu método de autenticación permanente. '
         'Bienvenido, $username.',
       );
 
+      if (!backendSynced) {
+        successMessage.write(
+          ' Sin embargo, no pudimos conectar con el servidor. Cuando esté disponible, vuelve a iniciar sesión para sincronizar tu cuenta.',
+        );
+      }
+
+      await _ttsService.speak(successMessage.toString());
+
       await Future.delayed(const Duration(seconds: 3));
 
       if (mounted) {
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (_) => const HomeScreen()),
-        );
+        Navigator.of(
+          context,
+        ).pushReplacement(MaterialPageRoute(builder: (_) => const MapScreen()));
       }
     } catch (e) {
       setState(() {

@@ -5,7 +5,7 @@ import '../services/auth_storage.dart';
 import '../services/server_config.dart';
 import '../services/tts_service.dart';
 import '../widgets/server_address_dialog.dart';
-import 'login_screen.dart';
+import 'login_screen_v2.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -77,7 +77,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (!mounted) return;
       Navigator.of(
         context,
-      ).pushNamedAndRemoveUntil(LoginScreen.routeName, (route) => false);
+      ).pushNamedAndRemoveUntil(LoginScreenV2.routeName, (route) => false);
     } finally {
       if (mounted) {
         setState(() => _processingLogout = false);

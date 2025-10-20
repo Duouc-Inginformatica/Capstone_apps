@@ -4,7 +4,7 @@ import '../services/biometric_auth_service.dart';
 import '../services/tts_service.dart';
 import '../services/npu_detector_service.dart';
 import '../services/api_client.dart';
-import 'home_screen.dart';
+import 'map_screen.dart';
 import 'biometric_register_screen.dart';
 
 /// Login Screen V2 - UI Clásica de Figma con Badge IA
@@ -12,6 +12,8 @@ import 'biometric_register_screen.dart';
 /// El badge IA se activa cuando se detecta NPU/NNAPI (para futuros modelos IA)
 class LoginScreenV2 extends StatefulWidget {
   const LoginScreenV2({super.key});
+
+  static const routeName = '/login';
 
   @override
   State<LoginScreenV2> createState() => _LoginScreenV2State();
@@ -149,6 +151,9 @@ class _LoginScreenV2State extends State<LoginScreenV2>
         setState(() {
           _npuLoading = false;
         });
+        if (mounted) {
+          _badgeController.forward();
+        }
         debugPrint('⚠️ [LOGIN] NPU no disponible - usando modo estándar');
       }
     } catch (e) {
@@ -164,8 +169,8 @@ class _LoginScreenV2State extends State<LoginScreenV2>
     final currentUser = await _biometricService.getCurrentUserData();
     final resolvedUsername =
         (username ?? currentUser?['username']?.toString() ?? '').trim();
-    final resolvedEmail =
-        (email ?? currentUser?['email']?.toString() ?? '').trim();
+    final resolvedEmail = (email ?? currentUser?['email']?.toString() ?? '')
+        .trim();
 
     if (resolvedUsername.isEmpty) {
       debugPrint('⚠️ [LOGIN] Usuario local sin nombre, omitiendo sync backend');
@@ -186,7 +191,9 @@ class _LoginScreenV2State extends State<LoginScreenV2>
           );
           debugPrint('✅ [LOGIN] Cuenta creada en backend tras fallback');
         } catch (registerError) {
-          debugPrint('❌ [LOGIN] No se pudo registrar en backend: $registerError');
+          debugPrint(
+            '❌ [LOGIN] No se pudo registrar en backend: $registerError',
+          );
           await _ttsService.speak(
             'Advertencia: no se pudo sincronizar con el servidor. '
             'Algunas funciones pueden no estar disponibles.',
@@ -249,31 +256,37 @@ class _LoginScreenV2State extends State<LoginScreenV2>
           _statusMessage = 'Iniciando sesión...';
         });
 
-        final success = await _biometricService.login();
+        final userData = await _biometricService.getCurrentUserData();
 
-        if (success) {
-          final userData = await _biometricService.getCurrentUserData();
-          await _syncBackendSession(
-            username: userData?['username']?.toString(),
-            email: userData?['email']?.toString(),
-          );
-
-          await _ttsService.speak(
-            'Inicio de sesión exitoso. Bienvenido de vuelta',
-          );
-
-          if (mounted) {
-            Navigator.of(context).pushReplacement(
-              MaterialPageRoute(builder: (_) => const HomeScreen()),
-            );
-          }
-        } else {
+        if (userData == null) {
           setState(() {
             _isAuthenticating = false;
-            _statusMessage = 'Error al iniciar sesión';
+            _statusMessage = 'No se encontró información del usuario';
           });
           await _ttsService.speak(
-            'Error al iniciar sesión. Por favor, intenta de nuevo',
+            'No se pudo acceder a tu perfil almacenado. Intenta nuevamente.',
+          );
+          return;
+        }
+
+        // Evitar solicitar la huella por segunda vez, solo actualizamos la sesión local/backend.
+        await _biometricService.updateLastLogin();
+        await _syncBackendSession(
+          username: userData['username']?.toString(),
+          email: userData['email']?.toString(),
+        );
+
+        await _ttsService.speak(
+          'Inicio de sesión exitoso. Bienvenido de vuelta',
+        );
+
+        if (mounted) {
+          setState(() {
+            _isAuthenticating = false;
+          });
+
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(builder: (_) => const MapScreen()),
           );
         }
       } else {
@@ -434,6 +447,43 @@ class _LoginScreenV2State extends State<LoginScreenV2>
                     ),
                   ),
                 ),
+              )
+            else
+              FadeTransition(
+                opacity: _badgeAnimation,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: _npuAvailable
+                          ? const [Color(0xFF00BCD4), Color(0xFF0097A7)]
+                          : const [Color(0xFFE53935), Color(0xFFD32F2F)],
+                    ),
+                    borderRadius: BorderRadius.circular(12),
+                    boxShadow: [
+                      BoxShadow(
+                        color:
+                            (_npuAvailable
+                                    ? const Color(0xFF00BCD4)
+                                    : const Color(0xFFE53935))
+                                .withValues(alpha: 0.4),
+                        blurRadius: 8,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: Text(
+                    _npuAvailable ? 'IA' : 'IA OFF',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 14,
+                    ),
+                  ),
+                ),
               ),
           ],
         ),
@@ -467,18 +517,37 @@ class _LoginScreenV2State extends State<LoginScreenV2>
                 AnimatedBuilder(
                   animation: _pulseAnimation,
                   builder: (context, child) {
+                    final bool hasAi = _npuAvailable;
+                    final bool detectionReady = !_npuLoading;
+                    final List<Color> gradientColors = !detectionReady
+                        ? const [Color(0xFF101010), Color(0xFF1F1F1F)]
+                        : hasAi
+                        ? const [Color(0xFF00BCD4), Color(0xFF0097A7)]
+                        : const [Color(0xFFE53935), Color(0xFFD32F2F)];
+
+                    final double scaleBase = hasAi
+                        ? _pulseAnimation.value
+                        : 1 + (_pulseAnimation.value - 1) * 0.6;
+
+                    final double scale = _isAuthenticating
+                        ? scaleBase
+                        : 1 + (scaleBase - 1) * 0.5;
+
+                    final Color glowColor = gradientColors.last;
+
                     return Transform.scale(
-                      scale: _isAuthenticating ? _pulseAnimation.value : 1.0,
-                      child: Container(
+                      scale: scale,
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 350),
                         width: 280,
                         height: 180,
                         decoration: BoxDecoration(
-                          color: Colors.black,
+                          gradient: LinearGradient(colors: gradientColors),
                           borderRadius: BorderRadius.circular(20),
                           boxShadow: [
                             BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.3),
-                              blurRadius: 20,
+                              color: glowColor.withValues(alpha: 0.4),
+                              blurRadius: _isAuthenticating ? 26 : 18,
                               offset: const Offset(0, 10),
                             ),
                           ],
@@ -486,24 +555,30 @@ class _LoginScreenV2State extends State<LoginScreenV2>
                         child: Column(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            Icon(
-                              Icons.fingerprint,
-                              size: 80,
-                              color: _biometricAvailable
-                                  ? (_isAuthenticating
-                                        ? const Color(0xFF00BCD4)
-                                        : Colors.white)
-                                  : Colors.grey[600],
+                            AnimatedSwitcher(
+                              duration: const Duration(milliseconds: 200),
+                              child: Icon(
+                                Icons.fingerprint,
+                                key: ValueKey<bool>(hasAi),
+                                size: 80,
+                                color: _biometricAvailable
+                                    ? Colors.white
+                                    : Colors.white.withValues(alpha: 0.4),
+                              ),
                             ),
                             const SizedBox(height: 12),
                             Text(
                               _isAuthenticating
                                   ? 'Coloca tu huella...'
-                                  : 'Esperando huella',
+                                  : detectionReady
+                                  ? hasAi
+                                        ? 'Modo IA optimizado'
+                                        : 'Modo estándar activo'
+                                  : 'Detectando capacidades...',
                               style: const TextStyle(
                                 color: Colors.white,
                                 fontSize: 14,
-                                fontWeight: FontWeight.w500,
+                                fontWeight: FontWeight.w600,
                               ),
                             ),
                           ],

@@ -1,10 +1,9 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'services/server_config.dart';
-import 'screens/login_screen.dart';
 import 'screens/login_screen_v2.dart'; // ✅ Login UI clásica Figma con badge IA
 import 'screens/biometric_login_screen.dart';
 import 'screens/register_screen.dart';
-import 'screens/home_screen.dart';
 import 'screens/map_screen.dart';
 import 'screens/settings_screen.dart';
 import 'screens/contribute_screen.dart';
@@ -13,6 +12,7 @@ import 'screens/route_issue_report_screen.dart';
 import 'screens/stop_info_report_screen.dart';
 import 'screens/general_suggestion_screen.dart';
 import 'screens/tts_settings_screen.dart'; // ✅ Configuración de voz TTS
+import 'screens/debug_setup_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -45,7 +45,9 @@ class _WayFindCLAppState extends State<WayFindCLApp> {
   }
 
   Widget _getHomeWidget() {
-    // ✅ Ir directo al login - selección de voz integrada dentro
+    if (kDebugMode) {
+      return const DebugSetupScreen();
+    }
     return const LoginScreenV2();
   }
 
@@ -102,18 +104,17 @@ class _WayFindCLAppState extends State<WayFindCLApp> {
       home: _getHomeWidget(),
       onGenerateRoute: (settings) {
         switch (settings.name) {
-          case '/login_v2': // Nueva ruta para login UI clásica
+          case LoginScreenV2.routeName:
+          case '/login_v2': // Compatibilidad con rutas anteriores
             return MaterialPageRoute(builder: (_) => const LoginScreenV2());
+          case DebugSetupScreen.routeName:
+            return MaterialPageRoute(builder: (_) => const DebugSetupScreen());
           case BiometricLoginScreen.routeName:
             return MaterialPageRoute(
               builder: (_) => const BiometricLoginScreen(),
             );
-          case LoginScreen.routeName:
-            return MaterialPageRoute(builder: (_) => const LoginScreen());
           case RegisterScreen.routeName:
             return MaterialPageRoute(builder: (_) => const RegisterScreen());
-          case HomeScreen.routeName:
-            return MaterialPageRoute(builder: (_) => const HomeScreen());
           case MapScreen.routeName:
             return MaterialPageRoute(builder: (_) => const MapScreen());
           case SettingsScreen.routeName:

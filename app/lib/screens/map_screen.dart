@@ -18,6 +18,7 @@ import '../services/transit_boarding_service.dart';
 import '../services/integrated_navigation_service.dart';
 import '../services/navigation_simulator.dart';
 import '../services/geometry_service.dart';
+import '../services/npu_detector_service.dart';
 import '../widgets/itinerary_details.dart';
 import 'settings_screen.dart';
 import '../widgets/bottom_nav.dart';
@@ -216,7 +217,12 @@ class MapScreen extends StatefulWidget {
 
 class _MapScreenState extends State<MapScreen> {
   void _log(String message, {Object? error, StackTrace? stackTrace}) {
-    developer.log(message, name: 'MapScreen', error: error, stackTrace: stackTrace);
+    developer.log(
+      message,
+      name: 'MapScreen',
+      error: error,
+      stackTrace: stackTrace,
+    );
   }
 
   bool _isListening = false;
@@ -226,6 +232,10 @@ class _MapScreenState extends State<MapScreen> {
   Timer? _resultDebounce;
   String _pendingWords = '';
   String? _pendingDestination;
+
+  bool _npuAvailable = false;
+  bool _npuLoading = false;
+  bool _npuChecked = false;
 
   // Mejoras de reconocimiento de voz
   double _speechConfidence = 0.0;
@@ -295,9 +305,21 @@ class _MapScreenState extends State<MapScreen> {
   // Default location (Santiago, Chile)
   static const LatLng _initialPosition = LatLng(-33.4489, -70.6693);
 
+  double _overlayBaseOffset(BuildContext context, {double min = 240}) {
+    final media = MediaQuery.of(context);
+    final double estimate = media.size.height * 0.28 + media.padding.bottom;
+    return math.max(estimate, min);
+  }
+
+  double _overlayGap(BuildContext context) {
+    final media = MediaQuery.of(context);
+    return math.max(media.size.height * 0.035, 28);
+  }
+
   @override
   void initState() {
     super.initState();
+    _initializeNpuDetection();
     // Usar post-frame callback para evitar bloquear la construcción del widget
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _initServices();
@@ -333,6 +355,32 @@ class _MapScreenState extends State<MapScreen> {
       });
       _showSuccessNotification('¡Destino alcanzado!', withVibration: true);
     };
+  }
+
+  Future<void> _initializeNpuDetection() async {
+    setState(() {
+      _npuLoading = true;
+      _npuChecked = false;
+    });
+
+    try {
+      final capabilities = await NpuDetectorService.instance
+          .detectCapabilities();
+      if (!mounted) return;
+      setState(() {
+        _npuAvailable = capabilities.hasNnapi;
+        _npuLoading = false;
+        _npuChecked = true;
+      });
+    } catch (e, st) {
+      if (!mounted) return;
+      _log('⚠️ [MAP] Error detectando NPU: $e', error: e, stackTrace: st);
+      setState(() {
+        _npuAvailable = false;
+        _npuLoading = false;
+        _npuChecked = true;
+      });
+    }
   }
 
   /// CAP-29: Configurar callbacks de abordaje
@@ -2528,9 +2576,7 @@ class _MapScreenState extends State<MapScreen> {
         // Configurar polyline y marcadores iniciales
         _updateNavigationMapState(navigation);
 
-        _log(
-          '🗺️ [MAP] Polylines después de actualizar: ${_polylines.length}',
-        );
+        _log('🗺️ [MAP] Polylines después de actualizar: ${_polylines.length}');
         _log('🗺️ [MAP] Markers después de actualizar: ${_markers.length}');
       });
 
@@ -2849,7 +2895,6 @@ class _MapScreenState extends State<MapScreen> {
     }
   }
 
-
   Future<void> _calculateRoute({
     required double destLat,
     required double destLon,
@@ -2899,7 +2944,6 @@ class _MapScreenState extends State<MapScreen> {
 
       TtsService.instance.speak(message);
       _announce('Ruta calculada exitosamente');
-
     } catch (e) {
       if (e is ApiException && e.isNetworkError) {
         _showWarningNotification(
@@ -3330,7 +3374,9 @@ class _MapScreenState extends State<MapScreen> {
 
                           return ListTile(
                             selected: selected,
-                            selectedTileColor: Colors.blue.withValues(alpha: 0.08),
+                            selectedTileColor: Colors.blue.withValues(
+                              alpha: 0.08,
+                            ),
                             leading: CircleAvatar(
                               child: Text('${rec.ranking}'),
                             ),
@@ -3771,696 +3817,903 @@ class _MapScreenState extends State<MapScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.grey[300],
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        leading: const SizedBox(),
-        title: const Text(
-          'WayFindCL',
-          style: TextStyle(
-            color: Colors.black,
-            fontWeight: FontWeight.w600,
-            fontSize: 18,
-          ),
-        ),
-        centerTitle: true,
-      ),
-      body: Stack(
-        children: [
-          // Área del mapa - SIEMPRE VISIBLE
-          Positioned.fill(
-            child: FlutterMap(
-              mapController: _mapController,
-              options: MapOptions(
-                initialCenter: _currentPosition != null
-                    ? LatLng(
-                        _currentPosition!.latitude,
-                        _currentPosition!.longitude,
-                      )
-                    : _initialPosition,
-                initialZoom: 14.0,
-                minZoom: 10.0,
-                maxZoom: 18.0,
-                initialRotation: 0.0, // Sin rotación para mejor rendimiento
-                onMapReady: () {
-                  _isMapReady = true;
+      backgroundColor: const Color(0xFFF5F6FF),
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          final double overlayBase = math.max(
+            _overlayBaseOffset(context, min: 260),
+            constraints.maxHeight * 0.26,
+          );
+          final double gap = _overlayGap(context);
+          final double floatingPrimary = overlayBase + gap * 2;
+          final double floatingSecondary = overlayBase + gap * 1.15;
+          final double instructionsBottom = overlayBase + gap * 0.85;
+          final bool hasActiveNavigation =
+              IntegratedNavigationService.instance.activeNavigation != null;
 
-                  if (_pendingCenter != null) {
-                    final zoom = _pendingZoom ?? _mapController.camera.zoom;
-                    _mapController.move(_pendingCenter!, zoom);
-                    _pendingCenter = null;
-                    _pendingZoom = null;
-                  }
-
-                  if (_pendingRotation != null) {
-                    _mapController.rotate(_pendingRotation!);
-                    _pendingRotation = null;
-                  }
-                },
-                // Detectar cuando el usuario mueve el mapa manualmente
-                onPositionChanged: (position, hasGesture) {
-                  if (hasGesture && _autoCenter) {
-                    // Usuario movió el mapa con gesto -> desactivar auto-centrado
-                    setState(() {
-                      _userManuallyMoved = true;
-                      _autoCenter = false;
-                    });
-                    _log(
-                      '🗺️ [MANUAL] Auto-centrado desactivado por gesto del usuario',
-                    );
-                  }
-                },
-                // Optimizaciones de rendimiento
-                keepAlive: true,
-              ),
-              children: [
-                TileLayer(
-                  urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                  userAgentPackageName: 'com.example.wayfindcl',
-                  maxZoom: 18,
-                  // Optimizaciones de red
-                  maxNativeZoom: 18,
-                  retinaMode: false,
-                ),
-                if (_polylines.isNotEmpty) PolylineLayer(polylines: _polylines),
-                if (_markers.isNotEmpty) MarkerLayer(markers: _markers),
-              ],
-            ),
-          ),
-
-          // Botón de TEST: Simular llegada al paradero o bus
-          Positioned(
-            left: 20,
-            bottom: 400,
-            child: GestureDetector(
-              onTap: _simulateArrivalAtStop,
-              child: Container(
-                width: 60,
-                height: 80,
-                decoration: BoxDecoration(
-                  color:
-                      IntegratedNavigationService.instance.activeNavigation !=
-                          null
-                      ? Colors.green
-                      : Colors.grey,
-                  borderRadius: const BorderRadius.all(Radius.circular(10)),
-                  boxShadow: const [
-                    BoxShadow(
-                      color: Colors.black26,
-                      blurRadius: 4,
-                      offset: Offset(0, 2),
-                    ),
-                  ],
-                ),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    const Icon(Icons.bug_report, color: Colors.white, size: 28),
-                    const SizedBox(height: 4),
-                    Text(
-                      _getTestButtonLabel(),
-                      style: const TextStyle(
-                        fontSize: 10,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.white,
-                      ),
-                    ),
-                    const Text(
-                      'Simular',
-                      style: TextStyle(fontSize: 8, color: Colors.white70),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-
-          // Tarjeta persistente para la ruta seleccionada
-          if (_selectedCombinedRoute != null)
-            Positioned(
-              left: 12,
-              right: 12,
-              bottom: 20,
-              child: Card(
-                elevation: 8,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 10,
+          return Stack(
+            children: [
+              // Área del mapa con esquinas suavizadas
+              Positioned.fill(
+                child: ClipRRect(
+                  borderRadius: const BorderRadius.vertical(
+                    top: Radius.circular(32),
                   ),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              _selectedDestinationName ?? 'Ruta seleccionada',
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(_selectedCombinedRoute!.summary),
-                          ],
-                        ),
-                      ),
-                      ElevatedButton(
-                        onPressed: () {
-                          // Iniciar seguimiento con la ruta seleccionada
-                          if (_selectedPlannedRoute.isNotEmpty) {
-                            final dest = _selectedPlannedRoute.last;
-                            RouteTrackingService.instance.startTracking(
-                              plannedRoute: _selectedPlannedRoute,
-                              destination: dest,
-                              destinationName:
-                                  _selectedDestinationName ?? 'destino',
-                            );
-                            setState(() {
-                              _isTrackingRoute = true;
-                            });
-                          }
-                        },
-                        child: const Text('Iniciar seguimiento'),
-                      ),
-                      const SizedBox(width: 8),
-                      TextButton(
-                        onPressed: () {
+                  child: FlutterMap(
+                    mapController: _mapController,
+                    options: MapOptions(
+                      initialCenter: _currentPosition != null
+                          ? LatLng(
+                              _currentPosition!.latitude,
+                              _currentPosition!.longitude,
+                            )
+                          : _initialPosition,
+                      initialZoom: 14.0,
+                      minZoom: 10.0,
+                      maxZoom: 18.0,
+                      initialRotation: 0.0,
+                      onMapReady: () {
+                        _isMapReady = true;
+
+                        if (_pendingCenter != null) {
+                          final zoom =
+                              _pendingZoom ?? _mapController.camera.zoom;
+                          _mapController.move(_pendingCenter!, zoom);
+                          _pendingCenter = null;
+                          _pendingZoom = null;
+                        }
+
+                        if (_pendingRotation != null) {
+                          _mapController.rotate(_pendingRotation!);
+                          _pendingRotation = null;
+                        }
+                      },
+                      onPositionChanged: (position, hasGesture) {
+                        if (hasGesture && _autoCenter) {
                           setState(() {
-                            _selectedCombinedRoute = null;
-                            _selectedPlannedRoute = [];
-                            _selectedDestinationName = null;
-                            _polylines = [];
-                            _markers = [];
+                            _userManuallyMoved = true;
+                            _autoCenter = false;
                           });
-                        },
-                        child: const Text('Cerrar'),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-
-          // Botón de centrar ubicación
-          Positioned(
-            right: 20,
-            bottom: 490, // Movido más arriba desde 340 a 490
-            child: GestureDetector(
-              onTap: _centerOnUserLocation,
-              child: Container(
-                width: 50,
-                height: 50,
-                decoration: const BoxDecoration(
-                  color: Colors.blue,
-                  shape: BoxShape.circle,
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black26,
-                      blurRadius: 4,
-                      offset: Offset(0, 2),
+                          _log(
+                            '🗺️ [MANUAL] Auto-centrado desactivado por gesto del usuario',
+                          );
+                        }
+                      },
+                      keepAlive: true,
                     ),
-                  ],
-                ),
-                child: const Icon(
-                  Icons.my_location,
-                  color: Colors.white,
-                  size: 24,
-                ),
-              ),
-            ),
-          ),
-
-          // Botón de configuración (derecha)
-          Positioned(
-            right: 20,
-            bottom: 400, // Movido más arriba desde 280 a 430
-            child: GestureDetector(
-              onTap: () => Navigator.pushNamed(context, '/settings'),
-              child: Container(
-                width: 50,
-                height: 50,
-                decoration: const BoxDecoration(
-                  color: Colors.black,
-                  shape: BoxShape.rectangle,
-                  borderRadius: BorderRadius.all(Radius.circular(12)),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black26,
-                      blurRadius: 4,
-                      offset: Offset(0, 2),
-                    ),
-                  ],
-                ),
-                child: const Icon(
-                  Icons.settings,
-                  color: Colors.white,
-                  size: 24,
-                ),
-              ),
-            ),
-          ),
-
-          // Panel de instrucciones detalladas (GraphHopper)
-          if (_hasActiveTrip)
-            Positioned(
-              left: 12,
-              right: 12,
-              bottom: 180,
-              child: _buildInstructionsPanel(),
-            ),
-
-          // Panel inferior
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: 0,
-            child: Container(
-              decoration: const BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-              ),
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // Handle del panel
-                  Container(
-                    width: 40,
-                    height: 4,
-                    decoration: BoxDecoration(
-                      color: Colors.grey[400],
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-
-                  // Texto dinámico según estado
-                  Column(
                     children: [
-                      Text(
-                        _statusMessage(),
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                          color: _isListening ? Colors.blue : Colors.black,
-                        ),
-                        textAlign: TextAlign.center,
-                        maxLines: 3,
-                        overflow: TextOverflow.ellipsis,
+                      TileLayer(
+                        urlTemplate:
+                            'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                        userAgentPackageName: 'com.example.wayfindcl',
+                        maxZoom: 18,
+                        maxNativeZoom: 18,
+                        retinaMode: false,
                       ),
-
-                      // Indicador de confianza cuando está escuchando
-                      if (_isListening && _speechConfidence > 0)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 8),
-                          child: Column(
-                            children: [
-                              Text(
-                                'Confianza: ${(_speechConfidence * 100).toInt()}%',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: _speechConfidence > 0.7
-                                      ? Colors.green
-                                      : _speechConfidence > 0.5
-                                      ? Colors.orange
-                                      : Colors.red,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                              const SizedBox(height: 4),
-                              SizedBox(
-                                width: 150,
-                                child: LinearProgressIndicator(
-                                  value: _speechConfidence,
-                                  backgroundColor: Colors.grey[300],
-                                  valueColor: AlwaysStoppedAnimation<Color>(
-                                    _speechConfidence > 0.7
-                                        ? Colors.green
-                                        : _speechConfidence > 0.5
-                                        ? Colors.orange
-                                        : Colors.red,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-
-                      // Indicador de procesamiento
-                      if (_isProcessingCommand)
-                        const Padding(
-                          padding: EdgeInsets.only(top: 8),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              SizedBox(
-                                width: 16,
-                                height: 16,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
-                              ),
-                              SizedBox(width: 8),
-                              Text(
-                                'Procesando comando...',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: Colors.blue,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
+                      if (_polylines.isNotEmpty)
+                        PolylineLayer(polylines: _polylines),
+                      if (_markers.isNotEmpty) MarkerLayer(markers: _markers),
                     ],
                   ),
-                  const SizedBox(height: 16),
+                ),
+              ),
 
-                  // Botón del micrófono (con instrucciones de caminata integradas)
-                  Semantics(
-                    label: _isListening
-                        ? 'Botón micrófono, escuchando'
-                        : 'Botón micrófono, no escuchando',
-                    hint: _isListening
-                        ? 'Toca para detener'
-                        : 'Toca para iniciar',
-                    button: true,
-                    enabled: true,
-                    child: GestureDetector(
-                      onTap: _toggleMicrophone,
-                      onLongPress: _showWalkingInstructions,
-                      child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 300),
-                        width: double.infinity,
-                        height: 120,
-                        decoration: BoxDecoration(
-                          color: _isCalculatingRoute
-                              ? Colors.blue.shade700
-                              : _isListening
-                              ? Colors.red
-                              : Colors.black,
-                          borderRadius: BorderRadius.circular(24),
-                          boxShadow: _isListening
-                              ? [
-                                  BoxShadow(
-                                    color: Colors.red.withValues(alpha: 0.3),
-                                    blurRadius: 20,
-                                    spreadRadius: 5,
-                                  ),
-                                ]
-                              : _isCalculatingRoute
-                              ? [
-                                  BoxShadow(
-                                    color: Colors.blue.withValues(alpha: 0.3),
-                                    blurRadius: 20,
-                                    spreadRadius: 5,
-                                  ),
-                                ]
-                              : null,
-                        ),
-                        child: _buildMicrophoneContent(),
+              // Encabezado con título e indicador IA
+              Positioned(
+                top: MediaQuery.of(context).padding.top + 12,
+                left: 16,
+                right: 16,
+                child: Center(child: _buildHeaderChips(context)),
+              ),
+
+              // Botón de TEST: Simular llegada al paradero o bus
+              Positioned(
+                left: 20,
+                bottom: floatingPrimary,
+                child: GestureDetector(
+                  onTap: _simulateArrivalAtStop,
+                  child: Container(
+                    width: 68,
+                    height: 88,
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: hasActiveNavigation
+                            ? const [Color(0xFF34D399), Color(0xFF059669)]
+                            : [Colors.grey.shade600, Colors.grey.shade700],
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
                       ),
+                      borderRadius: BorderRadius.circular(18),
+                      boxShadow: [
+                        BoxShadow(
+                          color:
+                              (hasActiveNavigation
+                                      ? const Color(0xFF059669)
+                                      : Colors.grey.shade800)
+                                  .withValues(alpha: 0.35),
+                          blurRadius: 18,
+                          offset: const Offset(0, 10),
+                        ),
+                      ],
+                    ),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Icon(
+                          Icons.bug_report,
+                          color: Colors.white,
+                          size: 28,
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          _getTestButtonLabel(),
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.white,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          'Debug',
+                          style: TextStyle(
+                            fontSize: 9,
+                            color: Colors.white.withValues(alpha: 0.7),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                  const SizedBox(height: 12),
+                ),
+              ),
 
-                  // Panel expandible de instrucciones de caminata
-                  AnimatedSize(
-                    duration: const Duration(milliseconds: 300),
-                    curve: Curves.easeInOut,
-                    child:
-                        _showInstructionsPanel &&
-                            _currentInstructions.isNotEmpty
-                        ? Container(
-                            margin: const EdgeInsets.only(bottom: 12),
-                            padding: const EdgeInsets.all(16),
-                            decoration: BoxDecoration(
-                              gradient: LinearGradient(
-                                colors: [
-                                  Colors.blue.shade600,
-                                  Colors.blue.shade800,
-                                ],
-                                begin: Alignment.topLeft,
-                                end: Alignment.bottomRight,
-                              ),
-                              borderRadius: BorderRadius.circular(20),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.blue.withValues(alpha: 0.3),
-                                  blurRadius: 15,
-                                  offset: const Offset(0, 5),
-                                ),
-                              ],
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Row(
-                                  mainAxisAlignment:
-                                      MainAxisAlignment.spaceBetween,
+              // Tarjeta persistente para la ruta seleccionada
+              if (_selectedCombinedRoute != null)
+                Positioned(
+                  left: 16,
+                  right: 16,
+                  bottom: 20,
+                  child: Center(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 560),
+                      child: Card(
+                        elevation: 10,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 14,
+                          ),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  mainAxisSize: MainAxisSize.min,
                                   children: [
-                                    const Row(
-                                      children: [
-                                        Icon(
-                                          Icons.directions_walk,
-                                          color: Colors.white,
-                                          size: 24,
-                                        ),
-                                        SizedBox(width: 8),
-                                        Text(
-                                          'Instrucciones',
-                                          style: TextStyle(
-                                            color: Colors.white,
-                                            fontSize: 18,
-                                            fontWeight: FontWeight.bold,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                    GestureDetector(
-                                      onTap: () {
-                                        setState(() {
-                                          _showInstructionsPanel = false;
-                                        });
-                                      },
-                                      child: Container(
-                                        padding: const EdgeInsets.all(4),
-                                        decoration: BoxDecoration(
-                                          color: Colors.white.withValues(
-                                            alpha: 0.2,
-                                          ),
-                                          borderRadius: BorderRadius.circular(
-                                            8,
-                                          ),
-                                        ),
-                                        child: const Icon(
-                                          Icons.close,
-                                          color: Colors.white,
-                                          size: 20,
-                                        ),
+                                    Text(
+                                      _selectedDestinationName ??
+                                          'Ruta seleccionada',
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.w700,
                                       ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      _selectedCombinedRoute!.summary,
+                                      style: const TextStyle(fontSize: 13),
                                     ),
                                   ],
                                 ),
-                                const SizedBox(height: 16),
-                                ListView.builder(
-                                  shrinkWrap: true,
-                                  physics: const NeverScrollableScrollPhysics(),
-                                  itemCount: _currentInstructions.length,
-                                  itemBuilder: (context, index) {
-                                    final instruction =
-                                        _currentInstructions[index];
-                                    final isFirst = index == 0;
-                                    return GestureDetector(
-                                      onTap: () {
-                                        TtsService.instance.speak(instruction);
-                                      },
-                                      child: Container(
-                                        margin: const EdgeInsets.only(
-                                          bottom: 12,
-                                        ),
-                                        padding: const EdgeInsets.all(12),
-                                        decoration: BoxDecoration(
-                                          color: isFirst
-                                              ? Colors.yellow.shade700
-                                              : Colors.white.withValues(
-                                                  alpha: 0.15,
-                                                ),
-                                          borderRadius: BorderRadius.circular(
-                                            12,
-                                          ),
-                                          border: Border.all(
-                                            color: isFirst
-                                                ? Colors.yellow.shade900
-                                                : Colors.white.withValues(
-                                                    alpha: 0.3,
-                                                  ),
-                                            width: 2,
-                                          ),
-                                        ),
-                                        child: Row(
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.start,
-                                          children: [
-                                            Container(
-                                              width: 28,
-                                              height: 28,
-                                              decoration: BoxDecoration(
-                                                color: isFirst
-                                                    ? Colors.yellow.shade900
-                                                    : Colors.white.withValues(
-                                                        alpha: 0.3,
-                                                      ),
-                                                shape: BoxShape.circle,
-                                              ),
-                                              child: Center(
-                                                child: Text(
-                                                  '${index + 1}',
-                                                  style: TextStyle(
-                                                    color: isFirst
-                                                        ? Colors.white
-                                                        : Colors.white,
-                                                    fontSize: 14,
-                                                    fontWeight: FontWeight.bold,
-                                                  ),
-                                                ),
-                                              ),
-                                            ),
-                                            const SizedBox(width: 12),
-                                            Expanded(
-                                              child: Text(
-                                                instruction,
-                                                style: TextStyle(
-                                                  color: isFirst
-                                                      ? Colors.black87
-                                                      : Colors.white,
-                                                  fontSize: 15,
-                                                  fontWeight: isFirst
-                                                      ? FontWeight.w600
-                                                      : FontWeight.w500,
-                                                  height: 1.3,
-                                                ),
-                                              ),
-                                            ),
-                                            const SizedBox(width: 8),
-                                            Icon(
-                                              Icons.volume_up,
-                                              color: isFirst
-                                                  ? Colors.black54
-                                                  : Colors.white70,
-                                              size: 20,
-                                            ),
-                                          ],
-                                        ),
-                                      ),
+                              ),
+                              ElevatedButton(
+                                onPressed: () {
+                                  if (_selectedPlannedRoute.isNotEmpty) {
+                                    final dest = _selectedPlannedRoute.last;
+                                    RouteTrackingService.instance.startTracking(
+                                      plannedRoute: _selectedPlannedRoute,
+                                      destination: dest,
+                                      destinationName:
+                                          _selectedDestinationName ?? 'destino',
                                     );
-                                  },
+                                    setState(() {
+                                      _isTrackingRoute = true;
+                                    });
+                                  }
+                                },
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: const Color(0xFF00BCD4),
+                                  foregroundColor: Colors.white,
                                 ),
-                              ],
-                            ),
-                          )
-                        : const SizedBox.shrink(),
-                  ),
-
-                  // Botón de calibración del micrófono
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      GestureDetector(
-                        onTap: _startMicrophoneCalibration,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 8,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.grey[200],
-                            borderRadius: BorderRadius.circular(16),
-                            border: Border.all(color: Colors.grey[400]!),
-                          ),
-                          child: const Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(Icons.tune, size: 16, color: Colors.grey),
-                              SizedBox(width: 4),
-                              Text(
-                                'Calibrar micrófono',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: Colors.grey,
-                                  fontWeight: FontWeight.w500,
-                                ),
+                                child: const Text('Iniciar'),
+                              ),
+                              const SizedBox(width: 8),
+                              TextButton(
+                                onPressed: () {
+                                  setState(() {
+                                    _selectedCombinedRoute = null;
+                                    _selectedPlannedRoute = [];
+                                    _selectedDestinationName = null;
+                                    _polylines = [];
+                                    _markers = [];
+                                  });
+                                },
+                                child: const Text('Cerrar'),
                               ),
                             ],
                           ),
                         ),
                       ),
-                    ],
+                    ),
                   ),
-                  const SizedBox(height: 16),
+                ),
 
-                  // Barra de navegación inferior
-                  BottomNavBar(
-                    currentIndex: 0,
-                    onTap: (index) {
-                      switch (index) {
-                        case 0:
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('Explorar')),
-                          );
-                          break;
-                        case 1:
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('Guardados (no implementado)'),
-                            ),
-                          );
-                          break;
-                        case 2:
-                          Navigator.pushNamed(
-                            context,
-                            ContributeScreen.routeName,
-                          );
-                          break;
-                        case 3:
-                          Navigator.pushNamed(
-                            context,
-                            SettingsScreen.routeName,
-                          );
-                          break;
-                      }
-                    },
+              // Botón de centrar ubicación
+              Positioned(
+                right: 20,
+                bottom: floatingPrimary,
+                child: GestureDetector(
+                  onTap: _centerOnUserLocation,
+                  child: Container(
+                    width: 58,
+                    height: 58,
+                    decoration: const BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [Color(0xFF00BCD4), Color(0xFF0097A7)],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                      ),
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: Color(0x6600BCD4),
+                          blurRadius: 18,
+                          offset: Offset(0, 10),
+                        ),
+                      ],
+                    ),
+                    child: const Icon(
+                      Icons.my_location,
+                      color: Colors.white,
+                      size: 24,
+                    ),
                   ),
-
-                  const SizedBox(height: 20),
-                ],
+                ),
               ),
+
+              // Botón de configuración (derecha)
+              Positioned(
+                right: 20,
+                bottom: floatingSecondary,
+                child: GestureDetector(
+                  onTap: () => Navigator.pushNamed(context, '/settings'),
+                  child: Container(
+                    width: 58,
+                    height: 58,
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(
+                        colors: [Color(0xFF111827), Color(0xFF1F2937)],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                      ),
+                      borderRadius: BorderRadius.circular(18),
+                      boxShadow: [
+                        BoxShadow(
+                          color: const Color(0xFF0F172A).withValues(alpha: 0.4),
+                          blurRadius: 18,
+                          offset: const Offset(0, 10),
+                        ),
+                      ],
+                    ),
+                    child: const Icon(
+                      Icons.settings,
+                      color: Colors.white,
+                      size: 24,
+                    ),
+                  ),
+                ),
+              ),
+
+              // Panel de instrucciones detalladas (GraphHopper)
+              if (_hasActiveTrip)
+                Positioned(
+                  left: 16,
+                  right: 16,
+                  bottom: instructionsBottom,
+                  child: Center(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 640),
+                      child: _buildInstructionsPanel(),
+                    ),
+                  ),
+                ),
+
+              // Panel inferior modernizado
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 0,
+                child: _buildBottomPanel(context),
+              ),
+
+              // Sistema de notificaciones
+              Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                child: SafeArea(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: _activeNotifications.map((notification) {
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: ConstrainedBox(
+                            constraints: const BoxConstraints(maxWidth: 480),
+                            child: AccessibleNotification(
+                              key: ValueKey(notification.hashCode),
+                              notification: notification,
+                              onDismiss: () =>
+                                  _dismissNotification(notification),
+                            ),
+                          ),
+                        );
+                      }).toList(),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildHeaderChips(BuildContext context) {
+    final bool loading = _npuLoading && !_npuChecked;
+    final bool available = _npuAvailable;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(28),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.08),
+            blurRadius: 18,
+            offset: const Offset(0, 10),
+          ),
+        ],
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 32,
+            height: 32,
+            decoration: BoxDecoration(
+              color: const Color(0xFF00BCD4).withValues(alpha: 0.12),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(
+              Icons.navigation_outlined,
+              color: Color(0xFF00BCD4),
+              size: 18,
             ),
           ),
+          const SizedBox(width: 12),
+          const Text(
+            'WayFindCL',
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
+              color: Color(0xFF0F172A),
+            ),
+          ),
+          const SizedBox(width: 12),
+          _buildIaBadge(loading: loading, available: available),
+        ],
+      ),
+    );
+  }
 
-          // Sistema de notificaciones
-          Positioned(
-            top: 0,
-            left: 0,
-            right: 0,
-            child: SafeArea(
-              child: Column(
-                children: _activeNotifications.map((notification) {
-                  return AccessibleNotification(
-                    key: ValueKey(notification.hashCode),
-                    notification: notification,
-                    onDismiss: () => _dismissNotification(notification),
-                  );
-                }).toList(),
+  Widget _buildIaBadge({required bool loading, required bool available}) {
+    final List<Color> colors;
+    final String label;
+    if (loading) {
+      colors = [const Color(0xFFE2E8F0), const Color(0xFFCBD5F5)];
+      label = 'IA';
+    } else if (available) {
+      colors = [const Color(0xFF00BCD4), const Color(0xFF0097A7)];
+      label = 'IA';
+    } else {
+      colors = [const Color(0xFFE53935), const Color(0xFFD32F2F)];
+      label = 'IA OFF';
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(colors: colors),
+        borderRadius: BorderRadius.circular(18),
+        boxShadow: [
+          BoxShadow(
+            color: colors.last.withValues(alpha: 0.35),
+            blurRadius: 12,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (loading) ...[
+            const SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
               ),
+            ),
+            const SizedBox(width: 6),
+          ] else ...[
+            const Icon(Icons.bolt, size: 16, color: Colors.white),
+            const SizedBox(width: 6),
+          ],
+          Text(
+            label,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.3,
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildBottomPanel(BuildContext context) {
+    final bool isListening = _isListening;
+    final bool isCalculating = _isCalculatingRoute;
+
+    final List<Color> micGradient = isCalculating
+        ? const [Color(0xFF2563EB), Color(0xFF1D4ED8)]
+        : isListening
+        ? const [Color(0xFFE53935), Color(0xFFB71C1C)]
+        : const [Color(0xFF111827), Color(0xFF1F2937)];
+
+    final Color micShadowColor = isCalculating
+        ? const Color(0xFF1D4ED8)
+        : isListening
+        ? const Color(0xFFB71C1C)
+        : Colors.black;
+
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 640),
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: [Colors.white, Color(0xFFF2F4F8)],
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                ),
+                borderRadius: BorderRadius.circular(28),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.08),
+                    blurRadius: 24,
+                    offset: const Offset(0, 12),
+                  ),
+                ],
+              ),
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 20, 20, 12),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Align(
+                      alignment: Alignment.center,
+                      child: Container(
+                        width: 48,
+                        height: 5,
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 18),
+                    Text(
+                      _statusMessage(),
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: isListening
+                            ? const Color(0xFF00BCD4)
+                            : const Color(0xFF111827),
+                      ),
+                      maxLines: 3,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    if (isListening && _speechConfidence > 0)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 12),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              'Confianza: ${(_speechConfidence * 100).toInt()}%',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w500,
+                                color: _speechConfidence > 0.7
+                                    ? const Color(0xFF22C55E)
+                                    : _speechConfidence > 0.5
+                                    ? const Color(0xFFF59E0B)
+                                    : const Color(0xFFEF4444),
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                            SizedBox(
+                              width: 180,
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(6),
+                                child: LinearProgressIndicator(
+                                  value: _speechConfidence,
+                                  minHeight: 6,
+                                  backgroundColor: const Color(0xFFE5E7EB),
+                                  valueColor: AlwaysStoppedAnimation<Color>(
+                                    _speechConfidence > 0.7
+                                        ? const Color(0xFF22C55E)
+                                        : _speechConfidence > 0.5
+                                        ? const Color(0xFFF59E0B)
+                                        : const Color(0xFFEF4444),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    if (_isProcessingCommand)
+                      const Padding(
+                        padding: EdgeInsets.only(top: 10),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                            SizedBox(width: 8),
+                            Text(
+                              'Procesando comando...',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Color(0xFF2563EB),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    const SizedBox(height: 18),
+                    Semantics(
+                      label: isListening
+                          ? 'Botón micrófono, escuchando'
+                          : 'Botón micrófono, no escuchando',
+                      hint: isListening
+                          ? 'Toca para detener'
+                          : 'Toca para iniciar',
+                      button: true,
+                      enabled: true,
+                      child: GestureDetector(
+                        onTap: _toggleMicrophone,
+                        onLongPress: _showWalkingInstructions,
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 320),
+                          curve: Curves.easeInOut,
+                          width: double.infinity,
+                          height: 120,
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              colors: micGradient,
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                            ),
+                            borderRadius: BorderRadius.circular(28),
+                            boxShadow: [
+                              BoxShadow(
+                                color: micShadowColor.withValues(alpha: 0.35),
+                                blurRadius: 26,
+                                offset: const Offset(0, 12),
+                              ),
+                            ],
+                          ),
+                          child: _buildMicrophoneContent(),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    AnimatedSize(
+                      duration: const Duration(milliseconds: 300),
+                      curve: Curves.easeInOut,
+                      child:
+                          _showInstructionsPanel &&
+                              _currentInstructions.isNotEmpty
+                          ? Container(
+                              margin: const EdgeInsets.only(bottom: 12),
+                              padding: const EdgeInsets.all(16),
+                              decoration: BoxDecoration(
+                                gradient: const LinearGradient(
+                                  colors: [
+                                    Color(0xFF00BCD4),
+                                    Color(0xFF006C84),
+                                  ],
+                                  begin: Alignment.topLeft,
+                                  end: Alignment.bottomRight,
+                                ),
+                                borderRadius: BorderRadius.circular(20),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: const Color(
+                                      0xFF00BCD4,
+                                    ).withValues(alpha: 0.28),
+                                    blurRadius: 18,
+                                    offset: const Offset(0, 6),
+                                  ),
+                                ],
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    mainAxisAlignment:
+                                        MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      const Row(
+                                        children: [
+                                          Icon(
+                                            Icons.directions_walk,
+                                            color: Colors.white,
+                                            size: 24,
+                                          ),
+                                          SizedBox(width: 8),
+                                          Text(
+                                            'Instrucciones',
+                                            style: TextStyle(
+                                              color: Colors.white,
+                                              fontSize: 18,
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      GestureDetector(
+                                        onTap: () {
+                                          setState(() {
+                                            _showInstructionsPanel = false;
+                                          });
+                                        },
+                                        child: Container(
+                                          padding: const EdgeInsets.all(4),
+                                          decoration: BoxDecoration(
+                                            color: Colors.white.withValues(
+                                              alpha: 0.18,
+                                            ),
+                                            borderRadius: BorderRadius.circular(
+                                              10,
+                                            ),
+                                          ),
+                                          child: const Icon(
+                                            Icons.close,
+                                            color: Colors.white,
+                                            size: 20,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 16),
+                                  ListView.builder(
+                                    shrinkWrap: true,
+                                    physics:
+                                        const NeverScrollableScrollPhysics(),
+                                    itemCount: _currentInstructions.length,
+                                    itemBuilder: (context, index) {
+                                      final instruction =
+                                          _currentInstructions[index];
+                                      final bool isFirst = index == 0;
+                                      return GestureDetector(
+                                        onTap: () {
+                                          TtsService.instance.speak(
+                                            instruction,
+                                          );
+                                        },
+                                        child: Container(
+                                          margin: const EdgeInsets.only(
+                                            bottom: 12,
+                                          ),
+                                          padding: const EdgeInsets.all(12),
+                                          decoration: BoxDecoration(
+                                            color: isFirst
+                                                ? Colors.white
+                                                : Colors.white.withValues(
+                                                    alpha: 0.12,
+                                                  ),
+                                            borderRadius: BorderRadius.circular(
+                                              14,
+                                            ),
+                                            border: Border.all(
+                                              color: Colors.white.withValues(
+                                                alpha: 0.25,
+                                              ),
+                                            ),
+                                          ),
+                                          child: Row(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              Container(
+                                                width: 28,
+                                                height: 28,
+                                                decoration: BoxDecoration(
+                                                  color: isFirst
+                                                      ? const Color(0xFF00BCD4)
+                                                      : Colors.white.withValues(
+                                                          alpha: 0.2,
+                                                        ),
+                                                  shape: BoxShape.circle,
+                                                ),
+                                                child: Center(
+                                                  child: Text(
+                                                    '${index + 1}',
+                                                    style: TextStyle(
+                                                      color: isFirst
+                                                          ? Colors.white
+                                                          : Colors.white,
+                                                      fontSize: 14,
+                                                      fontWeight:
+                                                          FontWeight.bold,
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
+                                              const SizedBox(width: 12),
+                                              Expanded(
+                                                child: Text(
+                                                  instruction,
+                                                  style: TextStyle(
+                                                    color: isFirst
+                                                        ? const Color(
+                                                            0xFF0F172A,
+                                                          )
+                                                        : Colors.white,
+                                                    fontSize: 15,
+                                                    fontWeight: isFirst
+                                                        ? FontWeight.w600
+                                                        : FontWeight.w500,
+                                                    height: 1.3,
+                                                  ),
+                                                ),
+                                              ),
+                                              const SizedBox(width: 8),
+                                              Icon(
+                                                Icons.volume_up,
+                                                color: isFirst
+                                                    ? const Color(0xFF0F172A)
+                                                    : Colors.white70,
+                                                size: 20,
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      );
+                                    },
+                                  ),
+                                ],
+                              ),
+                            )
+                          : const SizedBox.shrink(),
+                    ),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        GestureDetector(
+                          onTap: _startMicrophoneCalibration,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 18,
+                              vertical: 10,
+                            ),
+                            decoration: BoxDecoration(
+                              gradient: const LinearGradient(
+                                colors: [Color(0xFFE0E7FF), Color(0xFFD0D7FF)],
+                                begin: Alignment.topLeft,
+                                end: Alignment.bottomRight,
+                              ),
+                              borderRadius: BorderRadius.circular(18),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  Icons.tune,
+                                  size: 18,
+                                  color: const Color(
+                                    0xFF1E3A8A,
+                                  ).withValues(alpha: 0.9),
+                                ),
+                                const SizedBox(width: 6),
+                                const Text(
+                                  'Calibrar micrófono',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                    color: Color(0xFF1E3A8A),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 18),
+                    BottomNavBar(
+                      currentIndex: 0,
+                      onTap: (index) {
+                        switch (index) {
+                          case 0:
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('Explorar')),
+                            );
+                            break;
+                          case 1:
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('Guardados (no implementado)'),
+                              ),
+                            );
+                            break;
+                          case 2:
+                            Navigator.pushNamed(
+                              context,
+                              ContributeScreen.routeName,
+                            );
+                            break;
+                          case 3:
+                            Navigator.pushNamed(
+                              context,
+                              SettingsScreen.routeName,
+                            );
+                            break;
+                        }
+                      },
+                    ),
+                    const SizedBox(height: 8),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }
