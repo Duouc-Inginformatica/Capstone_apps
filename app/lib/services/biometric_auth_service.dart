@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:developer' as developer;
 import 'package:flutter/services.dart';
 import 'package:local_auth/local_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -73,7 +74,7 @@ class BiometricAuthService {
 
       return 'unknown-${DateTime.now().millisecondsSinceEpoch}';
     } catch (e) {
-      print('⚠️ [DEVICE] Error obteniendo ID del dispositivo: $e');
+      developer.log('⚠️ [DEVICE] Error obteniendo ID del dispositivo: $e');
       return 'fallback-${DateTime.now().millisecondsSinceEpoch}';
     }
   }
@@ -84,7 +85,7 @@ class BiometricAuthService {
     required String localizedReason,
   }) async {
     try {
-      print('🔐 [BIOMETRIC] Iniciando autenticación biométrica...');
+      developer.log('🔐 [BIOMETRIC] Iniciando autenticación biométrica...');
 
       final authenticated = await _localAuth.authenticate(
         localizedReason: localizedReason,
@@ -95,33 +96,33 @@ class BiometricAuthService {
       );
 
       if (!authenticated) {
-        print('❌ [BIOMETRIC] Autenticación cancelada o fallida');
+        developer.log('❌ [BIOMETRIC] Autenticación cancelada o fallida');
         return null;
       }
 
-      print('✅ [BIOMETRIC] Autenticación exitosa');
+      developer.log('✅ [BIOMETRIC] Autenticación exitosa');
 
       // Obtener usuario asociado a esta biometría
       final prefs = await SharedPreferences.getInstance();
       final userId = prefs.getString(_currentUserKey);
 
       if (userId == null) {
-        print('ℹ️ [BIOMETRIC] No hay usuario registrado con esta biometría');
+        developer.log('ℹ️ [BIOMETRIC] No hay usuario registrado con esta biometría');
         return null;
       }
 
       final userDataJson = prefs.getString('$_prefixBiometricUser$userId');
       if (userDataJson == null) {
-        print('⚠️ [BIOMETRIC] Usuario registrado pero sin datos');
+        developer.log('⚠️ [BIOMETRIC] Usuario registrado pero sin datos');
         return null;
       }
 
       final userData = json.decode(userDataJson) as Map<String, dynamic>;
-      print('👤 [BIOMETRIC] Usuario encontrado: ${userData['username']}');
+      developer.log('👤 [BIOMETRIC] Usuario encontrado: ${userData['username']}');
 
       return userData;
     } on PlatformException catch (e) {
-      print('❌ [BIOMETRIC] Error: $e');
+      developer.log('❌ [BIOMETRIC] Error: $e');
       return null;
     }
   }
@@ -133,7 +134,7 @@ class BiometricAuthService {
     required String localizedReason,
   }) async {
     try {
-      print('📝 [BIOMETRIC] Registrando nuevo usuario: $username');
+      developer.log('📝 [BIOMETRIC] Registrando nuevo usuario: $username');
 
       // Primero autenticar con biometría
       final authenticated = await _localAuth.authenticate(
@@ -145,7 +146,7 @@ class BiometricAuthService {
       );
 
       if (!authenticated) {
-        print('❌ [BIOMETRIC] Registro cancelado - no se autenticó');
+        developer.log('❌ [BIOMETRIC] Registro cancelado - no se autenticó');
         return false;
       }
 
@@ -172,14 +173,14 @@ class BiometricAuthService {
       // Marcar este usuario como el actual
       await prefs.setString(_currentUserKey, userId);
 
-      print('✅ [BIOMETRIC] Usuario registrado exitosamente');
-      print('   UserID: $userId');
-      print('   Username: $username');
-      print('   Email: ${email ?? "no proporcionado"}');
+      developer.log('✅ [BIOMETRIC] Usuario registrado exitosamente');
+      developer.log('   UserID: $userId');
+      developer.log('   Username: $username');
+      developer.log('   Email: ${email ?? "no proporcionado"}');
 
       return true;
     } on PlatformException catch (e) {
-      print('❌ [BIOMETRIC] Error en registro: $e');
+      developer.log('❌ [BIOMETRIC] Error en registro: $e');
       return false;
     }
   }
@@ -227,7 +228,7 @@ class BiometricAuthService {
   Future<void> logout() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_currentUserKey);
-    print('👋 [BIOMETRIC] Sesión cerrada');
+    developer.log('👋 [BIOMETRIC] Sesión cerrada');
   }
 
   /// Elimina completamente un usuario (borrar cuenta)
@@ -239,7 +240,7 @@ class BiometricAuthService {
 
     await prefs.remove('$_prefixBiometricUser$userId');
     await prefs.remove(_currentUserKey);
-    print('🗑️ [BIOMETRIC] Usuario eliminado');
+    developer.log('🗑️ [BIOMETRIC] Usuario eliminado');
   }
 
   /// Verifica si el dispositivo tiene biometría disponible
@@ -281,7 +282,7 @@ class BiometricAuthService {
 
       return false;
     } catch (e) {
-      print('❌ [BIOMETRIC-LOGIN] Error: $e');
+      developer.log('❌ [BIOMETRIC-LOGIN] Error: $e');
       return false;
     }
   }

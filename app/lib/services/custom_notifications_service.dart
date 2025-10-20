@@ -8,6 +8,8 @@
 // ============================================================================
 
 import 'dart:async';
+import 'dart:convert';
+import 'dart:developer' as developer;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:vibration/vibration.dart';
 import 'package:latlong2/latlong.dart';
@@ -124,31 +126,18 @@ class CustomNotificationsService {
       final json = prefs.getString(_prefsKey);
 
       if (json != null) {
-        final Map<String, dynamic> data = {};
-        // Parsear JSON manualmente
-        final pairs = json.replaceAll('{', '').replaceAll('}', '').split(',');
-        for (var pair in pairs) {
-          final parts = pair.split(':');
-          if (parts.length == 2) {
-            final key = parts[0].trim().replaceAll('"', '');
-            final value = parts[1].trim();
-
-            if (value == 'true') {
-              data[key] = true;
-            } else if (value == 'false') {
-              data[key] = false;
-            } else if (double.tryParse(value) != null) {
-              data[key] = double.parse(value);
-            } else if (int.tryParse(value) != null) {
-              data[key] = int.parse(value);
-            }
-          }
+        final decoded = jsonDecode(json);
+        if (decoded is Map<String, dynamic>) {
+          _preferences = NotificationPreferences.fromJson(decoded);
         }
-
-        _preferences = NotificationPreferences.fromJson(data);
       }
-    } catch (e) {
-      print('Error loading notification preferences: $e');
+    } catch (e, st) {
+      developer.log(
+        'Error loading notification preferences: $e',
+        name: 'CustomNotificationsService',
+        error: e,
+        stackTrace: st,
+      );
     }
   }
 
@@ -158,19 +147,26 @@ class CustomNotificationsService {
       final prefs = await SharedPreferences.getInstance();
       _preferences = preferences;
 
-      // Guardar como JSON string simple
-      final json =
-          '{' '"approachingDistance":${preferences.approachingDistance},' '"nearDistance":${preferences.nearDistance},' '"veryNearDistance":${preferences.veryNearDistance},' '"enableAudio":${preferences.enableAudio},' +
-          '"enableVibration":${preferences.enableVibration},' +
-          '"enableVisual":${preferences.enableVisual},' +
-          '"audioVolume":${preferences.audioVolume},' +
-          '"vibrationIntensity":${preferences.vibrationIntensity},' +
-          '"minimumPriority":${preferences.minimumPriority.index}' +
-          '}';
+      final payload = jsonEncode({
+        'approachingDistance': preferences.approachingDistance,
+        'nearDistance': preferences.nearDistance,
+        'veryNearDistance': preferences.veryNearDistance,
+        'enableAudio': preferences.enableAudio,
+        'enableVibration': preferences.enableVibration,
+        'enableVisual': preferences.enableVisual,
+        'audioVolume': preferences.audioVolume,
+        'vibrationIntensity': preferences.vibrationIntensity,
+        'minimumPriority': preferences.minimumPriority.index,
+      });
 
-      await prefs.setString(_prefsKey, json);
-    } catch (e) {
-      print('Error saving notification preferences: $e');
+      await prefs.setString(_prefsKey, payload);
+    } catch (e, st) {
+      developer.log(
+        'Error saving notification preferences: $e',
+        name: 'CustomNotificationsService',
+        error: e,
+        stackTrace: st,
+      );
     }
   }
 
@@ -301,8 +297,13 @@ class CustomNotificationsService {
           ),
         );
       }
-    } catch (e) {
-      print('Error checking proximity: $e');
+    } catch (e, st) {
+      developer.log(
+        'Error checking proximity: $e',
+        name: 'CustomNotificationsService',
+        error: e,
+        stackTrace: st,
+      );
     }
   }
 
@@ -392,7 +393,10 @@ class CustomNotificationsService {
   void _showVisual(CustomNotification notification) {
     // Este método será implementado en la UI
     // Aquí solo emitimos el evento para que la UI lo capture
-    print('📢 Visual Notification: ${notification.fullMessage}');
+    developer.log(
+      '📢 Visual Notification: ${notification.fullMessage}',
+      name: 'CustomNotificationsService',
+    );
   }
 
   void dispose() {

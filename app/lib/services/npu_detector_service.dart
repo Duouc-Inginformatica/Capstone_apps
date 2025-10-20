@@ -1,3 +1,4 @@
+import 'dart:developer' as developer;
 import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:device_info_plus/device_info_plus.dart';
@@ -47,41 +48,44 @@ class NpuDetectorService {
       // - API 29: NNAPI 1.2
       // - API 30+: NNAPI 1.3+
       int nnApiVersion = 0;
-      if (sdkInt >= 30)
+      if (sdkInt >= 30) {
         nnApiVersion = 13;
-      else if (sdkInt >= 29)
+      } else if (sdkInt >= 29) {
         nnApiVersion = 12;
-      else if (sdkInt >= 28)
+      } else if (sdkInt >= 28) {
         nnApiVersion = 11;
-      else if (sdkInt >= 27)
+      } else if (sdkInt >= 27) {
         nnApiVersion = 10;
-
-      // Intentar detectar NPU/GPU via platform channel
-      Map<String, dynamic>? nativeCapabilities;
-      try {
-        nativeCapabilities = await _channel.invokeMapMethod<String, dynamic>(
-          'detectNpu',
-        );
-      } catch (e) {
-        print('⚠️ [NPU] Platform channel no disponible: $e');
       }
 
-      final hasGpuDelegate = nativeCapabilities?['has_gpu'] ?? false;
-      final hasNpuDelegate = nativeCapabilities?['has_npu'] ?? false;
-      final acceleratorName = nativeCapabilities?['accelerator_name'] ?? '';
+      // Intentar detectar NPU/GPU via platform channel
+      Map<String, dynamic> nativeCapabilities = {};
+      try {
+        nativeCapabilities =
+            await _channel.invokeMapMethod<String, dynamic>('detectNpu') ??
+                <String, dynamic>{};
+      } catch (e) {
+        developer.log('⚠️ [NPU] Platform channel no disponible: $e');
+      }
+
+      final hasGpuDelegate = nativeCapabilities['has_gpu'] as bool? ?? false;
+      final hasNpuDelegate = nativeCapabilities['has_npu'] as bool? ?? false;
+      final acceleratorName =
+          nativeCapabilities['accelerator_name'] as String? ?? '';
+  final rawHardware = deviceInfo.hardware;
+      final hardware = rawHardware.toLowerCase();
 
       // Determinar tipo de acelerador basado en chipset
       AcceleratorType acceleratorType = AcceleratorType.none;
 
       if (hasNpuDelegate) {
         // NPU dedicado (Qualcomm Hexagon, Samsung Exynos NPU, MediaTek APU, etc.)
-        if (deviceInfo.hardware?.toLowerCase().contains('qcom') == true ||
+        if (hardware.contains('qcom') == true ||
             acceleratorName.toLowerCase().contains('hexagon')) {
           acceleratorType = AcceleratorType.qualcommHexagon;
-        } else if (deviceInfo.hardware?.toLowerCase().contains('exynos') ==
-            true) {
+        } else if (hardware.contains('exynos') == true) {
           acceleratorType = AcceleratorType.samsungNpu;
-        } else if (deviceInfo.hardware?.toLowerCase().contains('mt') == true) {
+        } else if (hardware.contains('mt') == true) {
           acceleratorType = AcceleratorType.mediatekApu;
         } else {
           acceleratorType = AcceleratorType.genericNpu;
@@ -100,20 +104,20 @@ class NpuDetectorService {
         acceleratorType: acceleratorType,
         deviceInfo:
             '${deviceInfo.manufacturer} ${deviceInfo.model} (SDK $sdkInt)',
-        chipset: deviceInfo.hardware ?? 'unknown',
+  chipset: rawHardware.isNotEmpty ? rawHardware : 'unknown',
       );
 
-      print('🧠 [NPU] Capacidades detectadas:');
-      print('   - NNAPI: ${hasNnapi ? "v${nnApiVersion / 10}" : "No"}');
-      print('   - GPU Delegate: $hasGpuDelegate');
-      print('   - NPU Delegate: $hasNpuDelegate');
-      print('   - Acelerador: ${acceleratorType.name}');
-      print('   - Dispositivo: ${_cachedCapabilities!.deviceInfo}');
-      print('   - Chipset: ${_cachedCapabilities!.chipset}');
+      developer.log('🧠 [NPU] Capacidades detectadas:');
+      developer.log('   - NNAPI: ${hasNnapi ? "v${nnApiVersion / 10}" : "No"}');
+      developer.log('   - GPU Delegate: $hasGpuDelegate');
+      developer.log('   - NPU Delegate: $hasNpuDelegate');
+      developer.log('   - Acelerador: ${acceleratorType.name}');
+      developer.log('   - Dispositivo: ${_cachedCapabilities!.deviceInfo}');
+      developer.log('   - Chipset: ${_cachedCapabilities!.chipset}');
 
       return _cachedCapabilities!;
     } catch (e) {
-      print('❌ [NPU] Error detectando capacidades: $e');
+      developer.log('❌ [NPU] Error detectando capacidades: $e');
 
       _cachedCapabilities = NpuCapabilities(
         hasNnapi: false,

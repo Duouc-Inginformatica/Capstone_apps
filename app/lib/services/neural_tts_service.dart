@@ -1,4 +1,5 @@
 import 'package:flutter/services.dart';
+import 'dart:developer' as developer;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'npu_detector_service.dart';
 
@@ -39,15 +40,15 @@ class NeuralTtsService {
     }
 
     try {
-      print('🧠 [NEURAL_TTS] Inicializando motor TTS multi-modelo...');
+      developer.log('🧠 [NEURAL_TTS] Inicializando motor TTS multi-modelo...');
 
       // 1. Verificar capacidades del dispositivo
       final npuCapabilities = await NpuDetectorService.instance
           .detectCapabilities();
 
       if (!npuCapabilities.canRunNeuralTts) {
-        print('⚠️ [NEURAL_TTS] Dispositivo no soporta TTS neural');
-        print(
+        developer.log('⚠️ [NEURAL_TTS] Dispositivo no soporta TTS neural');
+        developer.log(
           '   Razón: ${npuCapabilities.hasNnapi ? "NNAPI versión insuficiente" : "Sin NNAPI"}',
         );
         _isInitialized = true;
@@ -57,7 +58,7 @@ class NeuralTtsService {
 
       // 2. Obtener delegado recomendado
       _delegate = await NpuDetectorService.instance.getRecommendedDelegate();
-      print('🧠 [NEURAL_TTS] Delegado seleccionado: ${_delegate.name}');
+      developer.log('🧠 [NEURAL_TTS] Delegado seleccionado: ${_delegate.name}');
 
       // 3. Inicializar plugin via platform channel
       try {
@@ -78,38 +79,38 @@ class NeuralTtsService {
               // Usar voz guardada
               await switchVoice(savedVoice);
               _currentVoiceId = savedVoice;
-              print('✅ [NEURAL_TTS] Voz guardada cargada: $savedVoice');
+              developer.log('✅ [NEURAL_TTS] Voz guardada cargada: $savedVoice');
             } else {
               // Primera vez: usar F1 (Asistente Clara) por defecto
               const defaultVoice = 'F1';
               await switchVoice(defaultVoice);
               _currentVoiceId = defaultVoice;
               await prefs.setString('assistant_voice', defaultVoice);
-              print(
+              developer.log(
                 '✅ [NEURAL_TTS] Voz por defecto seleccionada: $defaultVoice (Asistente Clara)',
               );
             }
           } catch (e) {
-            print('⚠️ [NEURAL_TTS] Error configurando voz: $e');
+            developer.log('⚠️ [NEURAL_TTS] Error configurando voz: $e');
           }
 
-          print('✅ [NEURAL_TTS] Motor TTS neural inicializado');
-          print('   - Delegado: ${_delegate.name}');
-          print('   - Voces disponibles: ${_availableVoices.length}');
-          print('   - Voz activa: $_currentVoiceId');
+          developer.log('✅ [NEURAL_TTS] Motor TTS neural inicializado');
+          developer.log('   - Delegado: ${_delegate.name}');
+          developer.log('   - Voces disponibles: ${_availableVoices.length}');
+          developer.log('   - Voz activa: $_currentVoiceId');
         } else {
-          print('❌ [NEURAL_TTS] Inicialización falló');
+          developer.log('❌ [NEURAL_TTS] Inicialización falló');
           _isAvailable = false;
         }
       } on PlatformException catch (e) {
-        print('❌ [NEURAL_TTS] Platform error: ${e.message}');
+        developer.log('❌ [NEURAL_TTS] Platform error: ${e.message}');
         _isAvailable = false;
       }
 
       _isInitialized = true;
       return _isAvailable;
     } catch (e) {
-      print('❌ [NEURAL_TTS] Error fatal en inicialización: $e');
+      developer.log('❌ [NEURAL_TTS] Error fatal en inicialización: $e');
       _isInitialized = true;
       _isAvailable = false;
       return false;
@@ -123,11 +124,11 @@ class NeuralTtsService {
       _availableVoices = List<Map<String, dynamic>>.from(
         (result as List).map((voice) => Map<String, dynamic>.from(voice)),
       );
-      print(
+      developer.log(
         '📊 [NEURAL_TTS] Voces cargadas: ${_availableVoices.map((v) => v['id']).join(", ")}',
       );
     } catch (e) {
-      print('⚠️ [NEURAL_TTS] Error cargando voces: $e');
+      developer.log('⚠️ [NEURAL_TTS] Error cargando voces: $e');
       _availableVoices = [];
     }
   }
@@ -136,12 +137,12 @@ class NeuralTtsService {
   /// voiceId: 'M1', 'M2', 'M3', 'F1', 'F2', 'F3'
   Future<bool> switchVoice(String voiceId) async {
     if (!_isAvailable) {
-      print('⚠️ [NEURAL_TTS] Motor no disponible');
+      developer.log('⚠️ [NEURAL_TTS] Motor no disponible');
       return false;
     }
 
     try {
-      print('🔄 [NEURAL_TTS] Cambiando a voz: $voiceId');
+      developer.log('🔄 [NEURAL_TTS] Cambiando a voz: $voiceId');
 
       final result = await _channel.invokeMethod<Map<dynamic, dynamic>>(
         'switchVoice',
@@ -150,17 +151,17 @@ class NeuralTtsService {
 
       if (result?['success'] == true) {
         _currentVoiceId = voiceId;
-        print('✅ [NEURAL_TTS] Voz cambiada a: $voiceId');
+        developer.log('✅ [NEURAL_TTS] Voz cambiada a: $voiceId');
         return true;
       } else {
-        print('❌ [NEURAL_TTS] Error cambiando voz');
+        developer.log('❌ [NEURAL_TTS] Error cambiando voz');
         return false;
       }
     } on PlatformException catch (e) {
-      print('❌ [NEURAL_TTS] Platform error: ${e.message}');
+      developer.log('❌ [NEURAL_TTS] Platform error: ${e.message}');
       return false;
     } catch (e) {
-      print('❌ [NEURAL_TTS] Error: $e');
+      developer.log('❌ [NEURAL_TTS] Error: $e');
       return false;
     }
   }
@@ -182,13 +183,13 @@ class NeuralTtsService {
     String? voiceId, // Ahora acepta voiceId específico
   }) async {
     if (!_isAvailable) {
-      print('⚠️ [NEURAL_TTS] Motor no disponible para: "$text"');
+      developer.log('⚠️ [NEURAL_TTS] Motor no disponible para: "$text"');
       return false;
     }
 
     try {
       final targetVoiceId = voiceId ?? _currentVoiceId;
-      print('🔊 [NEURAL_TTS] Sintetizando: "$text" (voz: $targetVoiceId)');
+      developer.log('🔊 [NEURAL_TTS] Sintetizando: "$text" (voz: $targetVoiceId)');
 
       final result = await _channel.invokeMethod<Map<dynamic, dynamic>>(
         'speak',
@@ -197,17 +198,17 @@ class NeuralTtsService {
 
       if (result?['success'] == true) {
         final latency = result?['latency_ms'] ?? 0;
-        print('✅ [NEURAL_TTS] Síntesis completada en ${latency}ms');
+        developer.log('✅ [NEURAL_TTS] Síntesis completada en ${latency}ms');
         return true;
       } else {
-        print('❌ [NEURAL_TTS] Error en síntesis: ${result?['error']}');
+        developer.log('❌ [NEURAL_TTS] Error en síntesis: ${result?['error']}');
         return false;
       }
     } on PlatformException catch (e) {
-      print('❌ [NEURAL_TTS] Platform error: ${e.message}');
+      developer.log('❌ [NEURAL_TTS] Platform error: ${e.message}');
       return false;
     } catch (e) {
-      print('❌ [NEURAL_TTS] Error: $e');
+      developer.log('❌ [NEURAL_TTS] Error: $e');
       return false;
     }
   }
@@ -219,7 +220,7 @@ class NeuralTtsService {
     try {
       await _channel.invokeMethod('stop');
     } catch (e) {
-      print('⚠️ [NEURAL_TTS] Error deteniendo síntesis: $e');
+      developer.log('⚠️ [NEURAL_TTS] Error deteniendo síntesis: $e');
     }
   }
 
@@ -247,9 +248,9 @@ class NeuralTtsService {
       _isInitialized = false;
       _isAvailable = false;
       _availableVoices = [];
-      print('🗑️ [NEURAL_TTS] Recursos liberados');
+      developer.log('🗑️ [NEURAL_TTS] Recursos liberados');
     } catch (e) {
-      print('⚠️ [NEURAL_TTS] Error liberando recursos: $e');
+      developer.log('⚠️ [NEURAL_TTS] Error liberando recursos: $e');
     }
   }
 }

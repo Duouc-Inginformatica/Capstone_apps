@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'dart:developer' as developer;
 import 'package:geolocator/geolocator.dart';
 import '../widgets/bottom_nav.dart';
 import '../services/contribution_service.dart';
@@ -39,7 +40,7 @@ class _StopInfoReportScreenState extends State<StopInfoReportScreen> {
         _currentPosition = position;
       });
     } catch (e) {
-      print('Error obteniendo ubicación: $e');
+      developer.log('Error obteniendo ubicación: $e');
     }
   }
 
@@ -60,6 +61,8 @@ class _StopInfoReportScreenState extends State<StopInfoReportScreen> {
         longitude: _currentPosition?.longitude,
       );
 
+      if (!mounted) return;
+
       if (success) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -79,6 +82,7 @@ class _StopInfoReportScreenState extends State<StopInfoReportScreen> {
         );
       }
     } catch (e) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Error de conexión'),
@@ -87,9 +91,11 @@ class _StopInfoReportScreenState extends State<StopInfoReportScreen> {
         ),
       );
     } finally {
-      setState(() {
-        _isSubmitting = false;
-      });
+      if (mounted) {
+        setState(() {
+          _isSubmitting = false;
+        });
+      }
     }
   }
 

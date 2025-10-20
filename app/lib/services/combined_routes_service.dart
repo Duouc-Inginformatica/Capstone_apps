@@ -1,3 +1,4 @@
+import 'dart:developer' as developer;
 // ============================================================================
 // COMBINED ROUTES SERVICE - Sprint 3 CAP-21
 // ============================================================================
@@ -195,7 +196,7 @@ class CombinedRoutesService {
     DateTime? departureTime,
   }) async {
     try {
-      print('🚌 Calculando ruta de transporte público con MOOVIT (scraping)');
+      developer.log('🚌 Calculando ruta de transporte público con MOOVIT (scraping)');
 
       // USAR MOOVIT como fuente principal - NO GTFS
       final redBusService = RedBusService.instance;
@@ -226,10 +227,10 @@ class CombinedRoutesService {
         redBusItinerary: moovitItinerary, // ✅ Adjuntar itinerario original
       );
     } catch (e) {
-      print('❌ Error en ruta de transporte público: $e');
+      developer.log('❌ Error en ruta de transporte público: $e');
 
       // Si falla, crear una ruta de caminata directa
-      print('� Creando ruta de caminata directa como fallback');
+      developer.log('� Creando ruta de caminata directa como fallback');
 
       final walkDistance = _distance.as(LengthUnit.Meter, origin, destination);
       final walkDuration = (walkDistance / 1.4)
@@ -350,7 +351,7 @@ class CombinedRoutesService {
         );
         routes.add(route);
       } catch (e) {
-        print('Error generating alternative route: $e');
+        developer.log('Error generating alternative route: $e');
       }
     }
 
@@ -458,21 +459,29 @@ class CombinedRoutesService {
       // Extraer geometría
       List<LatLng>? geometry;
       if (leg['geometry'] != null) {
-        print('[DEBUG] Geometry recibida: ${leg['geometry'].runtimeType}');
+        developer.log('[DEBUG] Geometry recibida: ${leg['geometry'].runtimeType}');
         if (leg['geometry'] is List) {
-          print(
+          developer.log(
             '[DEBUG] Geometry es List con ${(leg['geometry'] as List).length} elementos',
           );
         }
         geometry = _parseGeometry(leg['geometry']);
-        print('[DEBUG] Geometry parseada: ${geometry.length} puntos');
+        developer.log('[DEBUG] Geometry parseada: ${geometry.length} puntos');
       } else {
-        print('[DEBUG] leg[geometry] es NULL');
+        developer.log('[DEBUG] leg[geometry] es NULL');
+      }
+
+      if (geometry == null || geometry.isEmpty) {
+        final fallbackGeometry = _buildFallbackGeometry(leg);
+        if (fallbackGeometry != null && fallbackGeometry.isNotEmpty) {
+          developer.log('[DEBUG] Usando geometría de respaldo con ${fallbackGeometry.length} puntos');
+          geometry = fallbackGeometry;
+        }
       }
 
       // Validar que la geometría no esté vacía antes de usar first/last
       if (geometry == null || geometry.isEmpty) {
-        print('Geometría vacía para leg: $type (routeName: $routeName)');
+        developer.log('Geometría vacía para leg: $type (routeName: $routeName)');
         return null;
       }
 
@@ -492,7 +501,7 @@ class CombinedRoutesService {
         nextStopName: nextStopName,
       );
     } catch (e) {
-      print('Error parsing leg to segment: $e');
+      developer.log('Error parsing leg to segment: $e');
       return null;
     }
   }
@@ -523,6 +532,71 @@ class CombinedRoutesService {
     return points;
   }
 
+  List<LatLng>? _buildFallbackGeometry(Map<String, dynamic> leg) {
+    LatLng? toLatLng(dynamic data) {
+      if (data is Map) {
+        final lat = (data['lat'] as num?)?.toDouble();
+        final lon = (data['lon'] as num?)?.toDouble();
+        if (lat != null && lon != null) {
+          return LatLng(lat, lon);
+        }
+      }
+      return null;
+    }
+
+    final points = <LatLng>[];
+
+    final departPoint = toLatLng(leg['depart_stop']);
+    final arrivalPoint = toLatLng(leg['arrival_stop']);
+
+    if (departPoint != null) {
+      points.add(departPoint);
+    }
+
+    if (leg['stops'] is List) {
+      for (final stop in leg['stops'] as List) {
+        final stopPoint = toLatLng(stop);
+        if (stopPoint == null) {
+          continue;
+        }
+
+        if (points.isEmpty) {
+          points.add(stopPoint);
+        } else {
+          final last = points.last;
+          if (last.latitude != stopPoint.latitude ||
+              last.longitude != stopPoint.longitude) {
+            points.add(stopPoint);
+          }
+        }
+      }
+    }
+
+    if (arrivalPoint != null) {
+      if (points.isEmpty) {
+        points.add(arrivalPoint);
+      } else {
+        final last = points.last;
+        if (last.latitude != arrivalPoint.latitude ||
+            last.longitude != arrivalPoint.longitude) {
+          points.add(arrivalPoint);
+        }
+      }
+    }
+
+    if (points.length < 2) {
+      if (departPoint != null && arrivalPoint != null) {
+        if (departPoint.latitude != arrivalPoint.latitude ||
+            departPoint.longitude != arrivalPoint.longitude) {
+          return [departPoint, arrivalPoint];
+        }
+      }
+      return null;
+    }
+
+    return points;
+  }
+
   /// Convierte RedBusItinerary de Moovit al formato de tránsito esperado
   Map<String, dynamic> _convertRedBusItineraryToTransitFormat(
     RedBusItinerary itinerary,
@@ -538,6 +612,9 @@ class CombinedRoutesService {
           }
 
           // Incluir TODOS los legs (walk y bus) para mostrar ruta completa
+          final departStop = leg.departStop;
+          final arriveStop = leg.arriveStop;
+
           return {
             'type': leg.type, // 'walk' o 'bus'
             'distance': leg.distanceKm * 1000, // km a metros
@@ -550,6 +627,29 @@ class CombinedRoutesService {
             'mode': leg.mode,
             'departureLocation': leg.departStop?.name ?? leg.from,
             'arrivalLocation': leg.arriveStop?.name ?? leg.to,
+            'depart_stop': departStop != null
+                ? {
+                    'name': departStop.name,
+                    'lat': departStop.latitude,
+                    'lon': departStop.longitude,
+                  }
+                : null,
+            'arrival_stop': arriveStop != null
+                ? {
+                    'name': arriveStop.name,
+                    'lat': arriveStop.latitude,
+                    'lon': arriveStop.longitude,
+                  }
+                : null,
+            'stops': leg.stops
+                ?.map(
+                  (stop) => {
+                    'name': stop.name,
+                    'lat': stop.latitude,
+                    'lon': stop.longitude,
+                  },
+                )
+                .toList(),
           };
         })
         .whereType<Map<String, dynamic>>()
@@ -562,7 +662,7 @@ class CombinedRoutesService {
         totalGeometryPoints += (leg['geometry'] as List).length;
       }
     }
-    print(
+    developer.log(
       '🗺️ [GEOMETRY] Convertido a formato tránsito: ${convertedLegs.length} legs, $totalGeometryPoints puntos totales',
     );
 

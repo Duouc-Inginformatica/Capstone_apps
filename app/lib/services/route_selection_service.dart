@@ -1,3 +1,4 @@
+import 'dart:developer' as developer;
 // ============================================================================
 // ROUTE SELECTION SERVICE
 // ============================================================================
@@ -23,7 +24,7 @@ class RouteSelectionService {
   Future<void> presentOptions(RouteOptions options) async {
     _currentOptions = options;
 
-    print('🗣️  Presentando ${options.optionsCount} opciones de ruta');
+    developer.log('🗣️  Presentando ${options.optionsCount} opciones de ruta');
 
     // Construir mensaje de presentación
     final messages = <String>[];
@@ -56,7 +57,7 @@ class RouteSelectionService {
   /// Inicia escucha de selección por voz
   Future<int?> waitForSelection() async {
     if (_currentOptions == null) {
-      print('❌ No hay opciones disponibles');
+      developer.log('❌ No hay opciones disponibles');
       return null;
     }
 
@@ -135,12 +136,12 @@ class RouteSelectionService {
   Future<String?> _listenForSpeech({int timeoutSeconds = 10}) async {
     if (!_isListening) {
       final available = await _speech.initialize(
-        onError: (error) => print('❌ Error en reconocimiento de voz: $error'),
-        onStatus: (status) => print('🎤 Estado de voz: $status'),
+        onError: (error) => developer.log('❌ Error en reconocimiento de voz: $error'),
+        onStatus: (status) => developer.log('🎤 Estado de voz: $status'),
       );
 
       if (!available) {
-        print('❌ Reconocimiento de voz no disponible');
+        developer.log('❌ Reconocimiento de voz no disponible');
         return null;
       }
     }

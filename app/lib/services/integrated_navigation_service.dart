@@ -1,3 +1,4 @@
+import 'dart:developer' as developer;
 // ============================================================================
 // INTEGRATED NAVIGATION SERVICE
 // ============================================================================
@@ -11,9 +12,7 @@ import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import 'red_bus_service.dart';
 import 'tts_service.dart';
-import 'geometry_service.dart';
 import 'bus_arrivals_service.dart';
-import 'api_client.dart';
 
 class NavigationStep {
   final String type; // 'walk', 'wait_bus', 'ride_bus', 'transfer', 'arrival'
@@ -139,26 +138,26 @@ class ActiveNavigation {
   List<LatLng> getCurrentStepGeometry(LatLng currentPosition) {
     final step = currentStep;
     if (step == null) {
-      print('🔍 getCurrentStepGeometry: step es null');
+      developer.log('🔍 getCurrentStepGeometry: step es null');
       return [];
     }
 
-    print(
+    developer.log(
       '🔍 getCurrentStepGeometry: Paso actual = ${step.type} (índice $currentStepIndex)',
     );
-    print('🔍 Geometrías disponibles: ${stepGeometries.keys.toList()}');
+    developer.log('🔍 Geometrías disponibles: ${stepGeometries.keys.toList()}');
 
     // Si tenemos geometría pre-calculada para este paso, usarla
     if (stepGeometries.containsKey(currentStepIndex)) {
       final geometry = stepGeometries[currentStepIndex]!;
-      print(
+      developer.log(
         '🔍 Geometría encontrada para paso $currentStepIndex: ${geometry.length} puntos',
       );
 
       // Si es paso de walk o ride_bus, recortar geometría desde el punto más cercano al usuario
       if ((step.type == 'walk' || step.type == 'ride_bus') &&
           geometry.length >= 2) {
-        print(
+        developer.log(
           '🔍 Paso ${step.type.toUpperCase()}: Recortando geometría desde posición actual',
         );
 
@@ -181,7 +180,7 @@ class ActiveNavigation {
           }
         }
 
-        print(
+        developer.log(
           '🔍 Punto más cercano: índice $closestIndex (${minDistance.toStringAsFixed(0)}m)',
         );
 
@@ -196,21 +195,21 @@ class ActiveNavigation {
         }
       }
 
-      print('🔍 Retornando geometría pre-calculada');
+      developer.log('🔍 Retornando geometría pre-calculada');
       return geometry;
     }
 
-    print('⚠️ No hay geometría pre-calculada para paso $currentStepIndex');
+    developer.log('⚠️ No hay geometría pre-calculada para paso $currentStepIndex');
 
     // Fallback: generar geometría básica
     if (step.location != null) {
       if (step.type == 'walk') {
-        print('🔍 Fallback: Creando geometría básica para WALK');
+        developer.log('🔍 Fallback: Creando geometría básica para WALK');
         return [currentPosition, step.location!];
       }
     }
 
-    print('⚠️ Sin geometría para este paso');
+    developer.log('⚠️ Sin geometría para este paso');
     return []; // Sin geometría
   }
 
@@ -288,18 +287,18 @@ class IntegratedNavigationService {
   Function()? onGeometryUpdated; // Nuevo: se llama cuando la geometría cambia
 
   // Configuración de umbrales adaptativos
-  static const double ARRIVAL_THRESHOLD_METERS =
-      30.0; // 30m para considerar "llegada" (más estricto)
-  static const double PROXIMITY_ALERT_METERS =
-      150.0; // 150m para alertar proximidad
-  static const double GPS_ACCURACY_THRESHOLD =
-      20.0; // Precisión GPS mínima aceptable (metros)
-  static const double MAX_ARRIVAL_THRESHOLD =
-      50.0; // Umbral máximo incluso con GPS impreciso
+  static const double arrivalThresholdMeters =
+    30.0; // 30m para considerar "llegada" (más estricto)
+  static const double proximityAlertMeters =
+    150.0; // 150m para alertar proximidad
+  static const double gpsAccuracyThreshold =
+    20.0; // Precisión GPS mínima aceptable (metros)
+  static const double maxArrivalThreshold =
+    50.0; // Umbral máximo incluso con GPS impreciso
 
   // Histórico de posiciones para suavizar detección
   final List<Position> _positionHistory = [];
-  static const int MAX_POSITION_HISTORY = 5;
+  static const int maxPositionHistory = 5;
 
   // Control de anuncios duplicados
   int? _lastProximityAnnouncedStepIndex;
@@ -322,13 +321,13 @@ class IntegratedNavigationService {
     required String destinationName,
     RedBusItinerary? existingItinerary, // Usar itinerario ya obtenido si existe
   }) async {
-    print('🚀 Iniciando navegación integrada a $destinationName');
+    developer.log('🚀 Iniciando navegación integrada a $destinationName');
 
     // Inicializar posición actual
     try {
       _lastPosition = await Geolocator.getCurrentPosition();
     } catch (e) {
-      print('⚠️ No se pudo obtener posición actual: $e');
+      developer.log('⚠️ No se pudo obtener posición actual: $e');
       // Usar coordenadas del origen como fallback
       _lastPosition = Position(
         latitude: originLat,
@@ -347,10 +346,10 @@ class IntegratedNavigationService {
     // 1. Usar itinerario existente o solicitar uno nuevo
     final RedBusItinerary itinerary;
     if (existingItinerary != null) {
-      print('♻️ Usando itinerario ya obtenido (evita llamada duplicada)');
+      developer.log('♻️ Usando itinerario ya obtenido (evita llamada duplicada)');
       itinerary = existingItinerary;
     } else {
-      print('🔄 Solicitando nuevo itinerario al backend...');
+      developer.log('🔄 Solicitando nuevo itinerario al backend...');
       final routeOptions = await _redBusService.getRouteOptions(
         originLat: originLat,
         originLon: originLon,
@@ -365,8 +364,8 @@ class IntegratedNavigationService {
       itinerary = routeOptions.firstOption!;
     }
 
-    print('📋 Itinerario obtenido: ${itinerary.summary}');
-    print('🚌 Buses Red recomendados: ${itinerary.redBusRoutes.join(", ")}');
+    developer.log('📋 Itinerario obtenido: ${itinerary.summary}');
+    developer.log('🚌 Buses Red recomendados: ${itinerary.redBusRoutes.join(", ")}');
 
     // 2. Construir pasos de navegación detallados
     final steps = await _buildNavigationSteps(itinerary, originLat, originLon);
@@ -424,8 +423,8 @@ class IntegratedNavigationService {
   ) async {
     final steps = <NavigationStep>[];
 
-    print('🚶 Construyendo pasos de navegación (1:1 con legs del backend)...');
-    print('🚶 Legs del itinerario: ${itinerary.legs.length}');
+    developer.log('🚶 Construyendo pasos de navegación (1:1 con legs del backend)...');
+    developer.log('🚶 Legs del itinerario: ${itinerary.legs.length}');
 
     // Mapeo DIRECTO 1:1: cada leg del backend = 1 paso en el frontend
     for (var i = 0; i < itinerary.legs.length; i++) {
@@ -436,7 +435,7 @@ class IntegratedNavigationService {
         final walkTo = leg.arriveStop?.location;
 
         if (walkTo != null) {
-          print('🚶 Paso WALK hasta ${leg.arriveStop?.name}');
+          developer.log('🚶 Paso WALK hasta ${leg.arriveStop?.name}');
 
           steps.add(
             NavigationStep(
@@ -454,7 +453,7 @@ class IntegratedNavigationService {
         }
       } else if (leg.type == 'bus' && leg.isRedBus) {
         // Paso de bus: combina espera + viaje en UN SOLO paso
-        print(
+        developer.log(
           '🚌 Paso BUS ${leg.routeNumber}: ${leg.departStop?.name} → ${leg.arriveStop?.name}',
         );
 
@@ -482,15 +481,15 @@ class IntegratedNavigationService {
     }
 
     // Log de todos los pasos generados
-    print('🚶 ===== PASOS DE NAVEGACIÓN GENERADOS =====');
+    developer.log('🚶 ===== PASOS DE NAVEGACIÓN GENERADOS =====');
     for (var i = 0; i < steps.length; i++) {
       final step = steps[i];
-      print('🚶 Paso $i: ${step.type} - ${step.instruction}');
+      developer.log('🚶 Paso $i: ${step.type} - ${step.instruction}');
       if (step.type == 'bus') {
-        print('   └─ Bus: ${step.busRoute}, StopName: ${step.stopName}');
+        developer.log('   └─ Bus: ${step.busRoute}, StopName: ${step.stopName}');
       }
     }
-    print('🚶 ==========================================');
+    developer.log('🚶 ==========================================');
 
     return steps;
   }
@@ -507,12 +506,6 @@ class IntegratedNavigationService {
     // TODO: Implementar cuando ApiClient tenga método get()
     // final response = await ApiClient.instance.get('/api/stops/$stopId/routes');
     return [];
-  }
-
-  /// Obtiene el ID del paradero por nombre
-  Future<String?> _getStopId(String stopName) async {
-    final stopInfo = await _getStopInfoFromGTFS(stopName);
-    return stopInfo?['stop_id'];
   }
 
   /// Construye la geometría completa de la ruta
@@ -534,111 +527,6 @@ class IntegratedNavigationService {
     return geometry;
   }
 
-  /// Obtiene geometría de ruta peatonal usando el servicio centralizado
-  /// Retorna: (geometría, distancia en metros, duración en segundos, instrucciones detalladas)
-  Future<
-    ({
-      List<LatLng> geometry,
-      double distance,
-      int duration,
-      List<String> streetInstructions,
-    })?
-  >
-  _getWalkingRouteGeometry(LatLng origin, LatLng destination) async {
-    try {
-      print('� [Geometry] Solicitando ruta peatonal...');
-
-      final result = await GeometryService.instance.getWalkingGeometry(
-        origin,
-        destination,
-      );
-
-      if (result != null) {
-        // Extraer instrucciones de texto
-        final streetInstructions = result.instructions
-            .map((i) => i.text)
-            .toList();
-
-        print('✅ [Geometry] Ruta obtenida: ${result.geometry.length} puntos');
-        print('� [Geometry] Instrucciones: ${streetInstructions.length} pasos');
-
-        // Mostrar instrucciones para debugging
-        if (streetInstructions.isNotEmpty) {
-          print('📍 [Geometry] Instrucciones detalladas:');
-          for (int i = 0; i < streetInstructions.length; i++) {
-            print('   ${i + 1}. ${streetInstructions[i]}');
-          }
-        }
-
-        final distanceKm = result.distanceMeters / 1000;
-        final durationMin = result.durationSeconds / 60;
-        print(
-          '� [Geometry] Distancia: ${distanceKm.toStringAsFixed(2)}km, Duración: ${durationMin.toStringAsFixed(1)}min',
-        );
-
-        return (
-          geometry: result.geometry,
-          distance: result.distanceMeters,
-          duration: result.durationSeconds,
-          streetInstructions: streetInstructions,
-        );
-      }
-
-      print('⚠️ [Geometry] No se pudo obtener geometría');
-    } catch (e) {
-      print('❌ [Geometry] Error: $e');
-    }
-
-    // Fallback: línea recta si falla
-    print('⚠️ [Geometry] Usando fallback: línea recta');
-    return null;
-  }
-
-  /// Obtiene geometría de ruta del bus usando el servicio centralizado PT
-  /// Para el tramo del bus, usar el perfil PT que integra GTFS
-  Future<({List<LatLng> geometry, double distance, int duration})?>
-  _getBusRouteGeometry(LatLng origin, LatLng destination) async {
-    try {
-      print('🚌 [Geometry-PT] Solicitando ruta de transporte público...');
-      print('🚌 [Geometry-PT] De: ${origin.latitude},${origin.longitude}');
-      print(
-        '🚌 [Geometry-PT] A: ${destination.latitude},${destination.longitude}',
-      );
-
-      final result = await GeometryService.instance.getTransitGeometry(
-        origin,
-        destination,
-      );
-
-      if (result != null && result.legs.isNotEmpty) {
-        // Combinar geometría de todos los legs
-        final List<LatLng> geometry = [];
-        for (final leg in result.legs) {
-          geometry.addAll(leg.geometry);
-        }
-
-        print('✅ [Geometry-PT] Ruta obtenida: ${geometry.length} puntos');
-        print(
-          '� [Geometry-PT] Distancia: ${(result.totalDistanceMeters / 1000).toStringAsFixed(2)}km, Duración: ${(result.totalDurationSeconds / 60).toStringAsFixed(1)}min',
-        );
-
-        return (
-          geometry: geometry,
-          distance: result.totalDistanceMeters,
-          duration: result.totalDurationSeconds,
-        );
-      }
-
-      print('⚠️ [Geometry-PT] No se pudo obtener ruta');
-    } catch (e) {
-      print('❌ [Geometry-PT] Error: $e');
-    }
-
-    // Fallback: retornar null para usar geometría del backend
-    print('⚠️ [Geometry-PT] Usando fallback');
-    return null;
-  }
-
   /// Construye geometrías individuales para cada paso de navegación
   /// SIMPLIFICADO: Mapeo directo 1:1 con legs del backend
   Future<Map<int, List<LatLng>>> _buildStepGeometries(
@@ -648,33 +536,27 @@ class IntegratedNavigationService {
   ) async {
     final geometries = <int, List<LatLng>>{};
 
-    print('🗺️ [SIMPLE] Construyendo geometrías 1:1 con backend');
-    print(
-      '🗺️ [SIMPLE] Steps: ${steps.length}, Legs: ${itinerary.legs.length}',
-    );
-
-    // Mapeo DIRECTO: cada step corresponde a un leg en el mismo índice
     for (int i = 0; i < steps.length && i < itinerary.legs.length; i++) {
       final step = steps[i];
       final leg = itinerary.legs[i];
 
-      print(
+      developer.log(
         '🗺️ [SIMPLE] Paso $i: step.type=${step.type} ← leg.type=${leg.type}',
       );
 
       // Validar que los tipos coincidan
       if ((step.type == 'walk' && leg.type != 'walk') ||
           (step.type == 'bus' && leg.type != 'bus')) {
-        print('   ⚠️ [SIMPLE] ADVERTENCIA: Tipos no coinciden!');
+        developer.log('   ⚠️ [SIMPLE] ADVERTENCIA: Tipos no coinciden!');
       }
 
       // Usar geometría del backend directamente
       if (leg.geometry != null && leg.geometry!.isNotEmpty) {
         geometries[i] = List.from(leg.geometry!);
-        print('   ✅ [SIMPLE] Geometría: ${leg.geometry!.length} puntos');
+        developer.log('   ✅ [SIMPLE] Geometría: ${leg.geometry!.length} puntos');
 
         if (leg.departStop != null || leg.arriveStop != null) {
-          print(
+          developer.log(
             '   📍 [SIMPLE] ${leg.departStop?.name ?? "Inicio"} → ${leg.arriveStop?.name ?? "Destino"}',
           );
         }
@@ -685,32 +567,21 @@ class IntegratedNavigationService {
 
         if (end != null) {
           geometries[i] = [start, end];
-          print('   ⚠️ [SIMPLE] Fallback línea recta (2 puntos)');
+          developer.log('   ⚠️ [SIMPLE] Fallback línea recta (2 puntos)');
         } else {
-          print('   ❌ [SIMPLE] Sin geometría disponible');
+          developer.log('   ❌ [SIMPLE] Sin geometría disponible');
         }
       }
     }
 
-    print('🗺️ [SIMPLE] Geometrías creadas: ${geometries.keys.toList()}');
+    developer.log('🗺️ [SIMPLE] Geometrías creadas: ${geometries.keys.toList()}');
     return geometries;
-  }
-
-  /// MÉTODO ANTIGUO - ELIMINADO
-  /// Se reemplazó por mapeo simple 1:1
-  Future<Map<int, List<LatLng>>> _buildStepGeometries_OLD(
-    List<NavigationStep> steps,
-    RedBusItinerary itinerary,
-    LatLng origin,
-  ) async {
-    // CÓDIGO ANTIGUO COMENTADO - NO USAR
-    return {};
   }
 
   /// Anuncia el inicio de navegación por voz
   void _announceNavigationStart(String destination, RedBusItinerary itinerary) {
-    print('🔊 [TTS] _announceNavigationStart llamado');
-    print('🔊 [TTS] _activeNavigation != null? ${_activeNavigation != null}');
+    developer.log('🔊 [TTS] _announceNavigationStart llamado');
+    developer.log('🔊 [TTS] _activeNavigation != null? ${_activeNavigation != null}');
 
     // Construir mensaje detallado del viaje
     final busLegs = itinerary.legs.where((leg) => leg.type == 'bus').toList();
@@ -744,9 +615,9 @@ class IntegratedNavigationService {
     String firstStepInstruction = '';
     if (_activeNavigation?.currentStep != null) {
       final step = _activeNavigation!.currentStep!;
-      print('🔊 [TTS] currentStep.type = ${step.type}');
-      print('🔊 [TTS] currentStep.stopName = ${step.stopName}');
-      print('🔊 [TTS] currentStep.instruction = ${step.instruction}');
+      developer.log('🔊 [TTS] currentStep.type = ${step.type}');
+      developer.log('🔊 [TTS] currentStep.stopName = ${step.stopName}');
+      developer.log('🔊 [TTS] currentStep.instruction = ${step.instruction}');
 
       // SOLO anunciar el primer paso si es 'walk'
       if (step.type == 'walk' && step.stopName != null) {
@@ -768,14 +639,14 @@ class IntegratedNavigationService {
           firstStepInstruction += 'Comienza así: $firstStreetInstruction. ';
         }
 
-        print('🔊 [TTS] firstStepInstruction creado: $firstStepInstruction');
+        developer.log('🔊 [TTS] firstStepInstruction creado: $firstStepInstruction');
       } else {
-        print(
+        developer.log(
           '🔊 [TTS] NO se creó firstStepInstruction (type=${step.type}, stopName=${step.stopName})',
         );
       }
     } else {
-      print('🔊 [TTS] currentStep es NULL');
+      developer.log('🔊 [TTS] currentStep es NULL');
     }
 
     // Mensaje inicial completo y directo
@@ -793,10 +664,10 @@ Te iré guiando paso a paso.
 ''';
     }
 
-    print('🔊 [TTS] Mensaje completo a anunciar:');
-    print('🔊 [TTS] ===========================');
-    print(message);
-    print('🔊 [TTS] ===========================');
+    developer.log('🔊 [TTS] Mensaje completo a anunciar:');
+    developer.log('🔊 [TTS] ===========================');
+    developer.log(message);
+    developer.log('🔊 [TTS] ===========================');
 
     // Una sola llamada TTS para todo el anuncio inicial
     TtsService.instance.speak(message, urgent: true);
@@ -830,8 +701,8 @@ Te iré guiando paso a paso.
     }
 
     // Filtrar posiciones con baja precisión GPS
-    if (position.accuracy > GPS_ACCURACY_THRESHOLD) {
-      print(
+    if (position.accuracy > gpsAccuracyThreshold) {
+      developer.log(
         '⚠️ GPS con baja precisión: ${position.accuracy.toStringAsFixed(1)}m - Ignorando',
       );
       return;
@@ -839,7 +710,7 @@ Te iré guiando paso a paso.
 
     // Agregar al histórico de posiciones
     _positionHistory.add(position);
-    if (_positionHistory.length > MAX_POSITION_HISTORY) {
+    if (_positionHistory.length > maxPositionHistory) {
       _positionHistory.removeAt(0);
     }
 
@@ -876,7 +747,7 @@ Te iré guiando paso a paso.
               geometry[i + 1],
             );
           }
-          print(
+          developer.log(
             '🗺️ Distancia real restante (GraphHopper): ${distanceToTarget.toStringAsFixed(1)}m',
           );
         } else {
@@ -886,7 +757,7 @@ Te iré guiando paso a paso.
             userLocation,
             currentStep.location!,
           );
-          print(
+          developer.log(
             '⚠️ Usando distancia línea recta (sin geometría): ${distanceToTarget.toStringAsFixed(1)}m',
           );
         }
@@ -897,12 +768,12 @@ Te iré guiando paso a paso.
           userLocation,
           currentStep.location!,
         );
-        print(
+        developer.log(
           '📍 Distancia línea recta: ${distanceToTarget.toStringAsFixed(1)}m',
         );
       }
 
-      print(
+      developer.log(
         '📍 Distancia al objetivo: ${distanceToTarget.toStringAsFixed(1)}m (GPS: ${position.accuracy.toStringAsFixed(1)}m)',
       );
 
@@ -913,18 +784,18 @@ Te iré guiando paso a paso.
       _announceProgressIfNeeded(currentStep, distanceToTarget);
 
       // Alerta de proximidad (solo si no se ha anunciado antes)
-      if (distanceToTarget <= PROXIMITY_ALERT_METERS &&
-          distanceToTarget > ARRIVAL_THRESHOLD_METERS) {
+      if (distanceToTarget <= proximityAlertMeters &&
+          distanceToTarget > arrivalThresholdMeters) {
         _announceProximity(currentStep);
       }
 
       // Llegada al objetivo (ajustar threshold según precisión GPS, pero con límite máximo)
       final adjustedThreshold = math.min(
-        ARRIVAL_THRESHOLD_METERS + (position.accuracy * 0.3),
-        MAX_ARRIVAL_THRESHOLD,
+        arrivalThresholdMeters + (position.accuracy * 0.3),
+        maxArrivalThreshold,
       );
 
-      print(
+      developer.log(
         '🎯 Umbral ajustado: ${adjustedThreshold.toStringAsFixed(1)}m (GPS accuracy: ${position.accuracy.toStringAsFixed(1)}m)',
       );
 
@@ -1074,7 +945,7 @@ Te iré guiando paso a paso.
     }
 
     if (message.isNotEmpty) {
-      print('📢 [PROGRESO] $message');
+      developer.log('📢 [PROGRESO] $message');
       TtsService.instance.speak(message);
       _lastProgressAnnouncement = now;
       _lastAnnouncedDistance = distanceMeters;
@@ -1083,7 +954,7 @@ Te iré guiando paso a paso.
 
   /// Maneja llegada a un paso
   void _handleStepArrival(NavigationStep step) {
-    print('✅ Llegada al paso: ${step.type}');
+    developer.log('✅ Llegada al paso: ${step.type}');
 
     // Evitar anuncios duplicados para el mismo paso
     if (_lastArrivalAnnouncedStepIndex == _activeNavigation?.currentStepIndex) {
@@ -1140,7 +1011,7 @@ Te iré guiando paso a paso.
     if (nextStep?.type == 'ride_bus') {
       _announcedStops.clear();
       _currentBusStopIndex = 0;
-      print('🚌 [BUS_STOPS] Iniciando nuevo viaje en bus - resetear paradas');
+      developer.log('🚌 [BUS_STOPS] Iniciando nuevo viaje en bus - resetear paradas');
     }
 
     onStepChanged?.call(nextStep ?? step);
@@ -1183,7 +1054,7 @@ Te iré guiando paso a paso.
         }
       }
     } catch (e) {
-      print('⚠️ [BUS_DETECTION] Error detectando buses cercanos: $e');
+      developer.log('⚠️ [BUS_DETECTION] Error detectando buses cercanos: $e');
     }
     */
   }
@@ -1194,12 +1065,12 @@ Te iré guiando paso a paso.
     // Obtener lista de paradas del leg actual
     final currentLegIndex = _activeNavigation?.currentStepIndex;
     if (currentLegIndex == null) {
-      print('⚠️ [BUS_STOPS] currentLegIndex es null');
+      developer.log('⚠️ [BUS_STOPS] currentLegIndex es null');
       return;
     }
 
-    print('🚌 [BUS_STOPS] currentLegIndex: $currentLegIndex');
-    print(
+    developer.log('🚌 [BUS_STOPS] currentLegIndex: $currentLegIndex');
+    developer.log(
       '🚌 [BUS_STOPS] Total legs en itinerario: ${_activeNavigation!.itinerary.legs.length}',
     );
 
@@ -1209,24 +1080,24 @@ Te iré guiando paso a paso.
         .toList();
 
     if (busLegs.isEmpty) {
-      print('⚠️ [BUS_STOPS] No se encontró ningún leg de bus en el itinerario');
+      developer.log('⚠️ [BUS_STOPS] No se encontró ningún leg de bus en el itinerario');
       return;
     }
 
-    print('🚌 [BUS_STOPS] Encontrados ${busLegs.length} legs de bus');
+    developer.log('🚌 [BUS_STOPS] Encontrados ${busLegs.length} legs de bus');
 
     // Usar el primer leg de bus (normalmente solo hay uno)
     final busLeg = busLegs.first;
     final stops = busLeg.stops;
 
     if (stops == null || stops.isEmpty) {
-      print('⚠️ [BUS_STOPS] No hay paradas disponibles en el leg de bus');
-      print('⚠️ [BUS_STOPS] busLeg.type: ${busLeg.type}');
-      print('⚠️ [BUS_STOPS] busLeg.routeNumber: ${busLeg.routeNumber}');
+      developer.log('⚠️ [BUS_STOPS] No hay paradas disponibles en el leg de bus');
+      developer.log('⚠️ [BUS_STOPS] busLeg.type: ${busLeg.type}');
+      developer.log('⚠️ [BUS_STOPS] busLeg.routeNumber: ${busLeg.routeNumber}');
       return;
     }
 
-    print(
+    developer.log(
       '🚌 [BUS_STOPS] Verificando progreso: ${stops.length} paradas totales, índice actual: $_currentBusStopIndex',
     );
 
@@ -1241,12 +1112,12 @@ Te iré guiando paso a paso.
         stopLocation,
       );
 
-      print('🚌 [STOP $i] ${stop.name}: ${distanceToStop.toStringAsFixed(0)}m');
+      developer.log('🚌 [STOP $i] ${stop.name}: ${distanceToStop.toStringAsFixed(0)}m');
 
       // Si está cerca de esta parada (50m) y no se ha anunciado
       final stopId = '${stop.name}_${stop.sequence}';
       if (distanceToStop <= 50.0 && !_announcedStops.contains(stopId)) {
-        print(
+        developer.log(
           '✅ [BUS_STOPS] Parada detectada a ${distanceToStop.toStringAsFixed(0)}m - Anunciando...',
         );
         _announceCurrentBusStop(stop, i + 1, stops.length);
@@ -1272,7 +1143,7 @@ Te iré guiando paso a paso.
       // Calcular si esta parada debe ser anunciada
       final shouldAnnounce = _shouldAnnounceStop(stopNumber, totalStops);
       if (!shouldAnnounce) {
-        print(
+        developer.log(
           '⏭️ [TTS] Parada $stopNumber omitida (solo anuncio de paradas clave)',
         );
         return; // Saltar esta parada
@@ -1299,7 +1170,7 @@ Te iré guiando paso a paso.
       announcement = 'Parada $stopNumber de $totalStops: $stopCode${stop.name}';
     }
 
-    print('🔔 [TTS] $announcement');
+    developer.log('🔔 [TTS] $announcement');
     TtsService.instance.speak(announcement);
   }
 
@@ -1339,7 +1210,7 @@ Te iré guiando paso a paso.
     _activeNavigation = null;
     _announcedStops.clear(); // Limpiar paradas anunciadas
     _currentBusStopIndex = 0; // Resetear índice
-    print('🛑 Navegación detenida');
+    developer.log('🛑 Navegación detenida');
   }
 
   /// Obtiene el paso actual
@@ -1357,7 +1228,7 @@ Te iré guiando paso a paso.
   // Geometría del paso actual usando la última posición GPS
   List<LatLng> get currentStepGeometry {
     if (_activeNavigation == null || _lastPosition == null) {
-      print('🗺️ [GEOMETRY] activeNavigation o lastPosition es null');
+      developer.log('🗺️ [GEOMETRY] activeNavigation o lastPosition es null');
       return [];
     }
 
@@ -1367,7 +1238,7 @@ Te iré guiando paso a paso.
     );
 
     final geometry = _activeNavigation!.getCurrentStepGeometry(currentPos);
-    print(
+    developer.log(
       '🗺️ [GEOMETRY] Retornando geometría del paso ${_activeNavigation!.currentStepIndex}: ${geometry.length} puntos',
     );
 
@@ -1388,61 +1259,26 @@ Te iré guiando paso a paso.
     TtsService.instance.speak('Navegación cancelada');
   }
 
-  /// Obtiene ruta peatonal detallada usando el servicio centralizado
-  Future<Map<String, dynamic>?> _getGraphHopperWalkingRoute(
-    LatLng from,
-    LatLng to,
-  ) async {
-    try {
-      print('🚶 [Geometry] Solicitando ruta peatonal detallada...');
-
-      final result = await GeometryService.instance.getWalkingGeometry(
-        from,
-        to,
-      );
-
-      if (result != null && result.instructions.isNotEmpty) {
-        // Convertir instrucciones a formato simple
-        final simpleSteps = result.instructions.map((instruction) {
-          return {
-            'instruction': instruction.text,
-            'distance': instruction.distanceMeters,
-            'duration': instruction.durationSeconds,
-          };
-        }).toList();
-
-        print('✅ [Geometry] ${simpleSteps.length} instrucciones obtenidas');
-        return {'steps': simpleSteps};
-      }
-
-      print('⚠️ [Geometry] No se pudo obtener ruta válida');
-      return null;
-    } catch (e) {
-      print('❌ [Geometry] Error obteniendo ruta: $e');
-      return null;
-    }
-  }
-
   /// Avanza al siguiente paso de navegación
   void advanceToNextStep() {
     if (_activeNavigation == null) {
-      print('⚠️ No hay navegación activa');
+      developer.log('⚠️ No hay navegación activa');
       return;
     }
 
     final currentIndex = _activeNavigation!.currentStepIndex;
     if (currentIndex + 1 >= _activeNavigation!.steps.length) {
-      print('⚠️ Ya estás en el último paso de navegación');
+      developer.log('⚠️ Ya estás en el último paso de navegación');
       return;
     }
 
     _activeNavigation!.currentStepIndex++;
     final newStep = _activeNavigation!.currentStep;
 
-    print(
+    developer.log(
       '📍 [STEP] Avanzando paso: $currentIndex → ${_activeNavigation!.currentStepIndex}',
     );
-    print('📍 [STEP] Nuevo paso: ${newStep?.type} - ${newStep?.instruction}');
+    developer.log('📍 [STEP] Nuevo paso: ${newStep?.type} - ${newStep?.instruction}');
 
     // Notificar cambio de paso
     if (newStep != null && onStepChanged != null) {
@@ -1453,7 +1289,7 @@ Te iré guiando paso a paso.
   /// TEST: Simula una posición GPS para testing
   /// Útil para probar la navegación sin caminar físicamente
   void simulatePosition(Position position) {
-    print(
+    developer.log(
       '🧪 [TEST] Inyectando posición simulada: ${position.latitude}, ${position.longitude}',
     );
     _onLocationUpdate(position);
@@ -1468,7 +1304,7 @@ Te iré guiando paso a paso.
   Future<bool> handleVoiceCommand(String command) async {
     final lowerCommand = command.toLowerCase().trim();
 
-    print('🎤 [VOICE] Comando recibido: "$lowerCommand"');
+    developer.log('🎤 [VOICE] Comando recibido: "$lowerCommand"');
 
     // Comando: "cuando llega la micro" / "cuando llega el bus"
     if (_isAskingForBusArrivals(lowerCommand)) {
@@ -1490,7 +1326,7 @@ Te iré guiando paso a paso.
       return await _handleRepeatInstructionCommand();
     }
 
-    print('⚠️ [VOICE] Comando no reconocido');
+    developer.log('⚠️ [VOICE] Comando no reconocido');
     return false;
   }
 
@@ -1546,14 +1382,14 @@ Te iré guiando paso a paso.
   }
 
   Future<bool> _handleBusArrivalsCommand() async {
-    print('🚌 [VOICE] Procesando comando: Cuando llega la micro');
+    developer.log('🚌 [VOICE] Procesando comando: Cuando llega la micro');
 
     // Si hay navegación activa y estamos esperando el bus
     if (_activeNavigation != null) {
       final currentStep = _activeNavigation!.currentStep;
 
       if (currentStep?.type == 'wait_bus' && currentStep?.stopId != null) {
-        print(
+        developer.log(
           '🚌 [VOICE] En paradero ${currentStep!.stopId}, consultando llegadas...',
         );
 
@@ -1573,7 +1409,7 @@ Te iré guiando paso a paso.
             return true;
           }
         } catch (e) {
-          print('❌ [VOICE] Error obteniendo llegadas: $e');
+          developer.log('❌ [VOICE] Error obteniendo llegadas: $e');
           TtsService.instance.speak(
             'No pude obtener información de buses en este momento',
             urgent: true,
@@ -1586,7 +1422,7 @@ Te iré guiando paso a paso.
     // Si no hay navegación activa o no estamos en un paradero,
     // buscar paradero más cercano usando GPS
     if (_lastPosition != null) {
-      print('🚌 [VOICE] Buscando paradero cercano a posición GPS...');
+      developer.log('🚌 [VOICE] Buscando paradero cercano a posición GPS...');
 
       try {
         final arrivals = await BusArrivalsService.instance
@@ -1606,7 +1442,7 @@ Te iré guiando paso a paso.
           return true;
         }
       } catch (e) {
-        print('❌ [VOICE] Error buscando paradero cercano: $e');
+        developer.log('❌ [VOICE] Error buscando paradero cercano: $e');
         TtsService.instance.speak(
           'No pude encontrar paraderos cercanos',
           urgent: true,
@@ -1623,7 +1459,7 @@ Te iré guiando paso a paso.
   }
 
   Future<bool> _handleLocationCommand() async {
-    print('📍 [VOICE] Procesando comando: Dónde estoy');
+    developer.log('📍 [VOICE] Procesando comando: Dónde estoy');
 
     if (_lastPosition != null) {
       final lat = _lastPosition!.latitude.toStringAsFixed(6);
@@ -1644,7 +1480,7 @@ Te iré guiando paso a paso.
   }
 
   Future<bool> _handleRemainingTimeCommand() async {
-    print('⏱️ [VOICE] Procesando comando: Cuánto falta');
+    developer.log('⏱️ [VOICE] Procesando comando: Cuánto falta');
 
     if (_activeNavigation == null) {
       TtsService.instance.speak('No hay navegación activa', urgent: true);
@@ -1680,7 +1516,7 @@ Te iré guiando paso a paso.
   }
 
   Future<bool> _handleRepeatInstructionCommand() async {
-    print('🔄 [VOICE] Procesando comando: Repetir instrucción');
+    developer.log('🔄 [VOICE] Procesando comando: Repetir instrucción');
 
     if (_activeNavigation == null) {
       TtsService.instance.speak('No hay navegación activa', urgent: true);

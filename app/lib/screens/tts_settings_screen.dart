@@ -5,7 +5,7 @@ import '../services/tts_service.dart';
 /// Pantalla de configuración de voz TTS
 /// Permite personalizar: velocidad y tono del TTS clásico
 class TtsSettingsScreen extends StatefulWidget {
-  const TtsSettingsScreen({Key? key}) : super(key: key);
+  const TtsSettingsScreen({super.key});
 
   @override
   State<TtsSettingsScreen> createState() => _TtsSettingsScreenState();

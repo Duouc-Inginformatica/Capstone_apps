@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:developer' as developer;
 import 'package:http/http.dart' as http;
 
 class BusArrival {
@@ -119,38 +120,38 @@ class BusArrivalsService {
 
   /// Obtiene las llegadas de buses para un paradero específico
   Future<StopArrivals?> getBusArrivals(String stopCode) async {
-    print('🚌 [ARRIVALS] Obteniendo llegadas para paradero: $stopCode');
+    developer.log('🚌 [ARRIVALS] Obteniendo llegadas para paradero: $stopCode');
 
     try {
       final url = Uri.parse('$baseUrl/bus-arrivals/$stopCode');
-      print('🌐 [ARRIVALS] URL: $url');
+      developer.log('🌐 [ARRIVALS] URL: $url');
 
       final response = await http.get(url).timeout(timeout);
 
-      print('📡 [ARRIVALS] Status: ${response.statusCode}');
+      developer.log('📡 [ARRIVALS] Status: ${response.statusCode}');
 
       if (response.statusCode == 200) {
         final jsonData = json.decode(response.body) as Map<String, dynamic>;
         final arrivals = StopArrivals.fromJson(jsonData);
 
-        print(
+        developer.log(
           '✅ [ARRIVALS] ${arrivals.arrivals.length} buses encontrados para ${arrivals.stopCode}',
         );
 
         return arrivals;
       } else if (response.statusCode == 404) {
-        print(
+        developer.log(
           '⚠️ [ARRIVALS] No se encontraron llegadas para paradero $stopCode',
         );
         return null;
       } else {
-        print(
+        developer.log(
           '❌ [ARRIVALS] Error del servidor: ${response.statusCode} - ${response.body}',
         );
         return null;
       }
     } catch (e) {
-      print('❌ [ARRIVALS] Error obteniendo llegadas: $e');
+      developer.log('❌ [ARRIVALS] Error obteniendo llegadas: $e');
       return null;
     }
   }
@@ -161,11 +162,11 @@ class BusArrivalsService {
     double longitude, {
     int radius = 200,
   }) async {
-    print('🚌 [ARRIVALS] Obteniendo llegadas cerca de ($latitude, $longitude)');
+    developer.log('🚌 [ARRIVALS] Obteniendo llegadas cerca de ($latitude, $longitude)');
 
     try {
       final url = Uri.parse('$baseUrl/bus-arrivals/nearby');
-      print('🌐 [ARRIVALS] URL: $url');
+      developer.log('🌐 [ARRIVALS] URL: $url');
 
       final response = await http
           .post(
@@ -179,24 +180,24 @@ class BusArrivalsService {
           )
           .timeout(timeout);
 
-      print('📡 [ARRIVALS] Status: ${response.statusCode}');
+      developer.log('📡 [ARRIVALS] Status: ${response.statusCode}');
 
       if (response.statusCode == 200) {
         final jsonData = json.decode(response.body) as Map<String, dynamic>;
         final arrivals = StopArrivals.fromJson(jsonData);
 
-        print('✅ [ARRIVALS] ${arrivals.arrivals.length} buses encontrados');
+        developer.log('✅ [ARRIVALS] ${arrivals.arrivals.length} buses encontrados');
 
         return arrivals;
       } else if (response.statusCode == 501) {
-        print('⚠️ [ARRIVALS] Endpoint no implementado aún');
+        developer.log('⚠️ [ARRIVALS] Endpoint no implementado aún');
         return null;
       } else {
-        print('❌ [ARRIVALS] Error: ${response.statusCode}');
+        developer.log('❌ [ARRIVALS] Error: ${response.statusCode}');
         return null;
       }
     } catch (e) {
-      print('❌ [ARRIVALS] Error: $e');
+      developer.log('❌ [ARRIVALS] Error: $e');
       return null;
     }
   }

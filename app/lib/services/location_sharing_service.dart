@@ -1,3 +1,4 @@
+import 'dart:developer' as developer;
 // ============================================================================
 // LOCATION SHARING SERVICE - Sprint 7 CAP-35
 // ============================================================================
@@ -186,7 +187,7 @@ class LocationSharingService {
         }
       }
     } catch (e) {
-      print('Error loading location shares: $e');
+      developer.log('Error loading location shares: $e');
     }
   }
 
@@ -212,7 +213,7 @@ class LocationSharingService {
         final position = await Geolocator.getCurrentPosition();
         _updateShareLocations(LatLng(position.latitude, position.longitude));
       } catch (e) {
-        print('Error updating share location: $e');
+        developer.log('Error updating share location: $e');
       }
     });
   }
@@ -242,7 +243,7 @@ class LocationSharingService {
       );
       await prefs.setString(_sharesKey, sharesJson);
     } catch (e) {
-      print('Error saving location shares: $e');
+      developer.log('Error saving location shares: $e');
     }
   }
 

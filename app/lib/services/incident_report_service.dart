@@ -1,3 +1,4 @@
+import 'dart:developer' as developer;
 // ============================================================================
 // INCIDENT REPORT SERVICE - Sprint 7 CAP-36
 // ============================================================================
@@ -216,32 +217,7 @@ class IncidentReportService {
 
     _incidentController.add(incident);
 
-    // Enviar reporte al backend (TODO: implementar cuando el endpoint esté listo)
-    // await _uploadIncidentToServer(incident);
-
     return incident;
-  }
-
-  /// Subir incidente al servidor
-  /// TODO: Implementar cuando el backend tenga endpoint /api/incidents/report
-  Future<void> _uploadIncidentToServer(Incident incident) async {
-    // try {
-    //   await ApiClient.instance.post('/api/incidents/report', {
-    //     'type': incident.type.toString(),
-    //     'location': {
-    //       'lat': incident.location.latitude,
-    //       'lng': incident.location.longitude,
-    //     },
-    //     'severity': incident.severity.toString(),
-    //     'route_name': incident.routeName,
-    //     'stop_name': incident.stopName,
-    //     'description': incident.description,
-    //     'timestamp': incident.timestamp.toIso8601String(),
-    //   });
-    //   print('✅ [INCIDENT] Reporte enviado al servidor');
-    // } catch (e) {
-    //   print('❌ [INCIDENT] Error enviando reporte: $e');
-    // }
   }
 
   /// Reportar bus lleno
@@ -410,7 +386,7 @@ class IncidentReportService {
         }
       }
     } catch (e) {
-      print('Error loading incidents: $e');
+      developer.log('Error loading incidents: $e');
     }
   }
 
@@ -428,7 +404,7 @@ class IncidentReportService {
         await prefs.setString(_userIdKey, _userId!);
       }
     } catch (e) {
-      print('Error loading user ID: $e');
+      developer.log('Error loading user ID: $e');
       _userId = 'anonymous';
     }
   }
@@ -441,7 +417,7 @@ class IncidentReportService {
       );
       await prefs.setString(_incidentsKey, incidentsJson);
     } catch (e) {
-      print('Error saving incidents: $e');
+      developer.log('Error saving incidents: $e');
     }
   }
 

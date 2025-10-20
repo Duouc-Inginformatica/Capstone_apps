@@ -11,7 +11,7 @@ import 'biometric_register_screen.dart';
 /// Flujo: 1) Detectar huella PRIMERO, 2) Si existe → login, 3) Si no existe → register
 /// El badge IA se activa cuando se detecta NPU/NNAPI (para futuros modelos IA)
 class LoginScreenV2 extends StatefulWidget {
-  const LoginScreenV2({Key? key}) : super(key: key);
+  const LoginScreenV2({super.key});
 
   @override
   State<LoginScreenV2> createState() => _LoginScreenV2State();
@@ -160,6 +160,49 @@ class _LoginScreenV2State extends State<LoginScreenV2>
     }
   }
 
+  Future<void> _syncBackendSession({String? username, String? email}) async {
+    final currentUser = await _biometricService.getCurrentUserData();
+    final resolvedUsername =
+        (username ?? currentUser?['username']?.toString() ?? '').trim();
+    final resolvedEmail =
+        (email ?? currentUser?['email']?.toString() ?? '').trim();
+
+    if (resolvedUsername.isEmpty) {
+      debugPrint('⚠️ [LOGIN] Usuario local sin nombre, omitiendo sync backend');
+      return;
+    }
+
+    final biometricToken = await _biometricService.getBiometricDeviceToken();
+
+    try {
+      await _apiClient.biometricLogin(biometricToken: biometricToken);
+    } on ApiException catch (e) {
+      if (e.statusCode == 401 || e.statusCode == 404) {
+        try {
+          await _apiClient.biometricRegister(
+            username: resolvedUsername,
+            biometricToken: biometricToken,
+            email: resolvedEmail.isEmpty ? null : resolvedEmail,
+          );
+          debugPrint('✅ [LOGIN] Cuenta creada en backend tras fallback');
+        } catch (registerError) {
+          debugPrint('❌ [LOGIN] No se pudo registrar en backend: $registerError');
+          await _ttsService.speak(
+            'Advertencia: no se pudo sincronizar con el servidor. '
+            'Algunas funciones pueden no estar disponibles.',
+          );
+        }
+      } else {
+        debugPrint('❌ [LOGIN] Error al renovar sesión backend: $e');
+        await _ttsService.speak(
+          'No se pudo establecer conexión con el servidor.',
+        );
+      }
+    } catch (e) {
+      debugPrint('❌ [LOGIN] Error inesperado al sincronizar backend: $e');
+    }
+  }
+
   Future<void> _authenticateWithBiometric() async {
     if (_isAuthenticating || !_biometricAvailable) return;
 
@@ -209,6 +252,12 @@ class _LoginScreenV2State extends State<LoginScreenV2>
         final success = await _biometricService.login();
 
         if (success) {
+          final userData = await _biometricService.getCurrentUserData();
+          await _syncBackendSession(
+            username: userData?['username']?.toString(),
+            email: userData?['email']?.toString(),
+          );
+
           await _ttsService.speak(
             'Inicio de sesión exitoso. Bienvenido de vuelta',
           );
@@ -326,8 +375,8 @@ class _LoginScreenV2State extends State<LoginScreenV2>
                 decoration: BoxDecoration(
                   gradient: LinearGradient(
                     colors: [
-                      const Color(0xFF00BCD4).withOpacity(0.3),
-                      const Color(0xFF0097A7).withOpacity(0.3),
+                      const Color(0xFF00BCD4).withValues(alpha: 0.3),
+                      const Color(0xFF0097A7).withValues(alpha: 0.3),
                     ],
                   ),
                   borderRadius: BorderRadius.circular(12),
@@ -370,7 +419,7 @@ class _LoginScreenV2State extends State<LoginScreenV2>
                     borderRadius: BorderRadius.circular(12),
                     boxShadow: [
                       BoxShadow(
-                        color: const Color(0xFF00BCD4).withOpacity(0.4),
+                        color: const Color(0xFF00BCD4).withValues(alpha: 0.4),
                         blurRadius: 8,
                         offset: const Offset(0, 2),
                       ),
@@ -428,7 +477,7 @@ class _LoginScreenV2State extends State<LoginScreenV2>
                           borderRadius: BorderRadius.circular(20),
                           boxShadow: [
                             BoxShadow(
-                              color: Colors.black.withOpacity(0.3),
+                              color: Colors.black.withValues(alpha: 0.3),
                               blurRadius: 20,
                               offset: const Offset(0, 10),
                             ),

@@ -1,3 +1,4 @@
+import 'dart:developer' as developer;
 import 'package:flutter/material.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import '../services/biometric_auth_service.dart';
@@ -8,8 +9,7 @@ import 'home_screen.dart';
 /// Pantalla de registro asistido por voz con huella dactilar
 /// Flujo: Huella verificada → Pedir nombre de usuario (voz) → Email opcional → Guardar en DB
 class BiometricRegisterScreen extends StatefulWidget {
-  const BiometricRegisterScreen({Key? key, required this.biometricToken})
-    : super(key: key);
+  const BiometricRegisterScreen({super.key, required this.biometricToken});
 
   final String biometricToken;
 
@@ -19,6 +19,15 @@ class BiometricRegisterScreen extends StatefulWidget {
 }
 
 class _BiometricRegisterScreenState extends State<BiometricRegisterScreen> {
+  void _log(String message, {Object? error, StackTrace? stackTrace}) {
+    developer.log(
+      message,
+      name: 'BiometricRegisterScreen',
+      error: error,
+      stackTrace: stackTrace,
+    );
+  }
+
   final BiometricAuthService _biometricService = BiometricAuthService.instance;
   final TtsService _ttsService = TtsService();
   final ApiClient _apiClient = ApiClient();
@@ -189,13 +198,10 @@ class _BiometricRegisterScreenState extends State<BiometricRegisterScreen> {
       // Registrar en backend para persistencia cross-device
       // Usar el username como identificador único, sin password (biometric only)
       try {
-        await _apiClient.register(
+        await _apiClient.biometricRegister(
           username: username,
-          email: email ?? '',
-          password:
-              '', // Backend debe permitir empty password para cuentas biometric-only
-          name: username,
-          biometricToken: widget.biometricToken, // Pasar el token biométrico
+          biometricToken: widget.biometricToken,
+          email: email,
         );
       } catch (backendError) {
         // Si falla el backend, el registro local ya está hecho
@@ -237,13 +243,13 @@ class _BiometricRegisterScreenState extends State<BiometricRegisterScreen> {
     }
 
     // IMPORTANTE: Esperar a que TTS termine completamente antes de activar micrófono
-    print('🔊 [REGISTER] Esperando a que TTS termine de hablar...');
+    _log('🔊 [REGISTER] Esperando a que TTS termine de hablar...');
     await _ttsService.waitUntilDone();
 
     // Delay adicional de seguridad para asegurar que el audio terminó
     await Future.delayed(const Duration(milliseconds: 500));
 
-    print('🎤 [REGISTER] Activando micrófono ahora');
+    _log('🎤 [REGISTER] Activando micrófono ahora');
 
     if (mounted) {
       setState(() {
@@ -309,7 +315,7 @@ class _BiometricRegisterScreenState extends State<BiometricRegisterScreen> {
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   color: _isListening
-                      ? Colors.red.withOpacity(0.2)
+                      ? Colors.red.withValues(alpha: 0.2)
                       : Colors.grey[200],
                   border: Border.all(
                     color: _isListening ? Colors.red : Colors.grey,

@@ -187,7 +187,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         width: 50,
                         height: 50,
                         decoration: BoxDecoration(
-                          color: const Color(0xFF00BCD4).withOpacity(0.1),
+                          color: const Color(0xFF00BCD4).withValues(alpha: 0.1),
                           borderRadius: BorderRadius.circular(12),
                         ),
                         child: Center(

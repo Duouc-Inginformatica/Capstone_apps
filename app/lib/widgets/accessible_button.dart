@@ -45,7 +45,7 @@ class AccessibleButton extends StatelessWidget {
               borderRadius: BorderRadius.circular(16),
             ),
             elevation: 8,
-            shadowColor: backgroundColor.withOpacity(0.5),
+            shadowColor: backgroundColor.withValues(alpha: 0.5),
           ),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:developer' as developer;
 import 'dart:io' show SocketException;
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -88,7 +89,7 @@ class RouteCache {
         _cache.removeWhere((route) => route.isExpired());
       }
     } catch (e) {
-      print('Error loading route cache: $e');
+      developer.log('Error loading route cache: $e');
     }
   }
 
@@ -98,7 +99,7 @@ class RouteCache {
       final cacheJson = jsonEncode(_cache.map((r) => r.toJson()).toList());
       await prefs.setString(cacheKey, cacheJson);
     } catch (e) {
-      print('Error saving route cache: $e');
+      developer.log('Error saving route cache: $e');
     }
   }
 
@@ -277,6 +278,86 @@ class ApiClient {
     );
   }
 
+  /// Registra al usuario utilizando el flujo biométrico dedicado del backend
+  Future<Map<String, dynamic>> biometricRegister({
+    required String username,
+    required String biometricToken,
+    String? email,
+    String? deviceInfo,
+  }) async {
+    final uri = _uri('/api/auth/biometric/register');
+    final body = <String, dynamic>{
+      'biometric_id': biometricToken,
+      'username': username,
+    };
+
+    if (email != null && email.trim().isNotEmpty) {
+      body['email'] = email.trim();
+    }
+
+    if (deviceInfo != null && deviceInfo.trim().isNotEmpty) {
+      body['device_info'] = deviceInfo.trim();
+    }
+
+    final res = await _safeRequest(
+      () => http.post(
+        uri,
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode(body),
+      ),
+    );
+
+    final data =
+        jsonDecode(res.body.isEmpty ? '{}' : res.body) as Map<String, dynamic>;
+
+    if (res.statusCode >= 200 && res.statusCode < 300) {
+      final token = data['token']?.toString();
+      if (token != null) {
+        await AuthStorage.saveToken(token);
+      }
+      return data;
+    }
+
+    throw ApiException(
+      message: data['error']?.toString() ?? 'biometric register failed',
+      statusCode: res.statusCode,
+    );
+  }
+
+  /// Obtiene un token de sesión desde el backend usando solo biometría
+  Future<Map<String, dynamic>> biometricLogin({
+    required String biometricToken,
+  }) async {
+    final uri = _uri('/api/auth/biometric/login');
+    final body = {
+      'biometric_id': biometricToken,
+    };
+
+    final res = await _safeRequest(
+      () => http.post(
+        uri,
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode(body),
+      ),
+    );
+
+    final data =
+        jsonDecode(res.body.isEmpty ? '{}' : res.body) as Map<String, dynamic>;
+
+    if (res.statusCode >= 200 && res.statusCode < 300) {
+      final token = data['token']?.toString();
+      if (token != null) {
+        await AuthStorage.saveToken(token);
+      }
+      return data;
+    }
+
+    throw ApiException(
+      message: data['error']?.toString() ?? 'biometric login failed',
+      statusCode: res.statusCode,
+    );
+  }
+
   /// Verifica si un token biométrico ya está registrado en el backend
   Future<bool> checkBiometricExists(String biometricToken) async {
     try {
@@ -298,7 +379,7 @@ class ApiClient {
 
       return false;
     } catch (e) {
-      print('⚠️ [API] Error verificando huella biométrica: $e');
+      developer.log('⚠️ [API] Error verificando huella biométrica: $e');
       // En caso de error, permitir continuar (modo offline)
       return false;
     }
@@ -417,7 +498,7 @@ class ApiClient {
       );
 
       if (cached != null) {
-        print('✅ Ruta de transporte público encontrada en caché');
+        developer.log('✅ Ruta de transporte público encontrada en caché');
         cached['fromCache'] = true;
         return cached;
       }
@@ -435,10 +516,10 @@ class ApiClient {
       body['departure_time'] = departureTime.toUtc().toIso8601String();
     }
 
-    print('🚌 Enviando solicitud de transporte público a: $uri');
-    print('📝 Body: $body');
-    print('📍 Origin: lat=$originLat, lon=$originLon');
-    print('📍 Destination: lat=$destLat, lon=$destLon');
+    developer.log('🚌 Enviando solicitud de transporte público a: $uri');
+    developer.log('📝 Body: $body');
+    developer.log('📍 Origin: lat=$originLat, lon=$originLon');
+    developer.log('📍 Destination: lat=$destLat, lon=$destLon');
 
     try {
       final headers = <String, String>{
@@ -455,15 +536,15 @@ class ApiClient {
         body: jsonEncode(body),
       );
 
-      print('📡 Status Code: ${response.statusCode}');
-      print('📄 Response: ${response.body}');
+      developer.log('📡 Status Code: ${response.statusCode}');
+      developer.log('📄 Response: ${response.body}');
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body) as Map<String, dynamic>;
 
         // Verificar si es un fallback a Moovit
         if (data['fallback'] == 'moovit') {
-          print(
+          developer.log(
             '🔄 Backend sugiere usar Moovit, consultando endpoint de Red...',
           );
 
@@ -485,12 +566,12 @@ class ApiClient {
           if (redResponse.statusCode == 200) {
             final redData =
                 jsonDecode(redResponse.body) as Map<String, dynamic>;
-            print('✅ Ruta obtenida desde Moovit/Red');
+            developer.log('✅ Ruta obtenida desde Moovit/Red');
 
             // Convertir formato de Moovit a formato GTFS para compatibilidad
             return _convertMoovitToGTFSFormat(redData);
           } else {
-            print(
+            developer.log(
               '⚠️ Error obteniendo ruta de Moovit: ${redResponse.statusCode}',
             );
             throw ApiException(
@@ -521,7 +602,7 @@ class ApiClient {
         );
       }
     } catch (e) {
-      print('❌ Error en solicitud de transporte público: $e');
+      developer.log('❌ Error en solicitud de transporte público: $e');
       rethrow;
     }
   }
@@ -562,7 +643,7 @@ class ApiClient {
       );
       routes.add(mainRoute);
     } catch (e) {
-      print('No se pudo obtener ruta principal: $e');
+      developer.log('No se pudo obtener ruta principal: $e');
     }
 
     // Agregar rutas alternativas de caché

@@ -1,9 +1,11 @@
 import 'dart:async';
+import 'dart:developer' as developer;
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
+import 'package:speech_to_text/speech_recognition_result.dart';
 import 'package:speech_to_text/speech_to_text.dart';
 import '../services/biometric_auth_service.dart';
 import '../services/tts_service.dart';
+import '../services/api_client.dart';
 import '../widgets/accessible_button.dart';
 import 'map_screen.dart';
 
@@ -23,14 +25,25 @@ class BiometricLoginScreen extends StatefulWidget {
 }
 
 class _BiometricLoginScreenState extends State<BiometricLoginScreen> {
+  void _log(String message, {Object? error, StackTrace? stackTrace}) {
+    developer.log(
+      message,
+      name: 'BiometricLoginScreen',
+      error: error,
+      stackTrace: stackTrace,
+    );
+  }
+
   final _biometricAuth = BiometricAuthService.instance;
   final _tts = TtsService.instance;
   final _speech = SpeechToText();
+  final ApiClient _apiClient = ApiClient();
 
   bool _isInitializing = true;
   bool _hasRegisteredUser = false;
   bool _isRegistering = false;
   bool _isListening = false;
+  bool _speechAvailable = false;
 
   // Estado del registro
   String? _registrationUsername;
@@ -45,26 +58,34 @@ class _BiometricLoginScreenState extends State<BiometricLoginScreen> {
 
   @override
   void dispose() {
-    _speech.stop();
+    if (_speechAvailable && _speech.isListening) {
+      _speech.stop();
+    }
     super.dispose();
   }
 
   /// Inicializa el sistema biométrico y TTS
   Future<void> _initialize() async {
     try {
-      print('🔐 [BIOMETRIC-LOGIN] Inicializando...');
+      _log('🔐 [BIOMETRIC-LOGIN] Inicializando...');
 
       // TTS ya se auto-inicializa en la primera llamada a speak()
 
       // Inicializar reconocimiento de voz
       final speechAvailable = await _speech.initialize(
-        onError: (error) => print('❌ [SPEECH] Error: $error'),
-        onStatus: (status) => print('🎤 [SPEECH] Status: $status'),
+        onError: (error) => _log('❌ [SPEECH] Error: $error'),
+        onStatus: (status) => _log('🎤 [SPEECH] Status: $status'),
       );
 
       if (!speechAvailable) {
-        print('⚠️ [SPEECH] Reconocimiento de voz no disponible');
+        _log('⚠️ [SPEECH] Reconocimiento de voz no disponible');
+        await _tts.speak(
+          'Advertencia: reconocimiento de voz no disponible. '
+          'Puedes continuar, pero deberás usar asistencia manual.',
+        );
       }
+
+      _speechAvailable = speechAvailable;
 
       // Verificar capacidad biométrica
       final canCheck = await _biometricAuth.canCheckBiometrics();
@@ -73,6 +94,9 @@ class _BiometricLoginScreenState extends State<BiometricLoginScreen> {
           'Error: Este dispositivo no tiene autenticación biométrica. '
           'Por favor, usa otro dispositivo.',
         );
+        setState(() {
+          _isInitializing = false;
+        });
         return;
       }
 
@@ -82,7 +106,7 @@ class _BiometricLoginScreenState extends State<BiometricLoginScreen> {
         biometricTypes,
       );
 
-      print('✅ [BIOMETRIC] Tipos disponibles: $biometricDescription');
+      _log('✅ [BIOMETRIC] Tipos disponibles: $biometricDescription');
 
       // Verificar si ya hay un usuario registrado
       final hasUser = await _biometricAuth.hasRegisteredUser();
@@ -119,7 +143,7 @@ class _BiometricLoginScreenState extends State<BiometricLoginScreen> {
         await _startRegistration();
       }
     } catch (e) {
-      print('❌ [BIOMETRIC-LOGIN] Error en inicialización: $e');
+      _log('❌ [BIOMETRIC-LOGIN] Error en inicialización: $e');
       await _tts.speak(
         'Error al inicializar el sistema. Por favor, reinicia la aplicación.',
       );
@@ -148,6 +172,8 @@ class _BiometricLoginScreenState extends State<BiometricLoginScreen> {
       // Actualizar timestamp de último login
       await _biometricAuth.updateLastLogin();
 
+      await _ensureBackendSession(user);
+
       final username = user['username'] as String;
       await _tts.speak(
         'Bienvenido de vuelta, $username. Ingresando a la aplicación.',
@@ -160,7 +186,7 @@ class _BiometricLoginScreenState extends State<BiometricLoginScreen> {
         ).pushReplacement(MaterialPageRoute(builder: (_) => const MapScreen()));
       }
     } catch (e) {
-      print('❌ [BIOMETRIC-LOGIN] Error en auto-login: $e');
+      _log('❌ [BIOMETRIC-LOGIN] Error en auto-login: $e');
       await _tts.speak('Error al iniciar sesión. Intenta nuevamente.');
     }
   }
@@ -173,6 +199,16 @@ class _BiometricLoginScreenState extends State<BiometricLoginScreen> {
       _registrationUsername = null;
       _registrationEmail = null;
     });
+
+    if (!_speechAvailable) {
+      await _tts.speak(
+        'El registro por voz no está disponible porque el micrófono no pudo inicializarse.',
+      );
+      setState(() {
+        _isRegistering = false;
+      });
+      return;
+    }
 
     await _tts.speak(
       'Di tu nombre de usuario. '
@@ -187,6 +223,12 @@ class _BiometricLoginScreenState extends State<BiometricLoginScreen> {
   /// Inicia la escucha de voz para un paso específico
   void _startListening(RegistrationStep step) async {
     if (_isListening) return;
+    if (!_speechAvailable) {
+      await _tts.speak(
+        'No se pudo activar el micrófono. Intenta nuevamente más tarde.',
+      );
+      return;
+    }
 
     setState(() {
       _isListening = true;
@@ -195,16 +237,29 @@ class _BiometricLoginScreenState extends State<BiometricLoginScreen> {
 
     try {
       await _tts.speak('Escuchando...');
+      await _tts.waitUntilDone();
 
-      await _speech.listen(
-        onResult: (result) => _handleVoiceResult(result, step),
+      final didStart = await _speech.listen(
+        onResult: (SpeechRecognitionResult result) =>
+            _handleVoiceResult(result, step),
         listenFor: const Duration(seconds: 10),
         pauseFor: const Duration(seconds: 2),
-        partialResults: false,
+  listenOptions: SpeechListenOptions(
+          partialResults: false,
+        ),
         localeId: 'es_ES',
       );
+
+      if (!didStart) {
+        setState(() {
+          _isListening = false;
+        });
+        await _tts.speak(
+          'No se pudo activar el micrófono. Intenta nuevamente.',
+        );
+      }
     } catch (e) {
-      print('❌ [SPEECH] Error al iniciar escucha: $e');
+      _log('❌ [SPEECH] Error al iniciar escucha: $e');
       setState(() {
         _isListening = false;
       });
@@ -213,19 +268,29 @@ class _BiometricLoginScreenState extends State<BiometricLoginScreen> {
   }
 
   /// Maneja el resultado del reconocimiento de voz
-  Future<void> _handleVoiceResult(dynamic result, RegistrationStep step) async {
-    if (!_isListening) return;
+  Future<void> _handleVoiceResult(
+    SpeechRecognitionResult result,
+    RegistrationStep step,
+  ) async {
+    if (!_isListening || !result.finalResult) return;
 
-    final recognizedText = result.recognizedWords as String;
-    if (recognizedText.isEmpty) return;
+    final recognizedText = result.recognizedWords.trim();
+    if (recognizedText.isEmpty) {
+      setState(() {
+        _isListening = false;
+      });
+      return;
+    }
 
     setState(() {
       _isListening = false;
     });
 
-    await _speech.stop();
+    if (_speech.isListening) {
+      await _speech.stop();
+    }
 
-    print('🎤 [SPEECH] Reconocido: "$recognizedText" para paso: $step');
+    _log('🎤 [SPEECH] Reconocido: "$recognizedText" para paso: $step');
 
     // Procesar según el paso actual
     switch (step) {
@@ -393,6 +458,72 @@ class _BiometricLoginScreenState extends State<BiometricLoginScreen> {
     _startListening(RegistrationStep.confirmation);
   }
 
+  Future<void> _ensureBackendSession(Map<String, dynamic> localUser) async {
+  final username = localUser['username']?.toString() ?? '';
+  final rawEmail = localUser['email'];
+  final emailCandidate =
+    rawEmail is String && rawEmail.trim().isNotEmpty
+      ? rawEmail.trim()
+      : null;
+
+    try {
+      final biometricToken = await _biometricAuth.getBiometricDeviceToken();
+      await _apiClient.biometricLogin(biometricToken: biometricToken);
+    } on ApiException catch (e) {
+      if (e.statusCode == 401 || e.statusCode == 404) {
+        try {
+          final biometricToken = await _biometricAuth.getBiometricDeviceToken();
+          await _apiClient.biometricRegister(
+            username: username,
+            biometricToken: biometricToken,
+            email: emailCandidate,
+          );
+        } catch (registerError) {
+          _log('❌ [BACKEND] Falló registro de respaldo: $registerError');
+          await _tts.speak(
+            'Advertencia: no se pudo sincronizar con el servidor. '
+            'Funcionalidades en línea podrían no estar disponibles.',
+          );
+        }
+      } else {
+        _log('❌ [BACKEND] Login biométrico falló: $e');
+        await _tts.speak(
+          'No se pudo conectar con el servidor. '
+          'Revisa tu conexión si necesitas funciones en línea.',
+        );
+      }
+    } catch (e) {
+      _log('❌ [BACKEND] Error inesperado en login biométrico: $e');
+      await _tts.speak(
+        'Error inesperado al sincronizar con el servidor.',
+      );
+    }
+  }
+
+  Future<void> _registerBackendUser({
+    required String username,
+    String? email,
+  }) async {
+    try {
+      final biometricToken = await _biometricAuth.getBiometricDeviceToken();
+      await _apiClient.biometricRegister(
+        username: username,
+        biometricToken: biometricToken,
+        email: email != null && email.trim().isNotEmpty ? email.trim() : null,
+      );
+    } on ApiException catch (e) {
+      _log('❌ [BACKEND] Registro biométrico falló: $e');
+      await _tts.speak(
+        'Registro completado localmente, pero no se pudo contactar al servidor.',
+      );
+    } catch (e) {
+      _log('❌ [BACKEND] Error inesperado registrando: $e');
+      await _tts.speak(
+        'Ocurrió un error inesperado al comunicarse con el servidor.',
+      );
+    }
+  }
+
   /// Completa el registro con biometría
   Future<void> _completeRegistration() async {
     if (_registrationUsername == null) {
@@ -418,6 +549,11 @@ class _BiometricLoginScreenState extends State<BiometricLoginScreen> {
       );
       return;
     }
+
+    await _registerBackendUser(
+      username: _registrationUsername!,
+      email: _registrationEmail,
+    );
 
     await _tts.speak(
       'Registro completado exitosamente. '

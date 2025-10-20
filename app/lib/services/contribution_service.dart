@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:developer' as developer;
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 
@@ -48,7 +49,7 @@ class ContributionService {
       
       return response.statusCode == 200 || response.statusCode == 201;
     } catch (e) {
-      print('Error submitting contribution: $e');
+      developer.log('Error submitting contribution: $e');
       return false;
     }
   } 
@@ -79,7 +80,7 @@ class ContributionService {
       
       return response.statusCode == 200 || response.statusCode == 201;
     } catch (e) {
-      print('Error reportando estado de bus: $e');
+      developer.log('Error reportando estado de bus: $e');
       return false;
     }
   }
@@ -108,7 +109,7 @@ class ContributionService {
       
       return response.statusCode == 200 || response.statusCode == 201;
     } catch (e) {
-      print('Error reportando problema de ruta: $e');
+      developer.log('Error reportando problema de ruta: $e');
       return false;
     }
   }
@@ -141,7 +142,7 @@ class ContributionService {
       
       return response.statusCode == 200 || response.statusCode == 201;
     } catch (e) {
-      print('Error reportando info de parada: $e');
+      developer.log('Error reportando info de parada: $e');
       return false;
     }
   }
@@ -166,7 +167,7 @@ class ContributionService {
       
       return response.statusCode == 200 || response.statusCode == 201;
     } catch (e) {
-      print('Error enviando sugerencia: $e');
+      developer.log('Error enviando sugerencia: $e');
       return false;
     }
   }
@@ -184,7 +185,7 @@ class ContributionService {
       }
       return null;
     } catch (e) {
-      print('Error obteniendo estadísticas: $e');
+      developer.log('Error obteniendo estadísticas: $e');
       return null;
     }
   }

@@ -1,5 +1,6 @@
-import 'package:flutter/material.dart';
 import 'dart:async';
+import 'dart:developer' as developer;
+import 'package:flutter/material.dart';
 import '../services/npu_detector_service.dart';
 import '../services/tts_service.dart';
 import 'login_screen_v2.dart'; // ✅ Nueva UI clásica de Figma
@@ -7,7 +8,7 @@ import 'login_screen_v2.dart'; // ✅ Nueva UI clásica de Figma
 /// Pantalla de carga inicial con animación y badge IA
 /// Muestra indicador "IA" si el dispositivo soporta aceleración neural
 class SplashScreen extends StatefulWidget {
-  const SplashScreen({Key? key}) : super(key: key);
+  const SplashScreen({super.key});
 
   @override
   State<SplashScreen> createState() => _SplashScreenState();
@@ -15,13 +16,21 @@ class SplashScreen extends StatefulWidget {
 
 class _SplashScreenState extends State<SplashScreen>
     with SingleTickerProviderStateMixin {
+  void _log(String message, {Object? error, StackTrace? stackTrace}) {
+    developer.log(
+      message,
+      name: 'SplashScreen',
+      error: error,
+      stackTrace: stackTrace,
+    );
+  }
+
   late AnimationController _controller;
   late Animation<double> _fadeAnimation;
   late Animation<double> _scaleAnimation;
   late Animation<Offset> _slideAnimation;
 
   NpuCapabilities? _npuCapabilities;
-  bool _isInitializing = true;
   String _statusMessage = 'Iniciando WayfindCL...';
   double _progress = 0.0;
 
@@ -122,7 +131,6 @@ class _SplashScreenState extends State<SplashScreen>
       setState(() {
         _statusMessage = '¡Listo!';
         _progress = 1.0;
-        _isInitializing = false;
       });
 
       await Future.delayed(const Duration(milliseconds: 600));
@@ -142,10 +150,9 @@ class _SplashScreenState extends State<SplashScreen>
         );
       }
     } catch (e) {
-      print('❌ [SPLASH] Error en inicialización: $e');
+      _log('❌ [SPLASH] Error en inicialización: $e');
       setState(() {
         _statusMessage = 'Error: $e';
-        _isInitializing = false;
       });
 
       // Navegar de todas formas después de un delay
@@ -228,7 +235,7 @@ class _SplashScreenState extends State<SplashScreen>
         borderRadius: BorderRadius.circular(30),
         boxShadow: [
           BoxShadow(
-            color: const Color(0xFF16213e).withOpacity(0.5),
+            color: const Color(0xFF16213e).withValues(alpha: 0.5),
             blurRadius: 20,
             offset: const Offset(0, 10),
           ),
@@ -254,7 +261,7 @@ class _SplashScreenState extends State<SplashScreen>
         borderRadius: BorderRadius.circular(20),
         boxShadow: [
           BoxShadow(
-            color: const Color(0xFF00d9ff).withOpacity(0.4),
+            color: const Color(0xFF00d9ff).withValues(alpha: 0.4),
             blurRadius: 15,
             offset: const Offset(0, 5),
           ),
@@ -283,7 +290,7 @@ class _SplashScreenState extends State<SplashScreen>
               shape: BoxShape.circle,
               boxShadow: [
                 BoxShadow(
-                  color: Colors.greenAccent.withOpacity(0.6),
+                  color: Colors.greenAccent.withValues(alpha: 0.6),
                   blurRadius: 8,
                   spreadRadius: 2,
                 ),
@@ -318,7 +325,7 @@ class _SplashScreenState extends State<SplashScreen>
         Text(
           '${(_progress * 100).toInt()}%',
           style: TextStyle(
-            color: Colors.white.withOpacity(0.6),
+            color: Colors.white.withValues(alpha: 0.6),
             fontSize: 12,
             fontWeight: FontWeight.w500,
           ),
@@ -331,7 +338,7 @@ class _SplashScreenState extends State<SplashScreen>
     return Text(
       _statusMessage,
       style: TextStyle(
-        color: Colors.white.withOpacity(0.8),
+        color: Colors.white.withValues(alpha: 0.8),
         fontSize: 16,
         fontWeight: FontWeight.w400,
       ),
@@ -351,7 +358,7 @@ class _SplashScreenState extends State<SplashScreen>
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         decoration: BoxDecoration(
-          color: const Color(0xFF16213e).withOpacity(0.5),
+          color: const Color(0xFF16213e).withValues(alpha: 0.5),
           borderRadius: BorderRadius.circular(12),
         ),
         child: Column(
@@ -370,7 +377,7 @@ class _SplashScreenState extends State<SplashScreen>
                 Text(
                   description,
                   style: TextStyle(
-                    color: Colors.white.withOpacity(0.7),
+                    color: Colors.white.withValues(alpha: 0.7),
                     fontSize: 12,
                     fontWeight: FontWeight.w500,
                   ),
@@ -382,7 +389,7 @@ class _SplashScreenState extends State<SplashScreen>
               Text(
                 _npuCapabilities!.chipset!,
                 style: TextStyle(
-                  color: Colors.white.withOpacity(0.4),
+                  color: Colors.white.withValues(alpha: 0.4),
                   fontSize: 10,
                 ),
               ),

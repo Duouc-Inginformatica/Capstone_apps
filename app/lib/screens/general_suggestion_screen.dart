@@ -39,6 +39,8 @@ class _GeneralSuggestionScreenState extends State<GeneralSuggestionScreen> {
         description: _suggestionController.text.trim(),
       );
 
+      if (!mounted) return;
+
       if (success) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -58,6 +60,7 @@ class _GeneralSuggestionScreenState extends State<GeneralSuggestionScreen> {
         );
       }
     } catch (e) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Error de conexión'),
@@ -66,9 +69,11 @@ class _GeneralSuggestionScreenState extends State<GeneralSuggestionScreen> {
         ),
       );
     } finally {
-      setState(() {
-        _isSubmitting = false;
-      });
+      if (mounted) {
+        setState(() {
+          _isSubmitting = false;
+        });
+      }
     }
   }
 

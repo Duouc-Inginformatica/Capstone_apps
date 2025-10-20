@@ -1,4 +1,5 @@
 import 'package:http/http.dart' as http;
+import 'dart:developer' as developer;
 
 /// Servicio para hacer web scraping a la página de red.cl
 /// y obtener información en tiempo real de buses
@@ -37,7 +38,7 @@ class RedClScraperService {
 
       return _parseHtmlResponse(response.body);
     } catch (e) {
-      print('Error en web scraping de red.cl: $e');
+      developer.log('Error en web scraping de red.cl: $e');
       // Retornar datos de ejemplo en caso de error
       return _getFallbackBusData(stopId);
     }
@@ -102,7 +103,7 @@ class RedClScraperService {
 
       return buses;
     } catch (e) {
-      print('Error parseando HTML: $e');
+      developer.log('Error parseando HTML: $e');
       return _getFallbackBusData('');
     }
   }
@@ -169,7 +170,7 @@ class RedClScraperService {
       // Parsear información de la ruta
       return _parseRouteDetails(response.body, routeNumber);
     } catch (e) {
-      print('Error obteniendo detalles de ruta: $e');
+      developer.log('Error obteniendo detalles de ruta: $e');
       return null;
     }
   }

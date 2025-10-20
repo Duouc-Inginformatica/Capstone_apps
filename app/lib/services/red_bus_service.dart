@@ -1,3 +1,4 @@
+import 'dart:developer' as developer;
 // ============================================================================
 // RED BUS SERVICE - Servicio para buses Red de Santiago
 // ============================================================================
@@ -188,10 +189,10 @@ class RedBusLeg {
   void debugStopCount() {
     if (type == 'bus') {
       if (stopCount != null) {
-        print('🚏 Leg de bus ${routeNumber ?? "?"} tiene $stopCount paradas');
+        developer.log('🚏 Leg de bus ${routeNumber ?? "?"} tiene $stopCount paradas');
       }
       if (stops != null) {
-        print(
+        developer.log(
           '🚏 Lista de ${stops!.length} paraderos cargada para bus ${routeNumber ?? "?"}',
         );
       }
@@ -248,11 +249,11 @@ class RedBusItinerary {
     final routes = routesData.map((r) => r.toString()).toList();
 
     // LOG DETALLADO: Verificar todos los legs recibidos del backend
-    print('📋 [BACKEND→FRONTEND] Itinerario recibido con ${legs.length} legs:');
+    developer.log('📋 [BACKEND→FRONTEND] Itinerario recibido con ${legs.length} legs:');
     for (int i = 0; i < legs.length; i++) {
       final leg = legs[i];
       final geomPoints = leg.geometry?.length ?? 0;
-      print(
+      developer.log(
         '   └─ Leg ${i + 1}: type=${leg.type}, mode=${leg.mode}, route=${leg.routeNumber ?? "N/A"}, geometry=$geomPoints pts, from="${leg.from}", to="${leg.to}"',
       );
     }
@@ -498,7 +499,7 @@ class RedBusService {
         );
       }
     } catch (e) {
-      print('Error en getRedBusRoute: $e');
+      developer.log('Error en getRedBusRoute: $e');
       rethrow;
     }
   }
@@ -520,7 +521,7 @@ class RedBusService {
         'dest_lon': destLon,
       };
 
-      print(
+      developer.log(
         '🚌 Solicitando opciones de rutas Red: origen($originLat, $originLon) -> destino($destLat, $destLon)',
       );
 
@@ -533,11 +534,11 @@ class RedBusService {
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body) as Map<String, dynamic>;
         final routeOptions = RouteOptions.fromJson(data);
-        print(
+        developer.log(
           '✅ Opciones de rutas obtenidas: ${routeOptions.optionsCount} opciones',
         );
         for (int i = 0; i < routeOptions.optionsCount; i++) {
-          print('   ${routeOptions.getOptionSummary(i)}');
+          developer.log('   ${routeOptions.getOptionSummary(i)}');
         }
         return routeOptions;
       } else {
@@ -546,7 +547,7 @@ class RedBusService {
         );
       }
     } catch (e) {
-      print('❌ Error en getRouteOptions: $e');
+      developer.log('❌ Error en getRouteOptions: $e');
       rethrow;
     }
   }
@@ -583,7 +584,7 @@ class RedBusService {
         'dest_lon': destLon,
       };
 
-      print(
+      developer.log(
         '🚌 FASE 1: Solicitando opciones ligeras de ($originLat, $originLon) a ($destLat, $destLon)',
       );
 
@@ -596,11 +597,11 @@ class RedBusService {
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body) as Map<String, dynamic>;
         final lightweightOptions = LightweightRouteOptions.fromJson(data);
-        print(
+        developer.log(
           '✅ Opciones ligeras obtenidas: ${lightweightOptions.optionsCount} opciones',
         );
         for (final option in lightweightOptions.options) {
-          print('   ${option.voiceAnnouncement}');
+          developer.log('   ${option.voiceAnnouncement}');
         }
         return lightweightOptions;
       } else {
@@ -609,7 +610,7 @@ class RedBusService {
         );
       }
     } catch (e) {
-      print('❌ Error en getRouteOptionsLightweight: $e');
+      developer.log('❌ Error en getRouteOptionsLightweight: $e');
       rethrow;
     }
   }
@@ -646,7 +647,7 @@ class RedBusService {
         'selected_option_index': selectedOptionIndex,
       };
 
-      print(
+      developer.log(
         '🚌 FASE 2: Obteniendo geometría detallada para opción $selectedOptionIndex',
       );
 
@@ -659,7 +660,7 @@ class RedBusService {
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body) as Map<String, dynamic>;
         final detailedItinerary = RedBusItinerary.fromJson(data);
-        print(
+        developer.log(
           '✅ Geometría detallada obtenida: ${detailedItinerary.legs.length} segmentos',
         );
         return detailedItinerary;
@@ -669,7 +670,7 @@ class RedBusService {
         );
       }
     } catch (e) {
-      print('❌ Error en getDetailedItinerary: $e');
+      developer.log('❌ Error en getDetailedItinerary: $e');
       rethrow;
     }
   }
@@ -695,7 +696,7 @@ class RedBusService {
         );
       }
     } catch (e) {
-      print('Error en getCommonRedRoutes: $e');
+      developer.log('Error en getCommonRedRoutes: $e');
       return [];
     }
   }
@@ -719,7 +720,7 @@ class RedBusService {
         throw Exception('Error al obtener paradas: ${response.statusCode}');
       }
     } catch (e) {
-      print('Error en getRedBusStops: $e');
+      developer.log('Error en getRedBusStops: $e');
       return [];
     }
   }
@@ -739,7 +740,7 @@ class RedBusService {
         throw Exception('Error al obtener geometría: ${response.statusCode}');
       }
     } catch (e) {
-      print('Error en getRedBusGeometry: $e');
+      developer.log('Error en getRedBusGeometry: $e');
       return {};
     }
   }
@@ -761,7 +762,7 @@ class RedBusService {
         return [];
       }
     } catch (e) {
-      print('Error en searchRedRoutes: $e');
+      developer.log('Error en searchRedRoutes: $e');
       return [];
     }
   }

@@ -1314,7 +1314,7 @@ func (s *Scraper) buildItineraryFromStops(routeNumber string, duration int, stop
 	
 	// PIERNA 3: Caminata del paradero de destino al destino final (usando GraphHopper)
 	finalWalkDistance := s.calculateDistance(destStop.Latitude, destStop.Longitude, destLat, destLon)
-	if finalWalkDistance > 10 { // Solo agregar si hay al menos 10 metros de caminata
+	if finalWalkDistance > 1 { // Agregar caminata final siempre que exista desplazamiento real
 		
 		if s.geometryService != nil {
 			log.Printf("🗺️ [GraphHopper] Calculando ruta a pie: paradero %s → destino", destStop.Name)
@@ -1323,14 +1323,27 @@ func (s *Scraper) buildItineraryFromStops(routeNumber string, duration int, stop
 			if err == nil {
 				log.Printf("✅ [GraphHopper] Ruta a pie final: %.0fm, %d segundos, %d puntos de geometría", 
 					finalWalkRoute.TotalDistance, finalWalkRoute.TotalDuration, len(finalWalkRoute.MainGeometry))
+
+				geometry := finalWalkRoute.MainGeometry
+				if len(geometry) == 0 {
+					log.Printf("⚠️  [GraphHopper] Geometría vacía para caminata final, usando línea recta como respaldo")
+					geometry = s.generateStraightLineGeometry(destStop.Latitude, destStop.Longitude, destLat, destLon, 3)
+				}
+
+				durationMinutes := int(math.Ceil(float64(finalWalkRoute.TotalDuration) / 60.0))
+				if durationMinutes < 1 {
+					durationMinutes = 1
+				}
+
+				distanceKm := finalWalkRoute.TotalDistance / 1000
 				
 				finalWalkLeg := TripLeg{
 					Type:        "walk",
 					Mode:        "walk",
-					Duration:    finalWalkRoute.TotalDuration / 60, // convertir segundos a minutos
-					Distance:    finalWalkRoute.TotalDistance / 1000,
+					Duration:    durationMinutes,
+					Distance:    distanceKm,
 					Instruction: fmt.Sprintf("Camina hacia tu destino"),
-					Geometry:    finalWalkRoute.MainGeometry,
+					Geometry:    geometry,
 					DepartStop:  &destStop,
 					ArriveStop: &BusStop{
 						Name:      "Tu destino",
@@ -1340,14 +1353,14 @@ func (s *Scraper) buildItineraryFromStops(routeNumber string, duration int, stop
 				}
 				
 				itinerary.Legs = append(itinerary.Legs, finalWalkLeg)
-				itinerary.TotalDuration += finalWalkRoute.TotalDuration / 60
-				itinerary.TotalDistance += finalWalkRoute.TotalDistance / 1000
+				itinerary.TotalDuration += durationMinutes
+				itinerary.TotalDistance += distanceKm
 				
-				log.Printf("   🚶 Caminata final: %.0fm, %d min", finalWalkRoute.TotalDistance, finalWalkRoute.TotalDuration/60)
+				log.Printf("   🚶 Caminata final: %.0fm, %d min", finalWalkRoute.TotalDistance, durationMinutes)
 			} else {
 				log.Printf("⚠️  [GraphHopper] Error calculando ruta a pie final: %v (usando fallback)", err)
 				// Fallback: línea recta
-				finalWalkDuration := int((finalWalkDistance / 80) / 60) // 80 m/min
+				finalWalkDuration := int(math.Ceil(finalWalkDistance / 80)) // 80 m/min
 				if finalWalkDuration < 1 {
 					finalWalkDuration = 1
 				}
@@ -1379,7 +1392,7 @@ func (s *Scraper) buildItineraryFromStops(routeNumber string, duration int, stop
 		} else {
 			log.Printf("⚠️  [GraphHopper] Servicio no disponible, usando línea recta para caminata final")
 			// Fallback: línea recta
-			finalWalkDuration := int((finalWalkDistance / 80) / 60) // 80 m/min
+			finalWalkDuration := int(math.Ceil(finalWalkDistance / 80)) // 80 m/min
 			if finalWalkDuration < 1 {
 				finalWalkDuration = 1
 			}

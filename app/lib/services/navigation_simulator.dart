@@ -1,3 +1,4 @@
+import 'dart:developer' as developer;
 // ============================================================================
 // NAVIGATION SIMULATOR - Simulación Realista de Navegación
 // ============================================================================
@@ -224,12 +225,12 @@ class NavigationSimulator {
     Function()? onSimulationComplete,
   }) async {
     if (_isSimulating) {
-      print('⚠️ [Simulator] Ya hay simulación activa');
+      developer.log('⚠️ [Simulator] Ya hay simulación activa');
       return;
     }
 
     if (routeGeometry.length < 2) {
-      print('❌ [Simulator] Ruta muy corta');
+      developer.log('❌ [Simulator] Ruta muy corta');
       return;
     }
 
@@ -242,9 +243,9 @@ class NavigationSimulator {
     // Convertir instrucciones de GraphHopper a instrucciones enriquecidas
     _instructions = _enrichInstructions(graphhopperInstructions, routeGeometry);
 
-    print('🚶 [Simulator] Iniciando navegación realista');
-    print('   📍 Puntos: ${routeGeometry.length}');
-    print('   📋 Instrucciones: ${_instructions?.length ?? 0}');
+    developer.log('🚶 [Simulator] Iniciando navegación realista');
+    developer.log('   📍 Puntos: ${routeGeometry.length}');
+    developer.log('   📋 Instrucciones: ${_instructions?.length ?? 0}');
 
     _isSimulating = true;
 
@@ -409,7 +410,7 @@ class NavigationSimulator {
     if (intervalMs < 100) intervalMs = 100;
     if (intervalMs > 3000) intervalMs = 3000;
 
-    print(
+    developer.log(
       '🚶 [Simulator] Distancia: ${totalDistance.round()}m | Duración: ${(totalDuration / 60).toStringAsFixed(1)}min',
     );
 
@@ -420,7 +421,7 @@ class NavigationSimulator {
         ? _instructions![0].distanceMeters
         : double.infinity;
 
-    void _step() {
+    void performStep() {
       if (!_isSimulating || _currentPointIndex >= _currentRoute!.length) {
         _completeSimulation();
         return;
@@ -447,7 +448,7 @@ class NavigationSimulator {
 
           if (headingChange > 30) {
             speed = 0.8; // 20% más lento en giros
-            print(
+            developer.log(
               '🔄 [Simulator] Giro detectado: ${headingChange.toStringAsFixed(0)}° | Velocidad: ${speed}m/s',
             );
           }
@@ -458,7 +459,7 @@ class NavigationSimulator {
             instructionIndex < _instructions!.length &&
             accumulatedDistance >= distanceToNextInstruction - 10) {
           final instruction = _instructions![instructionIndex];
-          print(
+          developer.log(
             '🗣️ [Simulator] Instrucción ${instructionIndex + 1}: ${instruction.toVoiceAnnouncement()}',
           );
 
@@ -500,16 +501,16 @@ class NavigationSimulator {
       _currentPointIndex++;
 
       // Programar siguiente paso
-      _simulationTimer = Timer(Duration(milliseconds: intervalMs), _step);
+      _simulationTimer = Timer(Duration(milliseconds: intervalMs), performStep);
     }
 
     // Iniciar loop
-    _step();
+    performStep();
   }
 
   /// Completa la simulación
   void _completeSimulation() {
-    print('✅ [Simulator] Simulación completada');
+    developer.log('✅ [Simulator] Simulación completada');
     _isSimulating = false;
     _simulationTimer?.cancel();
     onSimulationComplete?.call();
@@ -517,7 +518,7 @@ class NavigationSimulator {
 
   /// Detiene la simulación
   void stop() {
-    print('🛑 [Simulator] Deteniendo simulación');
+    developer.log('🛑 [Simulator] Deteniendo simulación');
     _isSimulating = false;
     _simulationTimer?.cancel();
     _currentRoute = null;

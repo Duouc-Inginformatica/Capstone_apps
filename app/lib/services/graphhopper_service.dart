@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:developer' as developer;
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
@@ -26,9 +27,9 @@ class GraphHopperService {
         '&dest_lat=${destination.latitude}&dest_lon=${destination.longitude}',
       );
 
-      print('🚶 [GraphHopper] Solicitando ruta peatonal');
-      print('🚶 De: ${origin.latitude},${origin.longitude}');
-      print('🚶 A: ${destination.latitude},${destination.longitude}');
+      developer.log('🚶 [GraphHopper] Solicitando ruta peatonal');
+      developer.log('🚶 De: ${origin.latitude},${origin.longitude}');
+      developer.log('🚶 A: ${destination.latitude},${destination.longitude}');
 
       final response = await http
           .get(url)
@@ -45,9 +46,9 @@ class GraphHopperService {
         }
       }
 
-      print('⚠️ [GraphHopper] Error HTTP: ${response.statusCode}');
+      developer.log('⚠️ [GraphHopper] Error HTTP: ${response.statusCode}');
     } catch (e) {
-      print('❌ [GraphHopper] Error: $e');
+      developer.log('❌ [GraphHopper] Error: $e');
     }
 
     return null;
@@ -81,7 +82,7 @@ class GraphHopperService {
         'max_walk_distance': maxWalkDistance,
       });
 
-      print('🚌 [GraphHopper] Solicitando rutas de transporte público');
+      developer.log('🚌 [GraphHopper] Solicitando rutas de transporte público');
 
       final response = await http
           .post(url, headers: {'Content-Type': 'application/json'}, body: body)
@@ -98,9 +99,9 @@ class GraphHopperService {
         }
       }
 
-      print('⚠️ [GraphHopper] Error HTTP: ${response.statusCode}');
+      developer.log('⚠️ [GraphHopper] Error HTTP: ${response.statusCode}');
     } catch (e) {
-      print('❌ [GraphHopper] Error: $e');
+      developer.log('❌ [GraphHopper] Error: $e');
     }
 
     return [];
@@ -128,7 +129,7 @@ class GraphHopperService {
         },
       });
 
-      print('� [GraphHopper] Solicitando opciones de ruta (ligero)');
+      developer.log('� [GraphHopper] Solicitando opciones de ruta (ligero)');
 
       final response = await http
           .post(url, headers: {'Content-Type': 'application/json'}, body: body)
@@ -143,9 +144,9 @@ class GraphHopperService {
         }
       }
 
-      print('⚠️ [GraphHopper] Error HTTP: ${response.statusCode}');
+      developer.log('⚠️ [GraphHopper] Error HTTP: ${response.statusCode}');
     } catch (e) {
-      print('❌ [GraphHopper] Error: $e');
+      developer.log('❌ [GraphHopper] Error: $e');
     }
 
     return [];

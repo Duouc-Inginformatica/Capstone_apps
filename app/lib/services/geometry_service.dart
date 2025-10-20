@@ -1,3 +1,4 @@
+import 'dart:developer' as developer;
 // ============================================================================
 // Geometry Service - WayFindCL Flutter
 // ============================================================================
@@ -34,7 +35,7 @@ class GeometryService {
         '&dest_lon=${destination.longitude}',
       );
 
-      print('🚶 [Geometry] Solicitando geometría peatonal');
+      developer.log('🚶 [Geometry] Solicitando geometría peatonal');
 
       final response = await http
           .get(url)
@@ -48,9 +49,9 @@ class GeometryService {
         return WalkingGeometry.fromJson(data);
       }
 
-      print('⚠️ [Geometry] Error HTTP: ${response.statusCode}');
+      developer.log('⚠️ [Geometry] Error HTTP: ${response.statusCode}');
     } catch (e) {
-      print('❌ [Geometry] Error: $e');
+      developer.log('❌ [Geometry] Error: $e');
     }
 
     return null;
@@ -75,7 +76,7 @@ class GeometryService {
         '&dest_lon=${destination.longitude}',
       );
 
-      print('🚗 [Geometry] Solicitando geometría vehicular');
+      developer.log('🚗 [Geometry] Solicitando geometría vehicular');
 
       final response = await http.get(url).timeout(const Duration(seconds: 10));
 
@@ -84,9 +85,9 @@ class GeometryService {
         return DrivingGeometry.fromJson(data);
       }
 
-      print('⚠️ [Geometry] Error HTTP: ${response.statusCode}');
+      developer.log('⚠️ [Geometry] Error HTTP: ${response.statusCode}');
     } catch (e) {
-      print('❌ [Geometry] Error: $e');
+      developer.log('❌ [Geometry] Error: $e');
     }
 
     return null;
@@ -117,7 +118,7 @@ class GeometryService {
         'departure_time': departure.toIso8601String(),
       });
 
-      print('🚌 [Geometry] Solicitando geometría de transporte público');
+      developer.log('🚌 [Geometry] Solicitando geometría de transporte público');
 
       final response = await http
           .post(url, headers: {'Content-Type': 'application/json'}, body: body)
@@ -128,9 +129,9 @@ class GeometryService {
         return TransitGeometry.fromJson(data);
       }
 
-      print('⚠️ [Geometry] Error HTTP: ${response.statusCode}');
+      developer.log('⚠️ [Geometry] Error HTTP: ${response.statusCode}');
     } catch (e) {
-      print('❌ [Geometry] Error: $e');
+      developer.log('❌ [Geometry] Error: $e');
     }
 
     return null;
@@ -156,7 +157,7 @@ class GeometryService {
         '&limit=$limit',
       );
 
-      print('📍 [Geometry] Buscando paradas cercanas');
+      developer.log('📍 [Geometry] Buscando paradas cercanas');
 
       final response = await http.get(url).timeout(const Duration(seconds: 5));
 
@@ -166,9 +167,9 @@ class GeometryService {
         return stops.map((s) => NearbyStop.fromJson(s)).toList();
       }
 
-      print('⚠️ [Geometry] Error HTTP: ${response.statusCode}');
+      developer.log('⚠️ [Geometry] Error HTTP: ${response.statusCode}');
     } catch (e) {
-      print('❌ [Geometry] Error: $e');
+      developer.log('❌ [Geometry] Error: $e');
     }
 
     return [];
@@ -195,7 +196,7 @@ class GeometryService {
             .toList(),
       });
 
-      print(
+      developer.log(
         '⏱️ [Geometry] Calculando tiempos batch (${destinations.length} destinos)',
       );
 
@@ -212,9 +213,9 @@ class GeometryService {
         );
       }
 
-      print('⚠️ [Geometry] Error HTTP: ${response.statusCode}');
+      developer.log('⚠️ [Geometry] Error HTTP: ${response.statusCode}');
     } catch (e) {
-      print('❌ [Geometry] Error: $e');
+      developer.log('❌ [Geometry] Error: $e');
     }
 
     return {};
@@ -240,7 +241,7 @@ class GeometryService {
         '&profile=$profile',
       );
 
-      print('🗺️ [Geometry] Calculando isócrona ($timeMinutes min)');
+      developer.log('🗺️ [Geometry] Calculando isócrona ($timeMinutes min)');
 
       final response = await http.get(url).timeout(const Duration(seconds: 15));
 
@@ -249,9 +250,9 @@ class GeometryService {
         return IsochroneArea.fromJson(data);
       }
 
-      print('⚠️ [Geometry] Error HTTP: ${response.statusCode}');
+      developer.log('⚠️ [Geometry] Error HTTP: ${response.statusCode}');
     } catch (e) {
-      print('❌ [Geometry] Error: $e');
+      developer.log('❌ [Geometry] Error: $e');
     }
 
     return null;

@@ -1,3 +1,4 @@
+import 'dart:developer' as developer;
 // ============================================================================
 // REALTIME ARRIVALS SERVICE - Sprint 4 CAP-27
 // ============================================================================
@@ -159,7 +160,7 @@ class RealtimeArrivalsService {
 
       return arrivals;
     } catch (e) {
-      print('Error fetching arrivals: $e');
+      developer.log('Error fetching arrivals: $e');
 
       // Retornar datos cacheados si existen
       if (_arrivalsCache.containsKey(stopId)) {
@@ -186,7 +187,7 @@ class RealtimeArrivalsService {
         );
         results[stopId] = arrivals;
       } catch (e) {
-        print('Error fetching arrivals for stop $stopId: $e');
+        developer.log('Error fetching arrivals for stop $stopId: $e');
         results[stopId] = [];
       }
     }
@@ -210,7 +211,7 @@ class RealtimeArrivalsService {
           forceRefresh: true,
         );
       } catch (e) {
-        print('Error during polling: $e');
+        developer.log('Error during polling: $e');
       }
     });
   }
@@ -307,7 +308,7 @@ class RealtimeArrivalsService {
 
       throw Exception('API returned ${response.statusCode}');
     } catch (e) {
-      print('API fetch failed: $e');
+      developer.log('API fetch failed: $e');
       rethrow;
     }
   }

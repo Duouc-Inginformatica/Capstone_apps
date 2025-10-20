@@ -20,7 +20,7 @@ class _VoiceSelectionScreenState extends State<VoiceSelectionScreen> {
   bool _isTesting = false;
 
   // Mapeo de voces con nombres amigables para usuarios no videntes
-  static const Map<String, Map<String, dynamic>> ASSISTANT_VOICES = {
+  static const Map<String, Map<String, dynamic>> assistantVoices = {
     'F1': {
       'name': 'Asistente Clara',
       'description': 'Voz femenina clara y dulce',
@@ -73,8 +73,11 @@ class _VoiceSelectionScreenState extends State<VoiceSelectionScreen> {
     final savedVoice = prefs.getString('assistant_voice');
 
     // Si ya seleccionó, ir directo al login
-    if (savedVoice != null && mounted) {
+    if (savedVoice != null) {
+      if (!mounted) return;
       await Future.delayed(const Duration(milliseconds: 300));
+      if (!mounted) return;
+
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(builder: (_) => const LoginScreenV2()),
@@ -140,7 +143,7 @@ class _VoiceSelectionScreenState extends State<VoiceSelectionScreen> {
       _selectedVoiceId = voiceId;
     });
 
-    final voiceData = ASSISTANT_VOICES[voiceId]!;
+    final voiceData = assistantVoices[voiceId]!;
     await _neuralTts.speak(voiceData['sample'] as String, voiceId: voiceId);
 
     setState(() => _isTesting = false);
@@ -154,7 +157,7 @@ class _VoiceSelectionScreenState extends State<VoiceSelectionScreen> {
     await prefs.setString('assistant_voice', _selectedVoiceId!);
 
     // Confirmación
-    final voiceData = ASSISTANT_VOICES[_selectedVoiceId]!;
+    final voiceData = assistantVoices[_selectedVoiceId]!;
     await _neuralTts.speak(
       '${voiceData['name']} seleccionada. Continuando al inicio de sesión.',
       voiceId: _selectedVoiceId,
@@ -254,10 +257,10 @@ class _VoiceSelectionScreenState extends State<VoiceSelectionScreen> {
           Expanded(
             child: ListView.builder(
               padding: const EdgeInsets.symmetric(horizontal: 16),
-              itemCount: ASSISTANT_VOICES.length,
+              itemCount: assistantVoices.length,
               itemBuilder: (context, index) {
-                final voiceId = ASSISTANT_VOICES.keys.elementAt(index);
-                final voiceData = ASSISTANT_VOICES[voiceId]!;
+                final voiceId = assistantVoices.keys.elementAt(index);
+                final voiceData = assistantVoices[voiceId]!;
                 final isSelected = _selectedVoiceId == voiceId;
                 final isTesting = _isTesting && isSelected;
 

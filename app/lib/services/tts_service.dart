@@ -1,4 +1,5 @@
 import 'package:flutter_tts/flutter_tts.dart';
+import 'dart:developer' as developer;
 
 /// Servicio TTS clásico usando flutter_tts
 class TtsService {
@@ -26,7 +27,7 @@ class TtsService {
   Future<void> initialize() async {
     if (_initialized) return;
 
-    print('🔊 [TTS] Inicializando motor TTS clásico');
+    developer.log('🔊 [TTS] Inicializando motor TTS clásico');
 
     // Configurar TTS nativo
     await _initializeNativeTts();
@@ -39,13 +40,13 @@ class TtsService {
     await _tts.setLanguage('es-ES');
 
     // Velocidad más lenta para mejor comprensión (0.4 = más lento, 1.0 = normal)
-    await _tts.setSpeechRate(0.45);
+  await _tts.setSpeechRate(_rate);
 
     // Volumen máximo
     await _tts.setVolume(1.0);
 
     // Tono ligeramente más bajo para sonar más natural (1.0 = normal)
-    await _tts.setPitch(0.95);
+  await _tts.setPitch(_pitch);
 
     // Configurar callbacks para saber cuándo termina de hablar
     _tts.setCompletionHandler(() {
@@ -83,7 +84,7 @@ class TtsService {
       }
     } catch (e) {
       // Si falla, usar configuración por defecto
-      print('No se pudieron cargar voces del sistema: $e');
+      developer.log('No se pudieron cargar voces del sistema: $e');
     }
 
     _initialized = true;
@@ -132,7 +133,7 @@ class TtsService {
         }
       }
     } catch (e) {
-      print('Error en TTS: $e');
+      developer.log('Error en TTS: $e');
       _isSpeaking = false;
     }
   }
@@ -142,7 +143,7 @@ class TtsService {
     _isSpeaking = true;
 
     // Usar TTS nativo clásico
-    print(
+    developer.log(
       '🔊 [TTS] Hablando: "${text.substring(0, text.length > 50 ? 50 : text.length)}..."',
     );
     final textWithPauses = text.replaceAll('.', '... ').replaceAll(',', ', ');
