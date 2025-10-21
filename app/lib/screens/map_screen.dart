@@ -293,6 +293,7 @@ class _MapScreenState extends State<MapScreen> {
   // Notification system
   final List<NotificationData> _activeNotifications = [];
   final int _maxNotifications = 3;
+  final List<String> _messageHistory = [];
 
   // Map and location services
   final MapController _mapController = MapController();
@@ -2499,6 +2500,11 @@ class _MapScreenState extends State<MapScreen> {
         _activeNotifications.removeAt(0);
       }
       _activeNotifications.add(notification);
+
+      _messageHistory.add(notification.message);
+      if (_messageHistory.length > 4) {
+        _messageHistory.removeAt(0);
+      }
     });
   }
 
@@ -3784,49 +3790,49 @@ class _MapScreenState extends State<MapScreen> {
                           ),
                           label: const Text('Elegir más rápida'),
                         ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      'Elige la opción que prefieras',
-                      style: const TextStyle(fontSize: 14),
-                    ),
-                    const SizedBox(height: 12),
-                    Flexible(
-                      child: ListView.separated(
-                        shrinkWrap: true,
-                        itemCount: recommendations.length,
-                        separatorBuilder: (_, __) => const Divider(),
-                        itemBuilder: (context, index) {
-                          final rec = recommendations[index];
-                          final route = rec.route;
-                          final minutes = (route.totalDuration.inMinutes);
-                          final distance = route.totalDistanceText;
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'Elige la opción que prefieras',
+                          style: const TextStyle(fontSize: 14),
+                        ),
+                        const SizedBox(height: 12),
+                        Flexible(
+                          child: ListView.separated(
+                            shrinkWrap: true,
+                            itemCount: recommendations.length,
+                            separatorBuilder: (_, __) => const Divider(),
+                            itemBuilder: (context, index) {
+                              final rec = recommendations[index];
+                              final route = rec.route;
+                              final minutes = (route.totalDuration.inMinutes);
+                              final distance = route.totalDistanceText;
 
-                          final selected = index == focusedIndex;
+                              final selected = index == focusedIndex;
 
-                          return ListTile(
-                            selected: selected,
-                            selectedTileColor: Colors.blue.withValues(
-                              alpha: 0.08,
-                            ),
-                            leading: CircleAvatar(
-                              child: Text('${rec.ranking}'),
-                            ),
-                            title: Text(rec.route.summary),
-                            subtitle: Text(
-                              'Duración: $minutes min · $distance',
-                            ),
-                            trailing: index == 0
-                                ? const Icon(Icons.speed, color: Colors.green)
-                                : null,
-                            onTap: () {
-                              Navigator.of(context).pop(index);
+                              return ListTile(
+                                selected: selected,
+                                selectedTileColor: Colors.blue.withValues(
+                                  alpha: 0.08,
+                                ),
+                                leading: CircleAvatar(
+                                  child: Text('${rec.ranking}'),
+                                ),
+                                title: Text(rec.route.summary),
+                                subtitle: Text(
+                                  'Duración: $minutes min · $distance',
+                                ),
+                                trailing: index == 0
+                                    ? const Icon(Icons.speed, color: Colors.green)
+                                    : null,
+                                onTap: () {
+                                  Navigator.of(context).pop(index);
+                                },
+                              );
                             },
-                          );
-                        },
-                      ),
-                    ),
+                          ),
+                        ),
                     const SizedBox(height: 12),
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -4834,183 +4840,13 @@ class _MapScreenState extends State<MapScreen> {
                     AnimatedSize(
                       duration: const Duration(milliseconds: 300),
                       curve: Curves.easeInOut,
-                      child:
-                          _showInstructionsPanel &&
-                              _currentInstructions.isNotEmpty
-                          ? Container(
-                              margin: const EdgeInsets.only(bottom: 12),
-                              padding: const EdgeInsets.all(16),
-                              decoration: BoxDecoration(
-                                gradient: const LinearGradient(
-                                  colors: [
-                                    Color(0xFF00BCD4),
-                                    Color(0xFF006C84),
-                                  ],
-                                  begin: Alignment.topLeft,
-                                  end: Alignment.bottomRight,
-                                ),
-                                borderRadius: BorderRadius.circular(20),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: const Color(
-                                      0xFF00BCD4,
-                                    ).withValues(alpha: 0.28),
-                                    blurRadius: 18,
-                                    offset: const Offset(0, 6),
-                                  ),
-                                ],
-                              ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Row(
-                                    mainAxisAlignment:
-                                        MainAxisAlignment.spaceBetween,
-                                    children: [
-                                      const Row(
-                                        children: [
-                                          Icon(
-                                            Icons.directions_walk,
-                                            color: Colors.white,
-                                            size: 24,
-                                          ),
-                                          SizedBox(width: 8),
-                                          Text(
-                                            'Instrucciones',
-                                            style: TextStyle(
-                                              color: Colors.white,
-                                              fontSize: 18,
-                                              fontWeight: FontWeight.bold,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                      GestureDetector(
-                                        onTap: () {
-                                          setState(() {
-                                            _showInstructionsPanel = false;
-                                          });
-                                        },
-                                        child: Container(
-                                          padding: const EdgeInsets.all(4),
-                                          decoration: BoxDecoration(
-                                            color: Colors.white.withValues(
-                                              alpha: 0.18,
-                                            ),
-                                            borderRadius: BorderRadius.circular(
-                                              10,
-                                            ),
-                                          ),
-                                          child: const Icon(
-                                            Icons.close,
-                                            color: Colors.white,
-                                            size: 20,
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 16),
-                                  ListView.builder(
-                                    shrinkWrap: true,
-                                    physics:
-                                        const NeverScrollableScrollPhysics(),
-                                    itemCount: _currentInstructions.length,
-                                    itemBuilder: (context, index) {
-                                      final instruction =
-                                          _currentInstructions[index];
-                                      final bool isFirst = index == 0;
-                                      return GestureDetector(
-                                        onTap: () {
-                                          TtsService.instance.speak(
-                                            instruction,
-                                          );
-                                        },
-                                        child: Container(
-                                          margin: const EdgeInsets.only(
-                                            bottom: 12,
-                                          ),
-                                          padding: const EdgeInsets.all(12),
-                                          decoration: BoxDecoration(
-                                            color: isFirst
-                                                ? Colors.white
-                                                : Colors.white.withValues(
-                                                    alpha: 0.12,
-                                                  ),
-                                            borderRadius: BorderRadius.circular(
-                                              14,
-                                            ),
-                                            border: Border.all(
-                                              color: Colors.white.withValues(
-                                                alpha: 0.25,
-                                              ),
-                                            ),
-                                          ),
-                                          child: Row(
-                                            crossAxisAlignment:
-                                                CrossAxisAlignment.start,
-                                            children: [
-                                              Container(
-                                                width: 28,
-                                                height: 28,
-                                                decoration: BoxDecoration(
-                                                  color: isFirst
-                                                      ? const Color(0xFF00BCD4)
-                                                      : Colors.white.withValues(
-                                                          alpha: 0.2,
-                                                        ),
-                                                  shape: BoxShape.circle,
-                                                ),
-                                                child: Center(
-                                                  child: Text(
-                                                    '${index + 1}',
-                                                    style: TextStyle(
-                                                      color: isFirst
-                                                          ? Colors.white
-                                                          : Colors.white,
-                                                      fontSize: 14,
-                                                      fontWeight:
-                                                          FontWeight.bold,
-                                                    ),
-                                                  ),
-                                                ),
-                                              ),
-                                              const SizedBox(width: 12),
-                                              Expanded(
-                                                child: Text(
-                                                  instruction,
-                                                  style: TextStyle(
-                                                    color: isFirst
-                                                        ? const Color(
-                                                            0xFF0F172A,
-                                                          )
-                                                        : Colors.white,
-                                                    fontSize: 15,
-                                                    fontWeight: isFirst
-                                                        ? FontWeight.w600
-                                                        : FontWeight.w500,
-                                                    height: 1.3,
-                                                  ),
-                                                ),
-                                              ),
-                                              const SizedBox(width: 8),
-                                              Icon(
-                                                Icons.volume_up,
-                                                color: isFirst
-                                                    ? const Color(0xFF0F172A)
-                                                    : Colors.white70,
-                                                size: 20,
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                      );
-                                    },
-                                  ),
-                                ],
-                              ),
-                            )
-                          : const SizedBox.shrink(),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          _buildMessageHistoryPanel(),
+                          _buildNavigationControlsPanel(),
+                        ],
+                      ),
                     ),
                     Row(
                       mainAxisAlignment: MainAxisAlignment.center,
@@ -5093,6 +4929,241 @@ class _MapScreenState extends State<MapScreen> {
               ),
             ),
           ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMessageHistoryPanel() {
+    if (_messageHistory.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    final List<String> entries = List<String>.from(_messageHistory.reversed);
+
+    return Semantics(
+      container: true,
+      label: 'Mensajes recientes',
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: const Color(0xFF111827),
+          borderRadius: BorderRadius.circular(20),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.25),
+              blurRadius: 20,
+              offset: const Offset(0, 12),
+            ),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: const [
+                Icon(Icons.campaign, color: Colors.white, size: 22),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Mensajes recientes',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            for (int i = 0; i < entries.length; i++) ...[
+              Text(
+                entries[i],
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 14,
+                  height: 1.4,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              if (i != entries.length - 1) const SizedBox(height: 8),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildNavigationControlsPanel() {
+    final activeNav = IntegratedNavigationService.instance.activeNavigation;
+    final bool hasActiveNav = activeNav != null && !activeNav.isComplete;
+    final instructions = _getActiveWalkInstructions();
+    final bool hasInstructions = instructions != null && instructions.isNotEmpty;
+    final int totalInstructions = instructions?.length ?? 0;
+    int focusIndex = 0;
+    if (hasInstructions) {
+      focusIndex = _instructionFocusIndex.clamp(0, totalInstructions - 1);
+    }
+
+    final List<String> visibleInstructions = instructions ?? const <String>[];
+    final String preview = hasInstructions
+        ? visibleInstructions[focusIndex]
+        : 'Inicia una ruta para habilitar la simulacion.';
+
+    final bool panelEnabled = hasActiveNav || _hasActiveTrip || hasInstructions;
+
+    return Semantics(
+      container: true,
+      label: panelEnabled
+          ? 'Controles de ruta listos'
+          : 'Controles de ruta, inicia una ruta para habilitarlos',
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(20),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.1),
+              blurRadius: 18,
+              offset: const Offset(0, 10),
+            ),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: const [
+                Icon(Icons.assistant_navigation, color: Color(0xFF00BCD4)),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Controles de ruta',
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF0F172A),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              alignment: WrapAlignment.center,
+              children: [
+                SizedBox(
+                  width: 220,
+                  child: ElevatedButton.icon(
+                    onPressed: hasActiveNav ? _simulateArrivalAtStop : null,
+                    icon: const Icon(Icons.play_arrow_rounded),
+                    label: Text(_getSimulationButtonLabel()),
+                    style: ElevatedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 14,
+                      ),
+                      backgroundColor: const Color(0xFF00BCD4),
+                      foregroundColor: Colors.white,
+                      disabledBackgroundColor: const Color(0xFFB0BEC5),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(18),
+                      ),
+                    ),
+                  ),
+                ),
+                if (hasInstructions)
+                  SizedBox(
+                    width: 220,
+                    child: OutlinedButton.icon(
+                      onPressed: _speakFocusedInstruction,
+                      icon: const Icon(Icons.record_voice_over),
+                      label: const Text('Leer paso'),
+                      style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 14,
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(18),
+                        ),
+                        side: const BorderSide(color: Color(0xFF1F2937)),
+                        foregroundColor: const Color(0xFF1F2937),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            if (hasInstructions) ...[
+              Text(
+                'Paso ${focusIndex + 1} de $totalInstructions',
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF0F172A),
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                preview,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontSize: 13,
+                  height: 1.3,
+                  color: Color(0xFF4B5563),
+                ),
+              ),
+              const SizedBox(height: 10),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  OutlinedButton.icon(
+                    onPressed: focusIndex > 0
+                        ? () => _moveInstructionFocus(-1)
+                        : null,
+                    icon: const Icon(Icons.chevron_left),
+                    label: const Text('Anterior'),
+                    style: OutlinedButton.styleFrom(
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  OutlinedButton.icon(
+                    onPressed: focusIndex < totalInstructions - 1
+                        ? () => _moveInstructionFocus(1)
+                        : null,
+                    icon: const Icon(Icons.chevron_right),
+                    label: const Text('Siguiente'),
+                    style: OutlinedButton.styleFrom(
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ] else ...[
+              const Text(
+                'Inicia una ruta para habilitar la simulación.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 13,
+                  height: 1.3,
+                  color: Color(0xFF4B5563),
+                ),
+              ),
+            ],
+          ],
         ),
       ),
     );
