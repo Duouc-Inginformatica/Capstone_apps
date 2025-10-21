@@ -199,7 +199,9 @@ class ActiveNavigation {
       return geometry;
     }
 
-    developer.log('⚠️ No hay geometría pre-calculada para paso $currentStepIndex');
+    developer.log(
+      '⚠️ No hay geometría pre-calculada para paso $currentStepIndex',
+    );
 
     // Fallback: generar geometría básica
     if (step.location != null) {
@@ -288,13 +290,13 @@ class IntegratedNavigationService {
 
   // Configuración de umbrales adaptativos
   static const double arrivalThresholdMeters =
-    30.0; // 30m para considerar "llegada" (más estricto)
+      30.0; // 30m para considerar "llegada" (más estricto)
   static const double proximityAlertMeters =
-    150.0; // 150m para alertar proximidad
+      150.0; // 150m para alertar proximidad
   static const double gpsAccuracyThreshold =
-    20.0; // Precisión GPS mínima aceptable (metros)
+      20.0; // Precisión GPS mínima aceptable (metros)
   static const double maxArrivalThreshold =
-    50.0; // Umbral máximo incluso con GPS impreciso
+      50.0; // Umbral máximo incluso con GPS impreciso
 
   // Histórico de posiciones para suavizar detección
   final List<Position> _positionHistory = [];
@@ -346,7 +348,9 @@ class IntegratedNavigationService {
     // 1. Usar itinerario existente o solicitar uno nuevo
     final RedBusItinerary itinerary;
     if (existingItinerary != null) {
-      developer.log('♻️ Usando itinerario ya obtenido (evita llamada duplicada)');
+      developer.log(
+        '♻️ Usando itinerario ya obtenido (evita llamada duplicada)',
+      );
       itinerary = existingItinerary;
     } else {
       developer.log('🔄 Solicitando nuevo itinerario al backend...');
@@ -365,7 +369,9 @@ class IntegratedNavigationService {
     }
 
     developer.log('📋 Itinerario obtenido: ${itinerary.summary}');
-    developer.log('🚌 Buses Red recomendados: ${itinerary.redBusRoutes.join(", ")}');
+    developer.log(
+      '🚌 Buses Red recomendados: ${itinerary.redBusRoutes.join(", ")}',
+    );
 
     // 2. Construir pasos de navegación detallados
     final steps = await _buildNavigationSteps(itinerary, originLat, originLon);
@@ -423,7 +429,9 @@ class IntegratedNavigationService {
   ) async {
     final steps = <NavigationStep>[];
 
-    developer.log('🚶 Construyendo pasos de navegación (1:1 con legs del backend)...');
+    developer.log(
+      '🚶 Construyendo pasos de navegación (1:1 con legs del backend)...',
+    );
     developer.log('🚶 Legs del itinerario: ${itinerary.legs.length}');
 
     // Mapeo DIRECTO 1:1: cada leg del backend = 1 paso en el frontend
@@ -448,6 +456,11 @@ class IntegratedNavigationService {
               estimatedDuration: leg.durationMinutes,
               realDistanceMeters: leg.distanceKm * 1000,
               realDurationSeconds: leg.durationMinutes * 60,
+              streetInstructions:
+                  (leg.streetInstructions != null &&
+                      leg.streetInstructions!.isNotEmpty)
+                  ? List<String>.from(leg.streetInstructions!)
+                  : <String>[leg.instruction],
             ),
           );
         }
@@ -486,7 +499,9 @@ class IntegratedNavigationService {
       final step = steps[i];
       developer.log('🚶 Paso $i: ${step.type} - ${step.instruction}');
       if (step.type == 'bus') {
-        developer.log('   └─ Bus: ${step.busRoute}, StopName: ${step.stopName}');
+        developer.log(
+          '   └─ Bus: ${step.busRoute}, StopName: ${step.stopName}',
+        );
       }
     }
     developer.log('🚶 ==========================================');
@@ -553,7 +568,9 @@ class IntegratedNavigationService {
       // Usar geometría del backend directamente
       if (leg.geometry != null && leg.geometry!.isNotEmpty) {
         geometries[i] = List.from(leg.geometry!);
-        developer.log('   ✅ [SIMPLE] Geometría: ${leg.geometry!.length} puntos');
+        developer.log(
+          '   ✅ [SIMPLE] Geometría: ${leg.geometry!.length} puntos',
+        );
 
         if (leg.departStop != null || leg.arriveStop != null) {
           developer.log(
@@ -574,14 +591,18 @@ class IntegratedNavigationService {
       }
     }
 
-    developer.log('🗺️ [SIMPLE] Geometrías creadas: ${geometries.keys.toList()}');
+    developer.log(
+      '🗺️ [SIMPLE] Geometrías creadas: ${geometries.keys.toList()}',
+    );
     return geometries;
   }
 
   /// Anuncia el inicio de navegación por voz
   void _announceNavigationStart(String destination, RedBusItinerary itinerary) {
     developer.log('🔊 [TTS] _announceNavigationStart llamado');
-    developer.log('🔊 [TTS] _activeNavigation != null? ${_activeNavigation != null}');
+    developer.log(
+      '🔊 [TTS] _activeNavigation != null? ${_activeNavigation != null}',
+    );
 
     // Construir mensaje detallado del viaje
     final busLegs = itinerary.legs.where((leg) => leg.type == 'bus').toList();
@@ -639,7 +660,9 @@ class IntegratedNavigationService {
           firstStepInstruction += 'Comienza así: $firstStreetInstruction. ';
         }
 
-        developer.log('🔊 [TTS] firstStepInstruction creado: $firstStepInstruction');
+        developer.log(
+          '🔊 [TTS] firstStepInstruction creado: $firstStepInstruction',
+        );
       } else {
         developer.log(
           '🔊 [TTS] NO se creó firstStepInstruction (type=${step.type}, stopName=${step.stopName})',
@@ -1011,7 +1034,9 @@ Te iré guiando paso a paso.
     if (nextStep?.type == 'ride_bus') {
       _announcedStops.clear();
       _currentBusStopIndex = 0;
-      developer.log('🚌 [BUS_STOPS] Iniciando nuevo viaje en bus - resetear paradas');
+      developer.log(
+        '🚌 [BUS_STOPS] Iniciando nuevo viaje en bus - resetear paradas',
+      );
     }
 
     onStepChanged?.call(nextStep ?? step);
@@ -1080,7 +1105,9 @@ Te iré guiando paso a paso.
         .toList();
 
     if (busLegs.isEmpty) {
-      developer.log('⚠️ [BUS_STOPS] No se encontró ningún leg de bus en el itinerario');
+      developer.log(
+        '⚠️ [BUS_STOPS] No se encontró ningún leg de bus en el itinerario',
+      );
       return;
     }
 
@@ -1091,7 +1118,9 @@ Te iré guiando paso a paso.
     final stops = busLeg.stops;
 
     if (stops == null || stops.isEmpty) {
-      developer.log('⚠️ [BUS_STOPS] No hay paradas disponibles en el leg de bus');
+      developer.log(
+        '⚠️ [BUS_STOPS] No hay paradas disponibles en el leg de bus',
+      );
       developer.log('⚠️ [BUS_STOPS] busLeg.type: ${busLeg.type}');
       developer.log('⚠️ [BUS_STOPS] busLeg.routeNumber: ${busLeg.routeNumber}');
       return;
@@ -1112,7 +1141,9 @@ Te iré guiando paso a paso.
         stopLocation,
       );
 
-      developer.log('🚌 [STOP $i] ${stop.name}: ${distanceToStop.toStringAsFixed(0)}m');
+      developer.log(
+        '🚌 [STOP $i] ${stop.name}: ${distanceToStop.toStringAsFixed(0)}m',
+      );
 
       // Si está cerca de esta parada (50m) y no se ha anunciado
       final stopId = '${stop.name}_${stop.sequence}';
@@ -1278,7 +1309,9 @@ Te iré guiando paso a paso.
     developer.log(
       '📍 [STEP] Avanzando paso: $currentIndex → ${_activeNavigation!.currentStepIndex}',
     );
-    developer.log('📍 [STEP] Nuevo paso: ${newStep?.type} - ${newStep?.instruction}');
+    developer.log(
+      '📍 [STEP] Nuevo paso: ${newStep?.type} - ${newStep?.instruction}',
+    );
 
     // Notificar cambio de paso
     if (newStep != null && onStepChanged != null) {

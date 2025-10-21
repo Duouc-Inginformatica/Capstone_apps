@@ -24,6 +24,15 @@ ALTER TABLE `users`
 ADD COLUMN IF NOT EXISTS `device_info` VARCHAR(255) DEFAULT NULL 
 COMMENT 'Información del dispositivo para usuarios biométricos' AFTER `auth_type`;
 
+-- Permitir email opcional (NULL) para usuarios biométricos
+ALTER TABLE `users`
+MODIFY COLUMN `email` VARCHAR(255) NULL DEFAULT NULL;
+
+-- Agregar columna last_login si no existe
+ALTER TABLE `users`
+ADD COLUMN IF NOT EXISTS `last_login` TIMESTAMP NULL DEFAULT NULL
+COMMENT 'Último inicio de sesión del usuario' AFTER `created_at`;
+
 -- Hacer password_hash opcional (NULL permitido)
 ALTER TABLE `users` 
 MODIFY COLUMN `password_hash` VARCHAR(255) DEFAULT NULL 

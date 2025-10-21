@@ -52,11 +52,11 @@ type Stop struct {
 
 // RouteGeometry representa la geometría de una ruta completa
 type RouteGeometry struct {
-	Type             string      `json:"type"` // "walking", "driving", "transit"
-	TotalDistance    float64     `json:"total_distance_meters"`
-	TotalDuration    int         `json:"total_duration_seconds"`
-	MainGeometry     [][]float64 `json:"main_geometry"`      // Geometría principal [lon, lat]
-	SegmentGeometries []Segment  `json:"segments,omitempty"` // Segmentos individuales
+	Type              string      `json:"type"` // "walking", "driving", "transit"
+	TotalDistance     float64     `json:"total_distance_meters"`
+	TotalDuration     int         `json:"total_duration_seconds"`
+	MainGeometry      [][]float64 `json:"main_geometry"`      // Geometría principal [lon, lat]
+	SegmentGeometries []Segment   `json:"segments,omitempty"` // Segmentos individuales
 }
 
 // Segment representa un segmento de una ruta (walk, wait, ride)
@@ -134,43 +134,41 @@ func (s *Service) GetWalkingRoute(fromLat, fromLon, toLat, toLon float64, detail
 	}, nil
 }
 
-// GetDrivingRoute obtiene geometría de ruta en auto
-// CENTRALIZA: Cálculo de rutas vehiculares
-func (s *Service) GetDrivingRoute(fromLat, fromLon, toLat, toLon float64) (*RouteGeometry, error) {
+// getRouteGeometry centraliza la construcción de rutas usando distintos perfiles
+func (s *Service) getRouteGeometry(profile, routeType, segmentType string, fromLat, fromLon, toLat, toLon float64) (*RouteGeometry, error) {
 	route, err := s.ghClient.GetRoute(graphhopper.RouteRequest{
 		Points: []graphhopper.Point{
 			{Lat: fromLat, Lon: fromLon},
 			{Lat: toLat, Lon: toLon},
 		},
-		Profile:       "car",
+		Profile:       profile,
 		Locale:        "es",
 		PointsEncoded: false,
 		Instructions:  true,
 	})
 
 	if err != nil {
-		return nil, fmt.Errorf("graphhopper driving route: %w", err)
+		return nil, fmt.Errorf("graphhopper %s route: %w", profile, err)
 	}
 
 	if len(route.Paths) == 0 {
-		return nil, fmt.Errorf("no driving route found")
+		return nil, fmt.Errorf("no %s route found", profile)
 	}
 
 	path := route.Paths[0]
-
 	instructions := make([]string, len(path.Instructions))
 	for i, inst := range path.Instructions {
 		instructions[i] = inst.Text
 	}
 
 	return &RouteGeometry{
-		Type:          "driving",
+		Type:          routeType,
 		TotalDistance: path.Distance,
 		TotalDuration: int(path.Time / 1000),
 		MainGeometry:  path.Points.Coordinates,
 		SegmentGeometries: []Segment{
 			{
-				Type:         "drive",
+				Type:         segmentType,
 				Distance:     path.Distance,
 				Duration:     int(path.Time / 1000),
 				Geometry:     path.Points.Coordinates,
@@ -180,10 +178,14 @@ func (s *Service) GetDrivingRoute(fromLat, fromLon, toLat, toLon float64) (*Rout
 	}, nil
 }
 
-// GetVehicleRoute alias de GetDrivingRoute para compatibilidad con moovit scraper
-// Usa perfil "car" para simular rutas de buses en calles
+// GetDrivingRoute obtiene geometría de ruta en auto (perfil "car")
+func (s *Service) GetDrivingRoute(fromLat, fromLon, toLat, toLon float64) (*RouteGeometry, error) {
+	return s.getRouteGeometry("car", "driving", "drive", fromLat, fromLon, toLat, toLon)
+}
+
+// GetVehicleRoute obtiene geometría vehicular para buses (perfil "bus")
 func (s *Service) GetVehicleRoute(fromLat, fromLon, toLat, toLon float64) (*RouteGeometry, error) {
-	return s.GetDrivingRoute(fromLat, fromLon, toLat, toLon)
+	return s.getRouteGeometry("bus", "driving", "drive", fromLat, fromLon, toLat, toLon)
 }
 
 // GetTransitRoute obtiene ruta completa con transporte público
@@ -208,7 +210,7 @@ func (s *Service) GetTransitRoute(fromLat, fromLon, toLat, toLon float64, depart
 
 	// Convertir legs de GraphHopper a Segments enriquecidos con GTFS
 	segments := make([]Segment, 0, len(path.Legs))
-	
+
 	for _, leg := range path.Legs {
 		segment := Segment{
 			Type:     leg.Type,
@@ -353,7 +355,7 @@ func (s *Service) CalculateWalkingDistanceToStops(fromLat, fromLon float64, stop
 	for _, stop := range stops {
 		// Calcular distancia peatonal real usando GraphHopper
 		route, err := s.ghClient.GetFootRoute(fromLat, fromLon, stop.Lat, stop.Lon)
-		
+
 		if err == nil && len(route.Paths) > 0 {
 			stop.Distance = route.Paths[0].Distance
 		} else {

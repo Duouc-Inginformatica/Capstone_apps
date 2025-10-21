@@ -25,11 +25,19 @@ func (g *GeometryServiceAdapter) GetWalkingRoute(fromLat, fromLon, toLat, toLon 
 	if err != nil {
 		return moovit.RouteGeometry{}, err
 	}
-	
+
+	instructions := make([]string, 0)
+	for _, segment := range route.SegmentGeometries {
+		if len(segment.Instructions) > 0 {
+			instructions = append(instructions, segment.Instructions...)
+		}
+	}
+
 	return moovit.RouteGeometry{
 		TotalDistance: route.TotalDistance,
 		TotalDuration: route.TotalDuration,
 		MainGeometry:  route.MainGeometry,
+		Instructions:  instructions,
 	}, nil
 }
 
@@ -38,11 +46,19 @@ func (g *GeometryServiceAdapter) GetVehicleRoute(fromLat, fromLon, toLat, toLon 
 	if err != nil {
 		return moovit.RouteGeometry{}, err
 	}
-	
+
+	instructions := make([]string, 0)
+	for _, segment := range route.SegmentGeometries {
+		if len(segment.Instructions) > 0 {
+			instructions = append(instructions, segment.Instructions...)
+		}
+	}
+
 	return moovit.RouteGeometry{
 		TotalDistance: route.TotalDistance,
 		TotalDuration: route.TotalDuration,
 		MainGeometry:  route.MainGeometry,
+		Instructions:  instructions,
 	}, nil
 }
 
@@ -55,10 +71,10 @@ func NewRedBusHandler(db *sql.DB) *RedBusHandler {
 	} else {
 		log.Printf("⚠️  RedBusHandler creado sin base de datos - solo funcionará scraping Moovit")
 	}
-	
+
 	// NOTA: El servicio de geometría se configurará después con ConfigureRedBusGeometry()
 	// porque se inicializa después de que se crean los handlers
-	
+
 	return &RedBusHandler{
 		scraper: scraper,
 	}
@@ -192,7 +208,7 @@ func (h *RedBusHandler) GetRedBusItineraryOptions(c *fiber.Ctx) error {
 	}
 
 	log.Printf("✅ Retornando %d opciones ligeras para selección por voz", len(lightweightOptions.Options))
-	
+
 	// Retornar opciones para que Flutter las lea por voz
 	return c.JSON(lightweightOptions)
 }
@@ -250,14 +266,14 @@ func (h *RedBusHandler) GetRedBusItineraryDetail(c *fiber.Ctx) error {
 	}
 
 	log.Printf("✅ Geometría detallada generada con %d legs", len(detailedItinerary.Legs))
-	
+
 	// 🔍 DEBUG: Mostrar datos que se envían al frontend
 	log.Printf("🔍 [DEBUG-RESPONSE] ========== DATOS ENVIADOS AL FRONTEND ==========")
 	log.Printf("🔍 [DEBUG-RESPONSE] Total Legs: %d", len(detailedItinerary.Legs))
 	log.Printf("🔍 [DEBUG-RESPONSE] Duración Total: %d min", detailedItinerary.TotalDuration)
 	log.Printf("🔍 [DEBUG-RESPONSE] Distancia Total: %.2f km", detailedItinerary.TotalDistance)
 	log.Printf("🔍 [DEBUG-RESPONSE] Rutas de Bus: %v", detailedItinerary.RedBusRoutes)
-	
+
 	for i, leg := range detailedItinerary.Legs {
 		log.Printf("🔍 [DEBUG-RESPONSE-LEG-%d] ----------------------", i+1)
 		log.Printf("   Type: %s", leg.Type)
@@ -270,35 +286,35 @@ func (h *RedBusHandler) GetRedBusItineraryDetail(c *fiber.Ctx) error {
 		log.Printf("   Geometry Points: %d", len(leg.Geometry))
 		log.Printf("   StopCount: %d", leg.StopCount)
 		log.Printf("   Total Stops in array: %d", len(leg.Stops))
-		
+
 		if len(leg.Geometry) > 0 {
 			log.Printf("   Geometría - Primer punto: [%.6f, %.6f]", leg.Geometry[0][1], leg.Geometry[0][0])
-			log.Printf("   Geometría - Último punto: [%.6f, %.6f]", 
+			log.Printf("   Geometría - Último punto: [%.6f, %.6f]",
 				leg.Geometry[len(leg.Geometry)-1][1], leg.Geometry[len(leg.Geometry)-1][0])
 		} else {
 			log.Printf("   ⚠️  SIN GEOMETRÍA EN ESTE LEG")
 		}
-		
+
 		if leg.DepartStop != nil {
-			log.Printf("   DepartStop: %s (%.6f, %.6f)", 
+			log.Printf("   DepartStop: %s (%.6f, %.6f)",
 				leg.DepartStop.Name, leg.DepartStop.Latitude, leg.DepartStop.Longitude)
 		}
-		
+
 		if leg.ArriveStop != nil {
-			log.Printf("   ArriveStop: %s (%.6f, %.6f)", 
+			log.Printf("   ArriveStop: %s (%.6f, %.6f)",
 				leg.ArriveStop.Name, leg.ArriveStop.Latitude, leg.ArriveStop.Longitude)
 		}
-		
+
 		if len(leg.Stops) > 0 {
 			log.Printf("   Paradas en este leg:")
 			for j, stop := range leg.Stops {
-				log.Printf("      [%d] %s [%s] - Seq:%d (%.6f, %.6f)", 
+				log.Printf("      [%d] %s [%s] - Seq:%d (%.6f, %.6f)",
 					j+1, stop.Name, stop.Code, stop.Sequence, stop.Latitude, stop.Longitude)
 			}
 		}
 	}
 	log.Printf("🔍 [DEBUG-RESPONSE] ========== FIN DATOS ==========")
-	
+
 	return c.JSON(detailedItinerary)
 }
 

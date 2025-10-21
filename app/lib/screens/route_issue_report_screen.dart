@@ -15,7 +15,7 @@ class RouteIssueReportScreen extends StatefulWidget {
 class _RouteIssueReportScreenState extends State<RouteIssueReportScreen> {
   final _formKey = GlobalKey<FormState>();
   final _detailsController = TextEditingController();
-  
+
   String _selectedIssue = 'detour';
   bool _isSubmitting = false;
   Position? _currentPosition;
@@ -54,8 +54,8 @@ class _RouteIssueReportScreenState extends State<RouteIssueReportScreen> {
         type: 'route_issue',
         category: _selectedIssue,
         title: _issues[_selectedIssue]!,
-        description: _detailsController.text.trim().isNotEmpty 
-            ? _detailsController.text.trim() 
+        description: _detailsController.text.trim().isNotEmpty
+            ? _detailsController.text.trim()
             : _issues[_selectedIssue]!,
         latitude: _currentPosition?.latitude,
         longitude: _currentPosition?.longitude,
@@ -157,7 +157,7 @@ class _RouteIssueReportScreenState extends State<RouteIssueReportScreen> {
                         itemBuilder: (context, index) {
                           final entry = _issues.entries.elementAt(index);
                           final isSelected = _selectedIssue == entry.key;
-                          
+
                           return GestureDetector(
                             onTap: () {
                               setState(() {
@@ -170,13 +170,19 @@ class _RouteIssueReportScreenState extends State<RouteIssueReportScreen> {
                               decoration: BoxDecoration(
                                 color: isSelected ? Colors.black : Colors.white,
                                 borderRadius: BorderRadius.circular(12),
-                                border: isSelected ? null : Border.all(color: Colors.grey[300]!),
+                                border: isSelected
+                                    ? null
+                                    : Border.all(color: Colors.grey[300]!),
                               ),
                               child: Row(
                                 children: [
                                   Icon(
-                                    isSelected ? Icons.check_circle : Icons.radio_button_unchecked,
-                                    color: isSelected ? Colors.white : Colors.grey[400],
+                                    isSelected
+                                        ? Icons.check_circle
+                                        : Icons.radio_button_unchecked,
+                                    color: isSelected
+                                        ? Colors.white
+                                        : Colors.grey[400],
                                     size: 24,
                                   ),
                                   const SizedBox(width: 16),
@@ -186,7 +192,9 @@ class _RouteIssueReportScreenState extends State<RouteIssueReportScreen> {
                                       style: TextStyle(
                                         fontSize: 18,
                                         fontWeight: FontWeight.w600,
-                                        color: isSelected ? Colors.white : Colors.black,
+                                        color: isSelected
+                                            ? Colors.white
+                                            : Colors.black,
                                       ),
                                     ),
                                   ),
@@ -276,7 +284,9 @@ class _RouteIssueReportScreenState extends State<RouteIssueReportScreen> {
                             height: 24,
                             child: CircularProgressIndicator(
                               strokeWidth: 2,
-                              valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                              valueColor: AlwaysStoppedAnimation<Color>(
+                                Colors.white,
+                              ),
                             ),
                           )
                         : const Text(
@@ -297,7 +307,11 @@ class _RouteIssueReportScreenState extends State<RouteIssueReportScreen> {
                   onTap: (index) {
                     switch (index) {
                       case 0:
-                        Navigator.pushNamedAndRemoveUntil(context, '/map', (route) => false);
+                        Navigator.pushNamedAndRemoveUntil(
+                          context,
+                          '/map',
+                          (route) => false,
+                        );
                         break;
                       case 1:
                         ScaffoldMessenger.of(context).showSnackBar(
@@ -305,11 +319,15 @@ class _RouteIssueReportScreenState extends State<RouteIssueReportScreen> {
                         );
                         break;
                       case 2:
-                        Navigator.pushNamedAndRemoveUntil(context, '/contribute', (route) => false);
+                        Navigator.pushNamedAndRemoveUntil(
+                          context,
+                          '/contribute',
+                          (route) => false,
+                        );
                         break;
                       case 3:
                         ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Negocios')),
+                          const SnackBar(content: Text('Ajustes')),
                         );
                         break;
                     }

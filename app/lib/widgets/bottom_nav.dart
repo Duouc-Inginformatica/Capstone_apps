@@ -4,11 +4,7 @@ class BottomNavBar extends StatelessWidget {
   final int currentIndex;
   final ValueChanged<int>? onTap;
 
-  const BottomNavBar({
-    super.key,
-    this.currentIndex = 0,
-    this.onTap,
-  });
+  const BottomNavBar({super.key, this.currentIndex = 0, this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -44,9 +40,9 @@ class BottomNavBar extends StatelessWidget {
           _NavItem(
             index: 3,
             selected: currentIndex == 3,
-            icon: Icons.storefront_outlined,
-            selectedIcon: Icons.storefront,
-            label: 'Negocios',
+            icon: Icons.settings_outlined,
+            selectedIcon: Icons.settings,
+            label: 'Ajustes',
             onTap: onTap,
           ),
         ],
@@ -82,11 +78,7 @@ class _NavItem extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(
-            selected ? selectedIcon : icon,
-            color: color,
-            size: 24,
-          ),
+          Icon(selected ? selectedIcon : icon, color: color, size: 24),
           const SizedBox(height: 4),
           Text(
             label,

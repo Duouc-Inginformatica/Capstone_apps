@@ -127,7 +127,6 @@ if (Test-Path $GTFS_FILE) {
 # ============================================================================
 Write-Host ""
 Write-Host "[4/7] Verificando Java..." -ForegroundColor Yellow
-
 try {
     $javaVersion = java -version 2>&1 | Select-String "version" | Select-Object -First 1
     Write-Host "[OK] Java encontrado: $javaVersion" -ForegroundColor Green
@@ -137,66 +136,22 @@ try {
     Write-Host "   https://adoptium.net/" -ForegroundColor White
     exit 1
 }
-
 # ============================================================================
-# 5. CREAR ARCHIVO DE CONFIGURACIÓN
+# 5. CREAR ARCHIVO DE CONFIGURACION
 # ============================================================================
 Write-Host ""
 Write-Host "[5/7] Creando archivo de configuracion..." -ForegroundColor Yellow
 
-$configContent = @"
-graphhopper:
-  datareader.file: $OSM_FILE
-  graph.location: graph-cache
-  
-  # Configuración de importación OSM - vacío para incluir todas las vías con perfil foot
-  import.osm.ignored_highways: ""
-  
-  # Encoded values necesarios para custom models
-  graph.encoded_values: road_class,road_environment,max_speed,road_access
-  
-  # Perfiles de routing
-  profiles:
-    - name: foot
-      custom_model:
-        speed:
-          - if: true
-            limit_to: 4.25  # 5 km/h * 0.85 = 4.25 km/h para accesibilidad
-        distance_influence: 70
-    
-    - name: car
-      custom_model:
-        speed:
-          - if: true
-            limit_to: 120  # Velocidad máxima 120 km/h
-    
-    - name: pt
-      custom_model:
-        speed:
-          - if: true
-            limit_to: 80  # Velocidad máxima buses 80 km/h
+$templatePath = Join-Path $PSScriptRoot "graphhopper-config.template.yml"
+if (-Not (Test-Path $templatePath)) {
+        Write-Host "[ERROR] Plantilla no encontrada: $templatePath" -ForegroundColor Red
+        Write-Host "        Asegurate de que graphhopper-config.template.yml exista." -ForegroundColor Red
+        exit 1
+}
 
-  # Transporte Público (GTFS)
-  gtfs:
-    file: $GTFS_FILE
-
-  # Optimizaciones
-  prepare:
-    min_network_size: 200
-    min_one_way_network_size: 200
-    
-  routing:
-    max_visited_nodes: 1000000
-
-# Configuración del servidor DropWizard
-server:
-  application_connectors:
-    - type: http
-      port: 8989
-  admin_connectors:
-    - type: http
-      port: 8990
-"@
+$configContent = Get-Content -Path $templatePath -Raw
+$configContent = $configContent.Replace("{{OSM_FILE}}", $OSM_FILE)
+$configContent = $configContent.Replace("{{GTFS_FILE}}", $GTFS_FILE)
 
 $configContent | Out-File -FilePath "graphhopper-config.yml" -Encoding UTF8
 Write-Host "[OK] Configuracion creada: graphhopper-config.yml" -ForegroundColor Green

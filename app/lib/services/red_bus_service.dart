@@ -116,6 +116,8 @@ class RedBusLeg {
   final RedBusStop? arriveStop;
   final int? stopCount; // Número de paradas en el viaje
   final List<RedBusStop>? stops; // Lista completa de paradas (solo para buses)
+  final List<String>?
+  streetInstructions; // Instrucciones detalladas para caminatas
 
   RedBusLeg({
     required this.type,
@@ -131,6 +133,7 @@ class RedBusLeg {
     this.arriveStop,
     this.stopCount,
     this.stops,
+    this.streetInstructions,
   });
 
   factory RedBusLeg.fromJson(Map<String, dynamic> json) {
@@ -168,6 +171,14 @@ class RedBusLeg {
       }).toList();
     }
 
+    List<String>? streetInstructions;
+    if (json['street_instructions'] != null) {
+      final instructionsData = json['street_instructions'] as List<dynamic>;
+      streetInstructions = instructionsData
+          .map((dynamic entry) => entry.toString())
+          .toList();
+    }
+
     return RedBusLeg(
       type: json['type'] as String? ?? 'walk',
       mode: json['mode'] as String? ?? 'walk',
@@ -182,6 +193,7 @@ class RedBusLeg {
       arriveStop: arriveStop,
       stopCount: json['stop_count'] as int?,
       stops: stops,
+      streetInstructions: streetInstructions,
     )..debugStopCount(); // Debug: imprimir stopCount
   }
 
@@ -189,7 +201,9 @@ class RedBusLeg {
   void debugStopCount() {
     if (type == 'bus') {
       if (stopCount != null) {
-        developer.log('🚏 Leg de bus ${routeNumber ?? "?"} tiene $stopCount paradas');
+        developer.log(
+          '🚏 Leg de bus ${routeNumber ?? "?"} tiene $stopCount paradas',
+        );
       }
       if (stops != null) {
         developer.log(
@@ -249,7 +263,9 @@ class RedBusItinerary {
     final routes = routesData.map((r) => r.toString()).toList();
 
     // LOG DETALLADO: Verificar todos los legs recibidos del backend
-    developer.log('📋 [BACKEND→FRONTEND] Itinerario recibido con ${legs.length} legs:');
+    developer.log(
+      '📋 [BACKEND→FRONTEND] Itinerario recibido con ${legs.length} legs:',
+    );
     for (int i = 0; i < legs.length; i++) {
       final leg = legs[i];
       final geomPoints = leg.geometry?.length ?? 0;

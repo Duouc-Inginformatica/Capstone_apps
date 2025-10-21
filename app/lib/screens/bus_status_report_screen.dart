@@ -15,7 +15,7 @@ class BusStatusReportScreen extends StatefulWidget {
 class _BusStatusReportScreenState extends State<BusStatusReportScreen> {
   final _formKey = GlobalKey<FormState>();
   final _problemController = TextEditingController();
-  
+
   String _selectedProblem = 'delayed';
   bool _isSubmitting = false;
   Position? _currentPosition;
@@ -56,8 +56,8 @@ class _BusStatusReportScreenState extends State<BusStatusReportScreen> {
         type: 'bus_status',
         category: _selectedProblem,
         title: _problems[_selectedProblem]!,
-        description: _problemController.text.trim().isNotEmpty 
-            ? _problemController.text.trim() 
+        description: _problemController.text.trim().isNotEmpty
+            ? _problemController.text.trim()
             : _problems[_selectedProblem]!,
         latitude: _currentPosition?.latitude,
         longitude: _currentPosition?.longitude,
@@ -159,7 +159,7 @@ class _BusStatusReportScreenState extends State<BusStatusReportScreen> {
                         itemBuilder: (context, index) {
                           final entry = _problems.entries.elementAt(index);
                           final isSelected = _selectedProblem == entry.key;
-                          
+
                           return GestureDetector(
                             onTap: () {
                               setState(() {
@@ -172,13 +172,19 @@ class _BusStatusReportScreenState extends State<BusStatusReportScreen> {
                               decoration: BoxDecoration(
                                 color: isSelected ? Colors.black : Colors.white,
                                 borderRadius: BorderRadius.circular(12),
-                                border: isSelected ? null : Border.all(color: Colors.grey[300]!),
+                                border: isSelected
+                                    ? null
+                                    : Border.all(color: Colors.grey[300]!),
                               ),
                               child: Row(
                                 children: [
                                   Icon(
-                                    isSelected ? Icons.check_circle : Icons.radio_button_unchecked,
-                                    color: isSelected ? Colors.white : Colors.grey[400],
+                                    isSelected
+                                        ? Icons.check_circle
+                                        : Icons.radio_button_unchecked,
+                                    color: isSelected
+                                        ? Colors.white
+                                        : Colors.grey[400],
                                     size: 24,
                                   ),
                                   const SizedBox(width: 16),
@@ -188,7 +194,9 @@ class _BusStatusReportScreenState extends State<BusStatusReportScreen> {
                                       style: TextStyle(
                                         fontSize: 18,
                                         fontWeight: FontWeight.w600,
-                                        color: isSelected ? Colors.white : Colors.black,
+                                        color: isSelected
+                                            ? Colors.white
+                                            : Colors.black,
                                       ),
                                     ),
                                   ),
@@ -278,7 +286,9 @@ class _BusStatusReportScreenState extends State<BusStatusReportScreen> {
                             height: 24,
                             child: CircularProgressIndicator(
                               strokeWidth: 2,
-                              valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                              valueColor: AlwaysStoppedAnimation<Color>(
+                                Colors.white,
+                              ),
                             ),
                           )
                         : const Text(
@@ -299,7 +309,11 @@ class _BusStatusReportScreenState extends State<BusStatusReportScreen> {
                   onTap: (index) {
                     switch (index) {
                       case 0:
-                        Navigator.pushNamedAndRemoveUntil(context, '/map', (route) => false);
+                        Navigator.pushNamedAndRemoveUntil(
+                          context,
+                          '/map',
+                          (route) => false,
+                        );
                         break;
                       case 1:
                         ScaffoldMessenger.of(context).showSnackBar(
@@ -307,11 +321,15 @@ class _BusStatusReportScreenState extends State<BusStatusReportScreen> {
                         );
                         break;
                       case 2:
-                        Navigator.pushNamedAndRemoveUntil(context, '/contribute', (route) => false);
+                        Navigator.pushNamedAndRemoveUntil(
+                          context,
+                          '/contribute',
+                          (route) => false,
+                        );
                         break;
                       case 3:
                         ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Negocios')),
+                          const SnackBar(content: Text('Ajustes')),
                         );
                         break;
                     }

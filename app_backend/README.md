@@ -297,18 +297,44 @@ El backend espera hasta 60s a que GraphHopper responda en `http://localhost:8989
 
 ### Configuración (`graphhopper-config.yml`)
 
-```yaml
-datareader.file: ./data/santiago.osm.pbf  # Solo región metropolitana (~50 MB)
-graph.location: ./graph-cache
 gtfs.feed: ./data/santiago_gtfs.zip
-pt.max_walk_distance_per_leg: 1000
-pt.boarding_penalty_seconds: 300  # Favorece menos trasbordos
-profiles:
-  - name: foot
-    custom_model:
-      speed: [{if: "true", multiply_by: 0.85}]  # Ajuste para usuario ciego
-  - name: car
-  - name: pt  # Public transit
+```yaml
+graphhopper:
+  datareader.file: ./data/santiago.osm.pbf
+  graph.location: ./graph-cache
+  import.osm.ignored_highways: ""
+  graph.encoded_values: road_class,road_environment,max_speed,road_access
+
+  profiles:
+    - name: foot
+      vehicle: foot
+      weighting: custom
+      custom_model:
+        speed:
+          - if: true
+            limit_to: 4.25
+        distance_influence: 70
+
+    - name: car
+      vehicle: car
+      weighting: custom
+      custom_model:
+        speed:
+          - if: true
+            limit_to: 120
+
+    - name: pt
+      vehicle: foot
+      weighting: custom
+
+  pt:
+    enabled: true
+    walk_speed: 4.0
+    max_transfers: 4
+
+  gtfs:
+    file: ./data/gtfs-santiago.zip
+    use_transfers_txt: true
 ```
 
 ## Transporte público (GTFS + Moovit Scraping)

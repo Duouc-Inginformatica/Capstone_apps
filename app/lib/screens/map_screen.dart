@@ -255,6 +255,8 @@ class _MapScreenState extends State<MapScreen> {
   // CAP-12: Instrucciones de ruta
   List<String> _currentInstructions = [];
   int _currentInstructionStep = 0;
+  int _instructionFocusIndex = 0;
+  int _lastAnnouncedInstructionIndex = -1;
   bool _isCalculatingRoute = false;
   bool _showInstructionsPanel = false;
 
@@ -563,6 +565,15 @@ class _MapScreenState extends State<MapScreen> {
       return const SizedBox.shrink();
     }
 
+    final instructions = currentStep.streetInstructions!;
+    final int focusIndex = instructions.isEmpty
+        ? 0
+        : _instructionFocusIndex < 0
+        ? 0
+        : _instructionFocusIndex >= instructions.length
+        ? instructions.length - 1
+        : _instructionFocusIndex;
+
     return Card(
       elevation: 8,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
@@ -635,15 +646,15 @@ class _MapScreenState extends State<MapScreen> {
               child: ListView.builder(
                 shrinkWrap: true,
                 padding: const EdgeInsets.symmetric(vertical: 8),
-                itemCount: currentStep.streetInstructions!.length,
+                itemCount: instructions.length,
                 itemBuilder: (context, index) {
-                  final instruction = currentStep.streetInstructions![index];
-                  final isFirst = index == 0;
+                  final instruction = instructions[index];
+                  final bool isFocused = index == focusIndex;
+                  final bool isCompleted = index < focusIndex;
 
                   return InkWell(
                     onTap: () {
-                      // Leer instrucción individual
-                      TtsService.instance.speak(instruction);
+                      _focusOnInstruction(index);
                     },
                     child: Container(
                       padding: const EdgeInsets.symmetric(
@@ -651,12 +662,18 @@ class _MapScreenState extends State<MapScreen> {
                         vertical: 12,
                       ),
                       decoration: BoxDecoration(
-                        color: isFirst
-                            ? Colors.white.withValues(alpha: 0.2)
+                        color: isFocused
+                            ? Colors.white.withValues(alpha: 0.18)
+                            : isCompleted
+                            ? Colors.white.withValues(alpha: 0.08)
                             : Colors.transparent,
                         border: Border(
                           left: BorderSide(
-                            color: isFirst ? Colors.yellow : Colors.white30,
+                            color: isFocused
+                                ? Colors.yellow
+                                : isCompleted
+                                ? Colors.greenAccent
+                                : Colors.white30,
                             width: 4,
                           ),
                         ),
@@ -668,15 +685,23 @@ class _MapScreenState extends State<MapScreen> {
                             width: 28,
                             height: 28,
                             decoration: BoxDecoration(
-                              color: isFirst ? Colors.yellow : Colors.white24,
+                              color: isFocused
+                                  ? Colors.yellow
+                                  : isCompleted
+                                  ? const Color(0xFF34D399)
+                                  : Colors.white24,
                               shape: BoxShape.circle,
                             ),
                             child: Center(
                               child: Text(
                                 '${index + 1}',
                                 style: TextStyle(
-                                  color: isFirst ? Colors.black : Colors.white,
-                                  fontWeight: FontWeight.bold,
+                                  color: isFocused || isCompleted
+                                      ? Colors.black
+                                      : Colors.white,
+                                  fontWeight: isFocused
+                                      ? FontWeight.w700
+                                      : FontWeight.bold,
                                   fontSize: 14,
                                 ),
                               ),
@@ -687,21 +712,27 @@ class _MapScreenState extends State<MapScreen> {
                             child: Text(
                               instruction,
                               style: TextStyle(
-                                color: isFirst
+                                color: isFocused
                                     ? Colors.white
-                                    : Colors.white.withValues(alpha: 0.87),
+                                    : Colors.white.withValues(alpha: 0.9),
                                 fontSize: 15,
                                 height: 1.4,
-                                fontWeight: isFirst
+                                fontWeight: isFocused
                                     ? FontWeight.w600
                                     : FontWeight.normal,
                               ),
                             ),
                           ),
-                          if (isFirst)
+                          if (isFocused)
                             const Icon(
-                              Icons.arrow_forward,
+                              Icons.navigation_rounded,
                               color: Colors.yellow,
+                              size: 22,
+                            )
+                          else if (isCompleted)
+                            const Icon(
+                              Icons.check_circle,
+                              color: Color(0xFF34D399),
                               size: 20,
                             ),
                         ],
@@ -717,11 +748,237 @@ class _MapScreenState extends State<MapScreen> {
     );
   }
 
+  Widget _buildNavigationQuickActions(bool hasActiveNavigation) {
+    final instructions = _getActiveWalkInstructions();
+    final bool hasWalkInstructions =
+        instructions != null && instructions.isNotEmpty;
+
+    if (!hasActiveNavigation && !hasWalkInstructions) {
+      return const SizedBox.shrink();
+    }
+
+    final int totalInstructions = instructions?.length ?? 0;
+    final int focusIndex = totalInstructions == 0
+        ? 0
+        : _instructionFocusIndex < 0
+        ? 0
+        : _instructionFocusIndex >= totalInstructions
+        ? totalInstructions - 1
+        : _instructionFocusIndex;
+
+    final String preview = totalInstructions == 0
+        ? 'Inicia una navegación para ver instrucciones detalladas.'
+        : instructions![focusIndex];
+
+    return AnimatedOpacity(
+      duration: const Duration(milliseconds: 280),
+      opacity: hasActiveNavigation ? 1.0 : 0.8,
+      child: Container(
+        constraints: BoxConstraints(maxWidth: hasWalkInstructions ? 340 : 220),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(20),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.1),
+              blurRadius: 18,
+              offset: const Offset(0, 12),
+            ),
+          ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _buildQuickActionButton(
+                  icon: Icons.play_arrow_rounded,
+                  label: _getSimulationButtonLabel(),
+                  description: hasActiveNavigation
+                      ? 'Simula el paso actual'
+                      : 'Inicia una ruta para probar',
+                  onTap: hasActiveNavigation ? _simulateArrivalAtStop : null,
+                  primary: true,
+                  width: hasWalkInstructions ? 170 : 190,
+                ),
+                if (hasWalkInstructions) ...[
+                  const SizedBox(width: 10),
+                  _buildQuickActionButton(
+                    icon: Icons.record_voice_over,
+                    label: 'Leer paso',
+                    description: 'Paso ${focusIndex + 1} de $totalInstructions',
+                    onTap: _speakFocusedInstruction,
+                    primary: false,
+                    width: 150,
+                  ),
+                ],
+              ],
+            ),
+            if (hasWalkInstructions) ...[
+              const SizedBox(height: 12),
+              Text(
+                'Paso ${focusIndex + 1} de $totalInstructions',
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  color: Color(0xFF0F172A),
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                preview,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontSize: 13,
+                  height: 1.3,
+                  color: Color(0xFF4B5563),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _buildMiniActionButton(
+                    icon: Icons.chevron_left,
+                    label: 'Anterior',
+                    onTap: focusIndex > 0
+                        ? () => _moveInstructionFocus(-1)
+                        : null,
+                  ),
+                  const SizedBox(width: 8),
+                  _buildMiniActionButton(
+                    icon: Icons.chevron_right,
+                    label: 'Siguiente',
+                    onTap: focusIndex < totalInstructions - 1
+                        ? () => _moveInstructionFocus(1)
+                        : null,
+                  ),
+                ],
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildQuickActionButton({
+    required IconData icon,
+    required String label,
+    required String description,
+    required VoidCallback? onTap,
+    bool primary = false,
+    double width = 160,
+  }) {
+    final bool enabled = onTap != null;
+    final Gradient enabledGradient = primary
+        ? const LinearGradient(
+            colors: [Color(0xFF34D399), Color(0xFF059669)],
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+          )
+        : const LinearGradient(
+            colors: [Color(0xFF1F2937), Color(0xFF111827)],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          );
+    final Gradient disabledGradient = LinearGradient(
+      colors: [Colors.grey.shade600, Colors.grey.shade500],
+      begin: Alignment.topCenter,
+      end: Alignment.bottomCenter,
+    );
+
+    final gradient = enabled ? enabledGradient : disabledGradient;
+    final Color shadowColor = primary
+        ? const Color(0xFF059669)
+        : const Color(0xFF0F172A);
+
+    return Opacity(
+      opacity: enabled ? 1.0 : 0.55,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(18),
+        child: Container(
+          width: width,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(18),
+            gradient: gradient,
+            boxShadow: [
+              BoxShadow(
+                color: shadowColor.withValues(alpha: enabled ? 0.35 : 0.2),
+                blurRadius: 18,
+                offset: const Offset(0, 10),
+              ),
+            ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, color: Colors.white, size: 22),
+              const SizedBox(height: 10),
+              Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                description,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.85),
+                  fontSize: 12,
+                  height: 1.25,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMiniActionButton({
+    required IconData icon,
+    required String label,
+    required VoidCallback? onTap,
+  }) {
+    return SizedBox(
+      height: 40,
+      child: OutlinedButton.icon(
+        onPressed: onTap,
+        icon: Icon(icon, size: 18),
+        label: Text(label),
+        style: OutlinedButton.styleFrom(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          foregroundColor: const Color(0xFF0F172A),
+          textStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+        ),
+      ),
+    );
+  }
+
   // Timer para simular caminata
   Timer? _walkSimulationTimer;
 
-  /// Devuelve el texto del botón de test según el paso actual
-  String _getTestButtonLabel() {
+  /// Devuelve el texto del botón de simulación según el paso actual
+  String _getSimulationButtonLabel() {
     final activeNav = IntegratedNavigationService.instance.activeNavigation;
     if (activeNav == null) return 'TEST';
 
@@ -730,13 +987,13 @@ class _MapScreenState extends State<MapScreen> {
 
     switch (currentStep.type) {
       case 'walk':
-        return 'Caminar';
+        return 'Simular caminata';
       case 'wait_bus':
-        return _busRouteShown ? 'Subir' : 'Ver Ruta';
+        return _busRouteShown ? 'Subir al bus' : 'Ver ruta del bus';
       case 'ride_bus':
-        return 'Viajar';
+        return 'Simular viaje';
       default:
-        return 'TEST';
+        return 'Simular';
     }
   }
 
@@ -919,6 +1176,159 @@ class _MapScreenState extends State<MapScreen> {
     });
   }
 
+  List<String>? _getActiveWalkInstructions() {
+    final activeNav = IntegratedNavigationService.instance.activeNavigation;
+    final step = activeNav?.currentStep;
+
+    if (step != null &&
+        step.type == 'walk' &&
+        step.streetInstructions != null &&
+        step.streetInstructions!.isNotEmpty) {
+      return step.streetInstructions;
+    }
+
+    if (_currentInstructions.isNotEmpty) {
+      return _currentInstructions;
+    }
+
+    return null;
+  }
+
+  String _normalizeInstructionText(String input) {
+    final sanitized = input.toLowerCase().replaceAll(
+      RegExp(r'[^\p{L}\p{N}\s]', unicode: true),
+      ' ',
+    );
+    return sanitized.replaceAll(RegExp(r'\s+'), ' ').trim();
+  }
+
+  void _handleInstructionAnnouncement(String announcement) {
+    final instructions = _getActiveWalkInstructions();
+    if (instructions == null || instructions.isEmpty) {
+      return;
+    }
+
+    final normalizedAnnouncement = _normalizeInstructionText(announcement);
+    int index = -1;
+
+    for (int i = 0; i < instructions.length; i++) {
+      final candidate = _normalizeInstructionText(instructions[i]);
+      if (candidate == normalizedAnnouncement ||
+          normalizedAnnouncement.contains(candidate) ||
+          candidate.contains(normalizedAnnouncement)) {
+        index = i;
+        break;
+      }
+    }
+
+    if (index == -1) {
+      index = (_instructionFocusIndex + 1)
+          .clamp(0, instructions.length - 1)
+          .toInt();
+    }
+
+    if (index == -1 || index == _lastAnnouncedInstructionIndex) {
+      return;
+    }
+
+    if (!mounted) return;
+
+    setState(() {
+      _instructionFocusIndex = index;
+      _lastAnnouncedInstructionIndex = index;
+    });
+  }
+
+  void _focusOnInstruction(int index, {bool speak = true}) {
+    final instructions = _getActiveWalkInstructions();
+    if (instructions == null || instructions.isEmpty) {
+      TtsService.instance.speak('No hay instrucciones activas');
+      return;
+    }
+
+    int clampedIndex = index;
+    if (clampedIndex < 0) {
+      clampedIndex = 0;
+    } else if (clampedIndex >= instructions.length) {
+      clampedIndex = instructions.length - 1;
+    }
+
+    if (!mounted) return;
+
+    setState(() {
+      _instructionFocusIndex = clampedIndex;
+      _lastAnnouncedInstructionIndex = clampedIndex;
+    });
+
+    if (speak) {
+      final instruction = instructions[clampedIndex];
+      TtsService.instance.speak('Paso ${clampedIndex + 1}: $instruction');
+    }
+  }
+
+  void _speakFocusedInstruction() {
+    final instructions = _getActiveWalkInstructions();
+    if (instructions == null || instructions.isEmpty) {
+      TtsService.instance.speak('No hay instrucciones activas');
+      return;
+    }
+
+    int focusIndex = _instructionFocusIndex;
+    if (focusIndex < 0) {
+      focusIndex = 0;
+    } else if (focusIndex >= instructions.length) {
+      focusIndex = instructions.length - 1;
+    }
+
+    final instruction = instructions[focusIndex];
+    TtsService.instance.speak('Paso ${focusIndex + 1}: $instruction');
+
+    if (!mounted) return;
+
+    setState(() {
+      _lastAnnouncedInstructionIndex = focusIndex;
+      _instructionFocusIndex = focusIndex;
+    });
+  }
+
+  void _moveInstructionFocus(int delta) {
+    final instructions = _getActiveWalkInstructions();
+    if (instructions == null || instructions.isEmpty) {
+      TtsService.instance.speak('No hay instrucciones activas');
+      return;
+    }
+
+    int focusIndex = _instructionFocusIndex;
+    if (focusIndex < 0) {
+      focusIndex = 0;
+    } else if (focusIndex >= instructions.length) {
+      focusIndex = instructions.length - 1;
+    }
+
+    final newIndex = (focusIndex + delta)
+        .clamp(0, instructions.length - 1)
+        .toInt();
+
+    if (newIndex == focusIndex) {
+      TtsService.instance.speak(
+        delta > 0
+            ? 'Ya estás en la última instrucción'
+            : 'Ya estás en la primera instrucción',
+      );
+      return;
+    }
+
+    if (!mounted) return;
+
+    setState(() {
+      _instructionFocusIndex = newIndex;
+      _lastAnnouncedInstructionIndex = newIndex;
+    });
+
+    final instruction = instructions[newIndex];
+    TtsService.instance.speak('Paso ${newIndex + 1}: $instruction');
+  }
+
   /// Simula caminata progresiva al paradero con instrucciones de GraphHopper
   void _startWalkSimulation(NavigationStep walkStep) async {
     // Cancelar simulación previa si existe
@@ -977,6 +1387,16 @@ class _MapScreenState extends State<MapScreen> {
       );
     }
 
+    if (walkStep.streetInstructions != null &&
+        walkStep.streetInstructions!.isNotEmpty) {
+      if (mounted) {
+        setState(() {
+          _instructionFocusIndex = 0;
+          _lastAnnouncedInstructionIndex = -1;
+        });
+      }
+    }
+
     _log(
       '🚶 [SIMULATOR] Iniciando navegación realista: ${stepGeometry.length} puntos, ${ghInstructions.length} instrucciones',
     );
@@ -1009,6 +1429,7 @@ class _MapScreenState extends State<MapScreen> {
       onInstructionAnnounced: (instruction) {
         // Mostrar instrucción en UI
         final message = instruction.toVoiceAnnouncement();
+        _handleInstructionAnnouncement(message);
 
         // Mostrar notificación visual
         if (instruction.isCrossing) {
@@ -1966,11 +2387,10 @@ class _MapScreenState extends State<MapScreen> {
       return;
     }
 
-    final instruction = _currentInstructions[_currentInstructionStep];
-    TtsService.instance.speak(
-      'Paso ${_currentInstructionStep + 1}: $instruction',
-    );
-
+    final currentIndex = _currentInstructionStep;
+    final instruction = _currentInstructions[currentIndex];
+    _focusOnInstruction(currentIndex, speak: false);
+    TtsService.instance.speak('Paso ${currentIndex + 1}: $instruction');
     setState(() {
       _currentInstructionStep++;
     });
@@ -1987,6 +2407,7 @@ class _MapScreenState extends State<MapScreen> {
 
     if (step < _currentInstructions.length) {
       final instruction = _currentInstructions[step];
+      _focusOnInstruction(step, speak: false);
       TtsService.instance.speak('Repitiendo paso ${step + 1}: $instruction');
     }
   }
@@ -2458,6 +2879,8 @@ class _MapScreenState extends State<MapScreen> {
               ...step.streetInstructions!, // Instrucciones detalladas por calle
             ];
             _currentInstructionStep = 0;
+            _instructionFocusIndex = 0;
+            _lastAnnouncedInstructionIndex = -1;
             _log(
               '📝 Instrucciones detalladas actualizadas: ${step.streetInstructions!.length} pasos',
             );
@@ -2465,6 +2888,8 @@ class _MapScreenState extends State<MapScreen> {
             // Fallback: solo instrucción principal
             _currentInstructions = [step.instruction];
             _currentInstructionStep = 0;
+            _instructionFocusIndex = 0;
+            _lastAnnouncedInstructionIndex = -1;
           }
         });
 
@@ -2925,6 +3350,8 @@ class _MapScreenState extends State<MapScreen> {
       setState(() {
         _currentInstructions = instructions;
         _currentInstructionStep = 0;
+        _instructionFocusIndex = 0;
+        _lastAnnouncedInstructionIndex = -1;
         _hasActiveTrip = true;
       });
 
@@ -2940,6 +3367,8 @@ class _MapScreenState extends State<MapScreen> {
       if (instructions.isNotEmpty) {
         message += 'Primera instrucción: ${instructions[0]}';
         _currentInstructionStep = 1;
+        _instructionFocusIndex = 0;
+        _lastAnnouncedInstructionIndex = 0;
       }
 
       TtsService.instance.speak(message);
@@ -3085,6 +3514,8 @@ class _MapScreenState extends State<MapScreen> {
         setState(() {
           _currentInstructions = currentStep.streetInstructions!;
           _currentInstructionStep = 0;
+          _instructionFocusIndex = 0;
+          _lastAnnouncedInstructionIndex = -1;
           // Solo mostrar panel si NO está en modo auto-lectura (para videntes)
           _showInstructionsPanel = !_autoReadInstructions;
         });
@@ -3113,6 +3544,8 @@ class _MapScreenState extends State<MapScreen> {
           setState(() {
             _currentInstructions = step.streetInstructions!;
             _currentInstructionStep = 0;
+            _instructionFocusIndex = 0;
+            _lastAnnouncedInstructionIndex = -1;
             // Solo mostrar panel si está en modo visual
             _showInstructionsPanel = !_autoReadInstructions;
           });
@@ -3502,6 +3935,8 @@ class _MapScreenState extends State<MapScreen> {
       _markers = newMarkers;
       _currentInstructions = combined.getVoiceInstructions();
       _currentInstructionStep = 0;
+      _instructionFocusIndex = 0;
+      _lastAnnouncedInstructionIndex = -1;
     });
 
     _showSuccessNotification('Ruta mostrada: ${combined.summary}');
@@ -3906,68 +4341,6 @@ class _MapScreenState extends State<MapScreen> {
                 child: Center(child: _buildHeaderChips(context)),
               ),
 
-              // Botón de TEST: Simular llegada al paradero o bus
-              Positioned(
-                left: 20,
-                bottom: floatingPrimary,
-                child: GestureDetector(
-                  onTap: _simulateArrivalAtStop,
-                  child: Container(
-                    width: 68,
-                    height: 88,
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        colors: hasActiveNavigation
-                            ? const [Color(0xFF34D399), Color(0xFF059669)]
-                            : [Colors.grey.shade600, Colors.grey.shade700],
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                      ),
-                      borderRadius: BorderRadius.circular(18),
-                      boxShadow: [
-                        BoxShadow(
-                          color:
-                              (hasActiveNavigation
-                                      ? const Color(0xFF059669)
-                                      : Colors.grey.shade800)
-                                  .withValues(alpha: 0.35),
-                          blurRadius: 18,
-                          offset: const Offset(0, 10),
-                        ),
-                      ],
-                    ),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        const Icon(
-                          Icons.bug_report,
-                          color: Colors.white,
-                          size: 28,
-                        ),
-                        const SizedBox(height: 6),
-                        Text(
-                          _getTestButtonLabel(),
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600,
-                            color: Colors.white,
-                          ),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          'Debug',
-                          style: TextStyle(
-                            fontSize: 9,
-                            color: Colors.white.withValues(alpha: 0.7),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-
               // Tarjeta persistente para la ruta seleccionada
               if (_selectedCombinedRoute != null)
                 Positioned(
@@ -4050,6 +4423,13 @@ class _MapScreenState extends State<MapScreen> {
                     ),
                   ),
                 ),
+
+              // Acciones rápidas de simulación y guía paso a paso
+              Positioned(
+                left: 16,
+                bottom: floatingPrimary,
+                child: _buildNavigationQuickActions(hasActiveNavigation),
+              ),
 
               // Botón de centrar ubicación
               Positioned(

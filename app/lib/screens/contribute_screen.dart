@@ -58,11 +58,7 @@ class _ContributeScreenState extends State<ContributeScreen> {
                 color: Colors.black,
                 borderRadius: BorderRadius.circular(15),
               ),
-              child: Icon(
-                icon,
-                color: Colors.white,
-                size: 28,
-              ),
+              child: Icon(icon, color: Colors.white, size: 28),
             ),
             const SizedBox(width: 16),
             Expanded(
@@ -80,19 +76,12 @@ class _ContributeScreenState extends State<ContributeScreen> {
                   const SizedBox(height: 4),
                   Text(
                     description,
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: Colors.grey[600],
-                    ),
+                    style: TextStyle(fontSize: 14, color: Colors.grey[600]),
                   ),
                 ],
               ),
             ),
-            Icon(
-              Icons.arrow_forward_ios,
-              color: Colors.grey[400],
-              size: 16,
-            ),
+            Icon(Icons.arrow_forward_ios, color: Colors.grey[400], size: 16),
           ],
         ),
       ),
@@ -126,7 +115,12 @@ class _ContributeScreenState extends State<ContributeScreen> {
           Positioned.fill(
             child: Container(
               color: Colors.grey[300],
-              padding: const EdgeInsets.only(top: 20, left: 20, right: 20, bottom: 140),
+              padding: const EdgeInsets.only(
+                top: 20,
+                left: 20,
+                right: 20,
+                bottom: 140,
+              ),
               child: SingleChildScrollView(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -143,10 +137,7 @@ class _ContributeScreenState extends State<ContributeScreen> {
                     const SizedBox(height: 8),
                     Text(
                       'Tu contribución ayuda a mejorar el transporte para todos',
-                      style: TextStyle(
-                        fontSize: 16,
-                        color: Colors.grey[700],
-                      ),
+                      style: TextStyle(fontSize: 16, color: Colors.grey[700]),
                     ),
                     const SizedBox(height: 30),
 
@@ -154,19 +145,22 @@ class _ContributeScreenState extends State<ContributeScreen> {
                     _buildContributionCard(
                       icon: Icons.directions_bus,
                       title: 'Estado del Bus',
-                      description: 'Reportar retrasos, sobrecarga o problemas técnicos',
+                      description:
+                          'Reportar retrasos, sobrecarga o problemas técnicos',
                       type: 'bus_status',
                     ),
                     _buildContributionCard(
                       icon: Icons.warning_amber,
                       title: 'Problemas de Ruta',
-                      description: 'Desvíos, suspensiones o cambios de recorrido',
+                      description:
+                          'Desvíos, suspensiones o cambios de recorrido',
                       type: 'route_issues',
                     ),
                     _buildContributionCard(
                       icon: Icons.location_on,
                       title: 'Info de Paradas',
-                      description: 'Nuevas paradas, errores o problemas de accesibilidad',
+                      description:
+                          'Nuevas paradas, errores o problemas de accesibilidad',
                       type: 'stop_info',
                     ),
                     _buildContributionCard(
@@ -220,10 +214,7 @@ class _ContributeScreenState extends State<ContributeScreen> {
                   // Ejemplo de comandos
                   Text(
                     'Di: "Reportar retraso" o "El bus va lleno"',
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: Colors.grey[600],
-                    ),
+                    style: TextStyle(fontSize: 14, color: Colors.grey[600]),
                     textAlign: TextAlign.center,
                   ),
                   const SizedBox(height: 16),
@@ -238,7 +229,9 @@ class _ContributeScreenState extends State<ContributeScreen> {
                           break;
                         case 1:
                           ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('Guardados (no implementado)')),
+                            const SnackBar(
+                              content: Text('Guardados (no implementado)'),
+                            ),
                           );
                           break;
                         case 2:
@@ -246,7 +239,9 @@ class _ContributeScreenState extends State<ContributeScreen> {
                           break;
                         case 3:
                           ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('Negocios (no implementado)')),
+                            const SnackBar(
+                              content: Text('Ajustes (no implementado)'),
+                            ),
                           );
                           break;
                       }

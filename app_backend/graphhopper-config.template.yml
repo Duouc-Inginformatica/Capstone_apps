@@ -1,5 +1,5 @@
-﻿graphhopper:
-  datareader.file: data/santiago.osm.pbf
+graphhopper:
+  datareader.file: {{OSM_FILE}}
   graph.location: graph-cache
 
   # Importar todas las vias relevantes para el perfil peatonal
@@ -58,7 +58,7 @@
 
   # Fuente GTFS oficial (WayFindCL sincroniza el mismo feed en DB)
   gtfs:
-    file: data/gtfs-santiago.zip
+    file: {{GTFS_FILE}}
     use_transfers_txt: true
 
   # Optimizaciones
@@ -77,4 +77,3 @@ server:
   admin_connectors:
     - type: http
       port: 8990
-

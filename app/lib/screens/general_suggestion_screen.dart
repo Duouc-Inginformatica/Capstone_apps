@@ -7,13 +7,14 @@ class GeneralSuggestionScreen extends StatefulWidget {
   static const routeName = '/contribute/general';
 
   @override
-  State<GeneralSuggestionScreen> createState() => _GeneralSuggestionScreenState();
+  State<GeneralSuggestionScreen> createState() =>
+      _GeneralSuggestionScreenState();
 }
 
 class _GeneralSuggestionScreenState extends State<GeneralSuggestionScreen> {
   final _formKey = GlobalKey<FormState>();
   final _suggestionController = TextEditingController();
-  
+
   String _selectedType = 'app_improvement';
   bool _isSubmitting = false;
 
@@ -134,9 +135,11 @@ class _GeneralSuggestionScreenState extends State<GeneralSuggestionScreen> {
                       child: ListView.builder(
                         itemCount: _suggestionTypes.length,
                         itemBuilder: (context, index) {
-                          final entry = _suggestionTypes.entries.elementAt(index);
+                          final entry = _suggestionTypes.entries.elementAt(
+                            index,
+                          );
                           final isSelected = _selectedType == entry.key;
-                          
+
                           return GestureDetector(
                             onTap: () {
                               setState(() {
@@ -149,13 +152,19 @@ class _GeneralSuggestionScreenState extends State<GeneralSuggestionScreen> {
                               decoration: BoxDecoration(
                                 color: isSelected ? Colors.black : Colors.white,
                                 borderRadius: BorderRadius.circular(12),
-                                border: isSelected ? null : Border.all(color: Colors.grey[300]!),
+                                border: isSelected
+                                    ? null
+                                    : Border.all(color: Colors.grey[300]!),
                               ),
                               child: Row(
                                 children: [
                                   Icon(
-                                    isSelected ? Icons.check_circle : Icons.radio_button_unchecked,
-                                    color: isSelected ? Colors.white : Colors.grey[400],
+                                    isSelected
+                                        ? Icons.check_circle
+                                        : Icons.radio_button_unchecked,
+                                    color: isSelected
+                                        ? Colors.white
+                                        : Colors.grey[400],
                                     size: 24,
                                   ),
                                   const SizedBox(width: 16),
@@ -165,7 +174,9 @@ class _GeneralSuggestionScreenState extends State<GeneralSuggestionScreen> {
                                       style: TextStyle(
                                         fontSize: 18,
                                         fontWeight: FontWeight.w600,
-                                        color: isSelected ? Colors.white : Colors.black,
+                                        color: isSelected
+                                            ? Colors.white
+                                            : Colors.black,
                                       ),
                                     ),
                                   ),
@@ -268,7 +279,9 @@ class _GeneralSuggestionScreenState extends State<GeneralSuggestionScreen> {
                             height: 24,
                             child: CircularProgressIndicator(
                               strokeWidth: 2,
-                              valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                              valueColor: AlwaysStoppedAnimation<Color>(
+                                Colors.white,
+                              ),
                             ),
                           )
                         : const Text(
@@ -289,7 +302,11 @@ class _GeneralSuggestionScreenState extends State<GeneralSuggestionScreen> {
                   onTap: (index) {
                     switch (index) {
                       case 0:
-                        Navigator.pushNamedAndRemoveUntil(context, '/map', (route) => false);
+                        Navigator.pushNamedAndRemoveUntil(
+                          context,
+                          '/map',
+                          (route) => false,
+                        );
                         break;
                       case 1:
                         ScaffoldMessenger.of(context).showSnackBar(
@@ -297,11 +314,15 @@ class _GeneralSuggestionScreenState extends State<GeneralSuggestionScreen> {
                         );
                         break;
                       case 2:
-                        Navigator.pushNamedAndRemoveUntil(context, '/contribute', (route) => false);
+                        Navigator.pushNamedAndRemoveUntil(
+                          context,
+                          '/contribute',
+                          (route) => false,
+                        );
                         break;
                       case 3:
                         ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Negocios')),
+                          const SnackBar(content: Text('Ajustes')),
                         );
                         break;
                     }

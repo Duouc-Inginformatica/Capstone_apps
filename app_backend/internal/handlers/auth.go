@@ -289,8 +289,9 @@ func BiometricRegister(c *fiber.Ctx) error {
 
 	// Insertar nuevo usuario biométrico
 	res, err := dbConn.Exec(
-		`INSERT INTO users (biometric_id, username, email, device_info, auth_type, created_at, last_login) VALUES (?, ?, ?, ?, 'biometric', NOW(), NOW())`,
+		`INSERT INTO users (biometric_id, username, name, email, device_info, auth_type, created_at, last_login) VALUES (?, ?, ?, ?, ?, 'biometric', NOW(), NOW())`,
 		req.BiometricID,
+		req.Username,
 		req.Username,
 		sql.NullString{String: req.Email, Valid: req.Email != ""},
 		sql.NullString{String: req.DeviceInfo, Valid: req.DeviceInfo != ""},

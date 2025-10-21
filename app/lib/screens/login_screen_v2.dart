@@ -31,6 +31,7 @@ class _LoginScreenV2State extends State<LoginScreenV2>
   bool _npuLoading = false;
   bool _isAuthenticating = false;
   String _statusMessage = '';
+  bool _hasAnnouncedNpuStatus = false;
 
   late AnimationController _pulseController;
   late Animation<double> _pulseAnimation;
@@ -128,34 +129,26 @@ class _LoginScreenV2State extends State<LoginScreenV2>
       // Intentar detectar capacidades NPU
       final capabilities = await NpuDetectorService.instance
           .detectCapabilities();
+      final hasAcceleration = capabilities.hasAcceleration;
 
-      if (capabilities.hasNnapi && mounted) {
+      if (mounted) {
         setState(() {
-          _npuAvailable = true;
+          _npuAvailable = hasAcceleration;
           _npuLoading = false;
         });
-
-        // Animar el badge IA cuando esté detectado
         _badgeController.forward();
+      } else {
+        _npuLoading = false;
+      }
 
+      if (hasAcceleration) {
         debugPrint('✅ [LOGIN] NPU/NNAPI detectado - Badge IA activado');
         debugPrint('   Dispositivo preparado para aceleración de modelos IA');
-
-        // Opcional: Notificar al usuario si no está autenticando
-        if (!_isAuthenticating) {
-          await _ttsService.speak(
-            'Aceleración por hardware detectada. Dispositivo optimizado para inteligencia artificial.',
-          );
-        }
       } else {
-        setState(() {
-          _npuLoading = false;
-        });
-        if (mounted) {
-          _badgeController.forward();
-        }
         debugPrint('⚠️ [LOGIN] NPU no disponible - usando modo estándar');
       }
+
+      await _announceNpuStatus(hasAcceleration);
     } catch (e) {
       setState(() {
         _npuLoading = false;
@@ -163,6 +156,21 @@ class _LoginScreenV2State extends State<LoginScreenV2>
       debugPrint('❌ [LOGIN] Error detectando NPU: $e');
       // No es crítico, la app funciona normalmente
     }
+  }
+
+  Future<void> _announceNpuStatus(bool hasAcceleration) async {
+    if (_hasAnnouncedNpuStatus) return;
+    _hasAnnouncedNpuStatus = true;
+
+    if (_isAuthenticating) {
+      return;
+    }
+
+    final message = hasAcceleration
+        ? 'Aceleración por hardware detectada. Dispositivo optimizado para inteligencia artificial.'
+        : 'No se detectaron aceleradores de inteligencia artificial. Continuaremos en modo estándar.';
+
+    await _ttsService.speak(message);
   }
 
   Future<void> _syncBackendSession({String? username, String? email}) async {
