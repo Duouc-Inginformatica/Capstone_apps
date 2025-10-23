@@ -2502,7 +2502,7 @@ class _MapScreenState extends State<MapScreen> {
       _activeNotifications.add(notification);
 
       _messageHistory.add(notification.message);
-      if (_messageHistory.length > 4) {
+      if (_messageHistory.length > 1) {
         _messageHistory.removeAt(0);
       }
     });
@@ -4084,13 +4084,13 @@ class _MapScreenState extends State<MapScreen> {
       return const Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          CircularProgressIndicator(color: Colors.white, strokeWidth: 3),
-          SizedBox(height: 12),
+          CircularProgressIndicator(color: Colors.white, strokeWidth: 2.5),
+          SizedBox(height: 8),
           Text(
             'Calculando...',
             style: TextStyle(
               color: Colors.white,
-              fontSize: 14,
+              fontSize: 12,
               fontWeight: FontWeight.w500,
             ),
           ),
@@ -4105,12 +4105,12 @@ class _MapScreenState extends State<MapScreen> {
         Icon(
           _isListening ? Icons.mic : Icons.mic_none,
           color: Colors.white,
-          size: 56,
+          size: 40,
         ),
 
         // Brújula (orientación) si está disponible - siempre visible
         if (_currentPosition?.heading != null) ...[
-          const SizedBox(height: 12),
+          const SizedBox(height: 6),
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
@@ -4119,15 +4119,15 @@ class _MapScreenState extends State<MapScreen> {
                 child: const Icon(
                   Icons.navigation,
                   color: Colors.white,
-                  size: 24,
+                  size: 18,
                 ),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 6),
               Text(
                 '${_currentPosition!.heading.toStringAsFixed(0)}°',
                 style: const TextStyle(
                   color: Colors.white,
-                  fontSize: 16,
+                  fontSize: 14,
                   fontWeight: FontWeight.w600,
                 ),
               ),
@@ -4686,7 +4686,7 @@ class _MapScreenState extends State<MapScreen> {
     return SafeArea(
       top: false,
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
         child: Center(
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 640),
@@ -4697,17 +4697,17 @@ class _MapScreenState extends State<MapScreen> {
                   begin: Alignment.topCenter,
                   end: Alignment.bottomCenter,
                 ),
-                borderRadius: BorderRadius.circular(28),
+                borderRadius: BorderRadius.circular(24),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.08),
-                    blurRadius: 24,
-                    offset: const Offset(0, 12),
+                    color: Colors.black.withValues(alpha: 0.06),
+                    blurRadius: 16,
+                    offset: const Offset(0, 6),
                   ),
                 ],
               ),
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(20, 20, 20, 12),
+                padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -4715,31 +4715,31 @@ class _MapScreenState extends State<MapScreen> {
                     Align(
                       alignment: Alignment.center,
                       child: Container(
-                        width: 48,
-                        height: 5,
+                        width: 40,
+                        height: 4,
                         decoration: BoxDecoration(
                           color: Colors.black.withValues(alpha: 0.12),
                           borderRadius: BorderRadius.circular(12),
                         ),
                       ),
                     ),
-                    const SizedBox(height: 18),
+                    const SizedBox(height: 12),
                     Text(
                       _statusMessage(),
                       textAlign: TextAlign.center,
                       style: TextStyle(
-                        fontSize: 16,
+                        fontSize: 14,
                         fontWeight: FontWeight.w600,
                         color: isListening
                             ? const Color(0xFF00BCD4)
                             : const Color(0xFF111827),
                       ),
-                      maxLines: 3,
+                      maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                     ),
                     if (isListening && _speechConfidence > 0)
                       Padding(
-                        padding: const EdgeInsets.only(top: 12),
+                        padding: const EdgeInsets.only(top: 8),
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
@@ -4816,19 +4816,19 @@ class _MapScreenState extends State<MapScreen> {
                           duration: const Duration(milliseconds: 320),
                           curve: Curves.easeInOut,
                           width: double.infinity,
-                          height: 120,
+                          height: 85,
                           decoration: BoxDecoration(
                             gradient: LinearGradient(
                               colors: micGradient,
                               begin: Alignment.topLeft,
                               end: Alignment.bottomRight,
                             ),
-                            borderRadius: BorderRadius.circular(28),
+                            borderRadius: BorderRadius.circular(20),
                             boxShadow: [
                               BoxShadow(
-                                color: micShadowColor.withValues(alpha: 0.35),
-                                blurRadius: 26,
-                                offset: const Offset(0, 12),
+                                color: micShadowColor.withValues(alpha: 0.25),
+                                blurRadius: 16,
+                                offset: const Offset(0, 6),
                               ),
                             ],
                           ),
@@ -4836,7 +4836,7 @@ class _MapScreenState extends State<MapScreen> {
                         ),
                       ),
                     ),
-                    const SizedBox(height: 14),
+                    const SizedBox(height: 10),
                     AnimatedSize(
                       duration: const Duration(milliseconds: 300),
                       curve: Curves.easeInOut,
@@ -4946,50 +4946,65 @@ class _MapScreenState extends State<MapScreen> {
       label: 'Mensajes recientes',
       child: Container(
         margin: const EdgeInsets.only(bottom: 12),
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(12),
+        constraints: const BoxConstraints(
+          maxHeight: 90, // Limitar altura máxima para no cubrir el mapa
+        ),
         decoration: BoxDecoration(
           color: const Color(0xFF111827),
-          borderRadius: BorderRadius.circular(20),
+          borderRadius: BorderRadius.circular(16),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withValues(alpha: 0.25),
-              blurRadius: 20,
-              offset: const Offset(0, 12),
+              color: Colors.black.withValues(alpha: 0.2),
+              blurRadius: 12,
+              offset: const Offset(0, 6),
             ),
           ],
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
           children: [
             Row(
               children: const [
-                Icon(Icons.campaign, color: Colors.white, size: 22),
-                SizedBox(width: 8),
+                Icon(Icons.campaign, color: Colors.white, size: 18),
+                SizedBox(width: 6),
                 Expanded(
                   child: Text(
                     'Mensajes recientes',
                     style: TextStyle(
                       color: Colors.white,
-                      fontSize: 15,
+                      fontSize: 13,
                       fontWeight: FontWeight.w700,
                     ),
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 12),
-            for (int i = 0; i < entries.length; i++) ...[
-              Text(
-                entries[i],
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 14,
-                  height: 1.4,
-                  fontWeight: FontWeight.w500,
+            const SizedBox(height: 8),
+            Flexible(
+              child: SingleChildScrollView(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    for (int i = 0; i < entries.length; i++) ...[
+                      Text(
+                        entries[i],
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 12,
+                          height: 1.3,
+                          fontWeight: FontWeight.w500,
+                        ),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      if (i != entries.length - 1) const SizedBox(height: 6),
+                    ],
+                  ],
                 ),
               ),
-              if (i != entries.length - 1) const SizedBox(height: 8),
-            ],
+            ),
           ],
         ),
       ),

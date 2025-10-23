@@ -458,7 +458,7 @@ func (s *Scraper) reverseGeocode(lat, lon float64) (string, error) {
 	return "", fmt.Errorf("no display_name in response")
 }
 
-// scrapeMovitWithCorrectURL usa Chrome headless para obtener el HTML completo con JavaScript ejecutado
+// scrapeMovitWithCorrectURL usa Edge headless para obtener el HTML completo con JavaScript ejecutado
 // RETORNA: Múltiples opciones de rutas extraídas de Moovit
 func (s *Scraper) scrapeMovitWithCorrectURL(originName, destName string, originLat, originLon, destLat, destLon float64) (*RouteOptions, error) {
 	// URL correcta de Moovit
@@ -474,40 +474,45 @@ func (s *Scraper) scrapeMovitWithCorrectURL(originName, destName string, originL
 	)
 
 	log.Printf("🔍 [MOOVIT] URL construida: %s", moovitURL)
-	log.Printf("🌐 [MOOVIT] Iniciando Chrome headless...")
+	log.Printf("🌐 [MOOVIT] Iniciando Edge headless...")
 
-	// Detectar Chrome/Edge en Windows
-	chromePaths := []string{
-		"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
-		"C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+	// Detectar Edge en Windows (prioridad a Edge)
+	edgePaths := []string{
 		"C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
 		"C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
 	}
 
-	var chromePath string
-	for _, path := range chromePaths {
+	var edgePath string
+	for _, path := range edgePaths {
 		if _, err := os.Stat(path); err == nil {
-			chromePath = path
-			log.Printf("✅ [CHROME] Encontrado en: %s", chromePath)
+			edgePath = path
+			log.Printf("✅ [EDGE] Encontrado en: %s", edgePath)
 			break
 		}
 	}
 
-	if chromePath == "" {
-		return nil, fmt.Errorf("no se encontró Chrome o Edge instalado. Instala Chrome desde https://www.google.com/chrome/")
+	if edgePath == "" {
+		return nil, fmt.Errorf("no se encontró Microsoft Edge instalado")
 	}
 
-	// Crear contexto con timeout de 30 segundos
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// Crear contexto con timeout de 90 segundos (aumentado significativamente para conexiones lentas)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
-	// Crear contexto de Chrome con opciones
+	// Crear contexto de Edge con opciones optimizadas
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
-		chromedp.ExecPath(chromePath),
+		chromedp.ExecPath(edgePath),
 		chromedp.Flag("headless", true),
 		chromedp.Flag("disable-gpu", true),
 		chromedp.Flag("no-sandbox", true),
 		chromedp.Flag("disable-dev-shm-usage", true),
+		chromedp.Flag("disable-extensions", true),
+		chromedp.Flag("disable-background-networking", true),
+		chromedp.Flag("disable-default-apps", true),
+		chromedp.Flag("disable-sync", true),
+		chromedp.Flag("metrics-recording-only", true),
+		chromedp.Flag("no-first-run", true),
+		chromedp.WindowSize(1920, 1080),
 		chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
 	)
 
@@ -515,7 +520,7 @@ func (s *Scraper) scrapeMovitWithCorrectURL(originName, destName string, originL
 	defer allocCancel()
 
 	// Crear contexto del navegador
-	browserCtx, browserCancel := chromedp.NewContext(allocCtx, chromedp.WithLogf(log.Printf))
+	browserCtx, browserCancel := chromedp.NewContext(allocCtx)
 	defer browserCancel()
 
 	// Variable para capturar el HTML
@@ -530,10 +535,10 @@ func (s *Scraper) scrapeMovitWithCorrectURL(originName, destName string, originL
 		// ETAPA 1: Cargar página inicial
 		chromedp.Navigate(moovitURL),
 		chromedp.WaitVisible(`mv-suggested-route`, chromedp.ByQuery),
-		chromedp.Sleep(3*time.Second),
+		chromedp.Sleep(2*time.Second), // Reducido de 3s a 2s
 		chromedp.OuterHTML(`html`, &htmlStage1, chromedp.ByQuery),
 		chromedp.ActionFunc(func(ctx context.Context) error {
-			log.Printf("   � ETAPA 1: HTML inicial capturado (%d chars)", len(htmlStage1))
+			log.Printf("   ✅ ETAPA 1: HTML inicial capturado (%d chars)", len(htmlStage1))
 			return nil
 		}),
 
@@ -556,7 +561,7 @@ func (s *Scraper) scrapeMovitWithCorrectURL(originName, destName string, originL
 			log.Printf("      ✅ URL actual: %s", itineraryURL)
 			return nil
 		}),
-		chromedp.Sleep(5*time.Second), // Esperar a que Angular actualice la URL y renderice contenido
+		chromedp.Sleep(3*time.Second), // Reducido de 5s a 3s - Angular suele actualizar rápido
 
 		// ETAPA 3: Capturar HTML después de la navegación
 		chromedp.OuterHTML(`html`, &htmlStage2, chromedp.ByQuery),
@@ -631,7 +636,7 @@ func (s *Scraper) scrapeMovitWithCorrectURL(originName, destName string, originL
 			log.Printf("      ✅ Clicks para expandir: %v", clicksResult)
 			return nil
 		}),
-		chromedp.Sleep(3*time.Second), // Esperar a que se expandan los detalles
+		chromedp.Sleep(2*time.Second), // Reducido de 3s a 2s - los detalles se expanden rápidamente
 
 		// ETAPA 4: Hacer scroll hacia abajo para cargar toda la lista de paradas (lazy loading)
 		chromedp.ActionFunc(func(ctx context.Context) error {
@@ -662,7 +667,7 @@ func (s *Scraper) scrapeMovitWithCorrectURL(originName, destName string, originL
 			log.Printf("      ✅ Scroll realizado: %v px", scrollResult)
 			return nil
 		}),
-		chromedp.Sleep(2*time.Second), // Esperar a que cargue contenido lazy
+		chromedp.Sleep(1500*time.Millisecond), // Reducido de 2s a 1.5s - el lazy loading es rápido
 
 		// ETAPA 5: Extraer paraderos con JavaScript detallado
 		chromedp.ActionFunc(func(ctx context.Context) error {
@@ -744,7 +749,7 @@ func (s *Scraper) scrapeMovitWithCorrectURL(originName, destName string, originL
 			}
 			return nil
 		}),
-		chromedp.Sleep(2*time.Second),
+		chromedp.Sleep(1*time.Second), // Reducido de 2s a 1s - solo esperar a que el DOM se actualice
 		chromedp.OuterHTML(`html`, &htmlStage3, chromedp.ByQuery),
 		chromedp.ActionFunc(func(ctx context.Context) error {
 			log.Printf("   📄 ETAPA 6: HTML final capturado (%d chars)", len(htmlStage3))
@@ -766,7 +771,23 @@ func (s *Scraper) scrapeMovitWithCorrectURL(originName, destName string, originL
 
 	if err != nil {
 		log.Printf("❌ [MOOVIT] Error en Chrome: %v", err)
-		return nil, fmt.Errorf("error ejecutando Chrome headless: %v", err)
+		// Intentar determinar qué etapa falló basándose en cuánto HTML se capturó
+		if len(htmlStage1) > 0 {
+			log.Printf("   ℹ️  ETAPA 1 completada (%d chars)", len(htmlStage1))
+		} else {
+			log.Printf("   ❌ ETAPA 1 falló (navegación inicial)")
+		}
+		if len(htmlStage2) > 0 {
+			log.Printf("   ℹ️  ETAPA 2 completada (%d chars)", len(htmlStage2))
+		} else {
+			log.Printf("   ❌ ETAPA 2 falló (después de click)")
+		}
+		if len(htmlStage3) > 0 {
+			log.Printf("   ℹ️  ETAPA 3 completada (%d chars)", len(htmlStage3))
+		} else {
+			log.Printf("   ❌ ETAPA 3 falló (HTML final)")
+		}
+		return nil, fmt.Errorf("error ejecutando Chrome: %v", err)
 	}
 
 	log.Printf("📄 [MOOVIT] HTML con JavaScript ejecutado: %d caracteres", len(htmlContent))
@@ -2636,62 +2657,93 @@ func (s *Scraper) GetLightweightRouteOptions(originLat, originLon, destLat, dest
 	return s.parseLightweightOptions(htmlContent, originLat, originLon, destLat, destLon)
 }
 
-// fetchMovitHTML usa Chrome headless para obtener el HTML renderizado de Moovit
+// fetchMovitHTML usa Edge headless para obtener el HTML renderizado de Moovit
 func (s *Scraper) fetchMovitHTML(moovitURL string) (string, error) {
-	log.Printf("🌐 [MOOVIT] Iniciando Chrome headless...")
+	log.Printf("🌐 [MOOVIT] Iniciando Edge headless...")
 
-	// Detectar Chrome/Edge en Windows
-	chromePaths := []string{
-		"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
-		"C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+	// Detectar Edge en Windows (prioridad a Edge)
+	edgePaths := []string{
 		"C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
 		"C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
 	}
 
-	var chromePath string
-	for _, path := range chromePaths {
+	var edgePath string
+	for _, path := range edgePaths {
 		if _, err := os.Stat(path); err == nil {
-			chromePath = path
-			log.Printf("✅ [CHROME] Encontrado en: %s", chromePath)
+			edgePath = path
+			log.Printf("✅ [EDGE] Encontrado en: %s", edgePath)
 			break
 		}
 	}
 
-	if chromePath == "" {
-		return "", fmt.Errorf("no se encontró Chrome o Edge instalado")
+	if edgePath == "" {
+		return "", fmt.Errorf("no se encontró Microsoft Edge instalado")
 	}
 
-	// Crear contexto con timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// Crear contexto con timeout de 90 segundos (aumentado significativamente para conexiones lentas)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
-	// Crear contexto de Chrome
+	// Crear contexto de Edge con opciones optimizadas
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
-		chromedp.ExecPath(chromePath),
+		chromedp.ExecPath(edgePath),
 		chromedp.Flag("headless", true),
 		chromedp.Flag("disable-gpu", true),
 		chromedp.Flag("no-sandbox", true),
 		chromedp.Flag("disable-dev-shm-usage", true),
+		chromedp.Flag("disable-extensions", true),
+		chromedp.Flag("disable-background-networking", true),
+		chromedp.Flag("disable-default-apps", true),
+		chromedp.Flag("disable-sync", true),
+		chromedp.Flag("metrics-recording-only", true),
+		chromedp.Flag("no-first-run", true),
+		chromedp.WindowSize(1920, 1080), // Tamaño de ventana consistente
 		chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
 	)
 
 	allocCtx, allocCancel := chromedp.NewExecAllocator(ctx, opts...)
 	defer allocCancel()
 
-	browserCtx, browserCancel := chromedp.NewContext(allocCtx, chromedp.WithLogf(log.Printf))
+	browserCtx, browserCancel := chromedp.NewContext(allocCtx)
 	defer browserCancel()
 
 	var htmlContent string
+	log.Printf("🌐 [MOOVIT] Navegando a URL: %s", moovitURL)
 
+	// Intentar estrategia más robusta con timeout individual por paso
 	err := chromedp.Run(browserCtx,
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			log.Printf("   📍 Paso 1: Navegando a Moovit...")
+			return nil
+		}),
 		chromedp.Navigate(moovitURL),
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			log.Printf("   ✅ Paso 1 completado")
+			log.Printf("   📍 Paso 2: Esperando carga de rutas...")
+			return nil
+		}),
+		// Esperar con timeout más largo
 		chromedp.WaitVisible(`mv-suggested-route`, chromedp.ByQuery),
-		chromedp.Sleep(2*time.Second),
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			log.Printf("   ✅ Paso 2 completado - rutas visibles")
+			log.Printf("   📍 Paso 3: Esperando renderizado completo...")
+			return nil
+		}),
+		chromedp.Sleep(3*time.Second), // Aumentado a 3s para asegurar renderizado
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			log.Printf("   📍 Paso 4: Extrayendo HTML...")
+			return nil
+		}),
 		chromedp.OuterHTML(`html`, &htmlContent, chromedp.ByQuery),
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			log.Printf("   ✅ HTML extraído: %d caracteres", len(htmlContent))
+			return nil
+		}),
 	)
 
 	if err != nil {
-		return "", fmt.Errorf("error ejecutando Chrome: %v", err)
+		log.Printf("❌ [MOOVIT] Error detallado: %v", err)
+		return "", fmt.Errorf("error ejecutando Edge: %v", err)
 	}
 
 	// Guardar HTML para debugging
@@ -2884,9 +2936,9 @@ func (s *Scraper) GetDetailedItinerary(originLat, originLon, destLat, destLon fl
 	var htmlContent string
 
 	if cached, exists := s.htmlCache[cacheKey]; exists {
-		// Verificar si el caché es reciente (5 minutos)
+		// Verificar si el caché es reciente (15 minutos - aumentado para reducir scraping)
 		age := time.Since(cached.Timestamp)
-		if age < 5*time.Minute {
+		if age < 15*time.Minute {
 			log.Printf("✅ Usando HTML cacheado (edad: %.0f segundos)", age.Seconds())
 			htmlContent = cached.HTML
 		} else {
@@ -2920,10 +2972,25 @@ func (s *Scraper) GetDetailedItinerary(originLat, originLon, destLat, destLon fl
 			destLat, destLon,
 		)
 
+		// Intentar scraping con retry (máximo 2 intentos)
 		var err error
-		htmlContent, err = s.fetchMovitHTML(moovitURL)
+		maxRetries := 2
+		for attempt := 1; attempt <= maxRetries; attempt++ {
+			log.Printf("🔄 Intento %d/%d de scraping...", attempt, maxRetries)
+			htmlContent, err = s.fetchMovitHTML(moovitURL)
+			if err == nil {
+				log.Printf("✅ Scraping exitoso en intento %d", attempt)
+				break
+			}
+			log.Printf("⚠️  Intento %d falló: %v", attempt, err)
+			if attempt < maxRetries {
+				waitTime := time.Duration(attempt*2) * time.Second
+				log.Printf("⏳ Esperando %v antes del siguiente intento...", waitTime)
+				time.Sleep(waitTime)
+			}
+		}
 		if err != nil {
-			return nil, fmt.Errorf("error obteniendo HTML: %v", err)
+			return nil, fmt.Errorf("error obteniendo HTML después de %d intentos: %v", maxRetries, err)
 		}
 	}
 
