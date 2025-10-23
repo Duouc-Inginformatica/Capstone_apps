@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/yourorg/wayfindcl/internal/geometry"
@@ -209,6 +210,29 @@ func (h *RedBusHandler) GetRedBusItineraryOptions(c *fiber.Ctx) error {
 
 	log.Printf("✅ Retornando %d opciones ligeras para selección por voz", len(lightweightOptions.Options))
 
+	// 📊 RESUMEN DE OPCIONES DISPONIBLES
+	if len(lightweightOptions.Options) > 0 {
+		log.Printf("\n╔══════════════════════════════════════════════════════════════════╗")
+		log.Printf("║              OPCIONES DE RUTA DISPONIBLES (FASE 1)              ║")
+		log.Printf("╠══════════════════════════════════════════════════════════════════╣")
+		for i, option := range lightweightOptions.Options {
+			busesText := strings.Join(option.RouteNumbers, ", ")
+			log.Printf("║ Opción %d: Bus %s", i+1, busesText)
+			log.Printf("║   ⏱️  Duración: %d minutos", option.TotalDuration)
+			if option.Transfers > 0 {
+				log.Printf("║   🔄 Transbordos: %d", option.Transfers)
+			}
+			if option.WalkingTime > 0 {
+				log.Printf("║   🚶 Caminata: %d minutos", option.WalkingTime)
+			}
+			log.Printf("║   📝 %s", option.Summary)
+			if i < len(lightweightOptions.Options)-1 {
+				log.Printf("╟──────────────────────────────────────────────────────────────────╢")
+			}
+		}
+		log.Printf("╚══════════════════════════════════════════════════════════════════╝\n")
+	}
+
 	// Retornar opciones para que Flutter las lea por voz
 	return c.JSON(lightweightOptions)
 }
@@ -267,7 +291,40 @@ func (h *RedBusHandler) GetRedBusItineraryDetail(c *fiber.Ctx) error {
 
 	log.Printf("✅ Geometría detallada generada con %d legs", len(detailedItinerary.Legs))
 
-	// 🔍 DEBUG: Mostrar datos que se envían al frontend
+	// � RESUMEN VISUAL DE LA RUTA (estilo Google Maps)
+	log.Printf("\n╔══════════════════════════════════════════════════════════════════╗")
+	log.Printf("║                    RESUMEN DE RUTA GENERADA                      ║")
+	log.Printf("╠══════════════════════════════════════════════════════════════════╣")
+
+	// Extraer información de los buses
+	totalBusStops := 0
+	busDuration := 0
+	busRoutes := []string{}
+	walkDuration := 0
+	totalWalkDistance := 0.0
+
+	for _, leg := range detailedItinerary.Legs {
+		if leg.Type == "bus" {
+			totalBusStops += len(leg.Stops)
+			busDuration += leg.Duration
+			if leg.RouteNumber != "" {
+				busRoutes = append(busRoutes, leg.RouteNumber)
+			}
+		} else if leg.Type == "walk" {
+			walkDuration += leg.Duration
+			totalWalkDistance += leg.Distance
+		}
+	}
+
+	log.Printf("║ 🚌 Buses a tomar: %s", strings.Join(busRoutes, ", "))
+	log.Printf("║ 🚏 Total de paradas: %d paradas", totalBusStops)
+	log.Printf("║ ⏱️  Tiempo en bus: %d minutos", busDuration)
+	log.Printf("║ 🚶 Tiempo caminando: %d minutos (%.2f km)", walkDuration, totalWalkDistance)
+	log.Printf("║ ⏰ Duración total: %d minutos", detailedItinerary.TotalDuration)
+	log.Printf("║ 📏 Distancia total: %.2f km", detailedItinerary.TotalDistance)
+	log.Printf("╚══════════════════════════════════════════════════════════════════╝\n")
+
+	// �� DEBUG: Mostrar datos que se envían al frontend
 	log.Printf("🔍 [DEBUG-RESPONSE] ========== DATOS ENVIADOS AL FRONTEND ==========")
 	log.Printf("🔍 [DEBUG-RESPONSE] Total Legs: %d", len(detailedItinerary.Legs))
 	log.Printf("🔍 [DEBUG-RESPONSE] Duración Total: %d min", detailedItinerary.TotalDuration)
@@ -306,11 +363,21 @@ func (h *RedBusHandler) GetRedBusItineraryDetail(c *fiber.Ctx) error {
 		}
 
 		if len(leg.Stops) > 0 {
-			log.Printf("   Paradas en este leg:")
+			log.Printf("   ┌─────────────────────────────────────────────────────────────┐")
+			log.Printf("   │ 🚏 PARADAS DE LA RUTA %s (%d paradas)", leg.RouteNumber, len(leg.Stops))
+			log.Printf("   ├─────────────────────────────────────────────────────────────┤")
 			for j, stop := range leg.Stops {
-				log.Printf("      [%d] %s [%s] - Seq:%d (%.6f, %.6f)",
-					j+1, stop.Name, stop.Code, stop.Sequence, stop.Latitude, stop.Longitude)
+				stopType := "   "
+				if j == 0 {
+					stopType = "🟢" // Primera parada
+				} else if j == len(leg.Stops)-1 {
+					stopType = "🔴" // Última parada
+				} else {
+					stopType = "⚪" // Parada intermedia
+				}
+				log.Printf("   │ %s %2d. %-45s [%s]", stopType, j+1, stop.Name, stop.Code)
 			}
+			log.Printf("   └─────────────────────────────────────────────────────────────┘")
 		}
 	}
 	log.Printf("🔍 [DEBUG-RESPONSE] ========== FIN DATOS ==========")

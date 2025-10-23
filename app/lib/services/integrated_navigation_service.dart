@@ -15,7 +15,7 @@ import 'tts_service.dart';
 import 'bus_arrivals_service.dart';
 
 class NavigationStep {
-  final String type; // 'walk', 'wait_bus', 'ride_bus', 'transfer', 'arrival'
+  final String type; // 'walk', 'bus', 'transfer', 'arrival'
   final String instruction;
   final LatLng? location;
   final String? stopId;
@@ -31,6 +31,7 @@ class NavigationStep {
   final int? realDurationSeconds; // Duración real en segundos
   final List<String>?
   streetInstructions; // Instrucciones detalladas de navegación por calles
+  final List<Map<String, dynamic>>? busStops; // Paradas completas del bus (del backend)
 
   NavigationStep({
     required this.type,
@@ -47,6 +48,7 @@ class NavigationStep {
     this.realDistanceMeters,
     this.realDurationSeconds,
     this.streetInstructions,
+    this.busStops,
   });
 
   NavigationStep copyWith({
@@ -71,6 +73,7 @@ class NavigationStep {
       realDistanceMeters: realDistanceMeters ?? this.realDistanceMeters,
       realDurationSeconds: realDurationSeconds ?? this.realDurationSeconds,
       streetInstructions: streetInstructions ?? this.streetInstructions,
+      busStops: busStops,
     );
   }
 }
@@ -113,9 +116,7 @@ class ActiveNavigation {
     switch (step.type) {
       case 'walk':
         return 'Caminando hacia ${step.stopName ?? "el siguiente punto"}';
-      case 'wait_bus':
-        return 'Esperando el bus ${step.busRoute} en ${step.stopName}';
-      case 'ride_bus':
+      case 'bus':
         return 'Viajando en el bus ${step.busRoute}';
       case 'arrival':
         return 'Llegando a tu destino';
@@ -154,8 +155,8 @@ class ActiveNavigation {
         '🔍 Geometría encontrada para paso $currentStepIndex: ${geometry.length} puntos',
       );
 
-      // Si es paso de walk o ride_bus, recortar geometría desde el punto más cercano al usuario
-      if ((step.type == 'walk' || step.type == 'ride_bus') &&
+      // Si es paso de walk o bus, recortar geometría desde el punto más cercano al usuario
+      if ((step.type == 'walk' || step.type == 'bus') &&
           geometry.length >= 2) {
         developer.log(
           '🔍 Paso ${step.type.toUpperCase()}: Recortando geometría desde posición actual',
@@ -310,7 +311,7 @@ class IntegratedNavigationService {
   DateTime? _lastProgressAnnouncement;
   double? _lastAnnouncedDistance;
 
-  // Control de paradas visitadas durante ride_bus
+  // Control de paradas visitadas durante viaje en bus
   final Set<String> _announcedStops = {}; // IDs de paradas ya anunciadas
   int _currentBusStopIndex = 0; // Índice de la parada actual en el viaje
 
@@ -465,13 +466,37 @@ class IntegratedNavigationService {
           );
         }
       } else if (leg.type == 'bus' && leg.isRedBus) {
-        // Paso de bus: combina espera + viaje en UN SOLO paso
+        // Paso de bus: UN SOLO paso tipo 'bus' (simplificado)
+        // La detección de subir al bus se hará por velocidad GPS
         developer.log(
           '🚌 Paso BUS ${leg.routeNumber}: ${leg.departStop?.name} → ${leg.arriveStop?.name}',
         );
+        developer.log(
+          '🚌 Paradas en el bus: ${leg.stops?.length ?? 0}',
+        );
 
-        final stopInfo = await _getStopInfoFromGTFS(leg.departStop?.name ?? '');
-        final busOptions = await _getBusesAtStop(stopInfo?['stop_id'] ?? '');
+        // Convertir stops a formato simple para el NavigationStep
+        List<Map<String, dynamic>>? busStops;
+        if (leg.stops != null && leg.stops!.isNotEmpty) {
+          busStops = leg.stops!.map((stop) {
+            return {
+              'name': stop.name,
+              'code': stop.code,
+              'lat': stop.location.latitude,
+              'lng': stop.location.longitude,
+            };
+          }).toList();
+
+          developer.log(
+            '🚌 Paradas convertidas: ${busStops.length} paradas',
+          );
+          developer.log(
+            '   Primera: ${busStops.first['name']} [${busStops.first['code']}]',
+          );
+          developer.log(
+            '   Última: ${busStops.last['name']} [${busStops.last['code']}]',
+          );
+        }
 
         steps.add(
           NavigationStep(
@@ -479,15 +504,15 @@ class IntegratedNavigationService {
             instruction:
                 'Toma el bus Red ${leg.routeNumber} en ${leg.departStop?.name} hasta ${leg.arriveStop?.name}',
             location: leg.arriveStop?.location,
-            stopId: stopInfo?['stop_id'],
+            stopId: null, // Sin consultar GTFS para optimizar
             stopName: leg.arriveStop?.name,
             busRoute: leg.routeNumber,
-            busOptions: busOptions,
-            estimatedDuration:
-                leg.durationMinutes + 5, // Viaje + espera estimada
+            busOptions: const [], // Sin consultar para optimizar
+            estimatedDuration: leg.durationMinutes + 5, // Incluye espera
             totalStops: leg.stopCount,
             realDistanceMeters: leg.distanceKm * 1000,
             realDurationSeconds: leg.durationMinutes * 60,
+            busStops: busStops, // Paradas del backend
           ),
         );
       }
@@ -509,19 +534,19 @@ class IntegratedNavigationService {
     return steps;
   }
 
-  /// Obtiene información del paradero desde GTFS por nombre
-  Future<Map<String, dynamic>?> _getStopInfoFromGTFS(String stopName) async {
-    // TODO: Implementar cuando ApiClient tenga método get()
-    // final response = await ApiClient.instance.get('/api/stops/search?name=$stopName');
-    return null;
-  }
+  // /// Obtiene información del paradero desde GTFS por nombre
+  // Future<Map<String, dynamic>?> _getStopInfoFromGTFS(String stopName) async {
+  //   // TODO: Implementar cuando ApiClient tenga método get()
+  //   // final response = await ApiClient.instance.get('/api/stops/search?name=$stopName');
+  //   return null;
+  // }
 
-  /// Obtiene lista de buses que pasan por un paradero
-  Future<List<String>> _getBusesAtStop(String stopId) async {
-    // TODO: Implementar cuando ApiClient tenga método get()
-    // final response = await ApiClient.instance.get('/api/stops/$stopId/routes');
-    return [];
-  }
+  // /// Obtiene lista de buses que pasan por un paradero
+  // Future<List<String>> _getBusesAtStop(String stopId) async {
+  //   // TODO: Implementar cuando ApiClient tenga método get()
+  //   // final response = await ApiClient.instance.get('/api/stops/$stopId/routes');
+  //   return [];
+  // }
 
   /// Construye la geometría completa de la ruta
   Future<List<LatLng>> _buildCompleteRouteGeometry(
@@ -827,14 +852,38 @@ Te iré guiando paso a paso.
       }
     }
 
-    // Si está esperando un bus, detectar buses cercanos
-    if (currentStep.type == 'wait_bus') {
-      _detectNearbyBuses(currentStep, userLocation);
-    }
-
-    // Si está en el bus (ride_bus), detectar y anunciar paradas intermedias
-    if (currentStep.type == 'ride_bus') {
-      _checkBusStopsProgress(currentStep, userLocation);
+    // Si está en un paso de bus, detectar si está esperando o ya subió
+    if (currentStep.type == 'bus') {
+      // Si está cerca del paradero de inicio Y no se ha movido mucho, está esperando
+      final busLegs = _activeNavigation!.itinerary.legs
+          .where((leg) => leg.type == 'bus')
+          .toList();
+      
+      if (busLegs.isNotEmpty) {
+        final busLeg = busLegs.first;
+        final departStop = busLeg.departStop?.location;
+        
+        if (departStop != null) {
+          final distanceToStart = _distance.as(
+            LengthUnit.Meter,
+            userLocation,
+            departStop,
+          );
+          
+          // Si está cerca del paradero de inicio (< 50m) y velocidad baja, está esperando
+          if (distanceToStart < 50 && position.speed < 1.0) {
+            developer.log('🚌 Usuario esperando el bus en el paradero');
+          }
+          // Si está moviéndose rápido, asumimos que subió al bus
+          else if (position.speed > 2.0) {
+            developer.log(
+              '🚌 [BUS-RIDING] Usuario en movimiento (${position.speed.toStringAsFixed(1)} m/s) - Anunciando paradas',
+            );
+            // Anunciar paradas intermedias
+            _checkBusStopsProgress(currentStep, userLocation);
+          }
+        }
+      }
     }
   }
 
@@ -881,10 +930,7 @@ Te iré guiando paso a paso.
       case 'walk':
         message = 'Te estás acercando al paradero ${step.stopName}';
         break;
-      case 'wait_bus':
-        message = 'Has llegado al paradero. Espera el bus ${step.busRoute}';
-        break;
-      case 'ride_bus':
+      case 'bus':
         message = 'Próxima parada: ${step.stopName}';
         break;
       case 'arrival':
@@ -951,7 +997,7 @@ Te iré guiando paso a paso.
         }
         message += ' para llegar al $simplifiedStopName';
       }
-    } else if (step.type == 'ride_bus') {
+    } else if (step.type == 'bus') {
       final km = (distanceMeters / 1000).toStringAsFixed(1);
       final simplifiedStopName = _simplifyStopNameForTTS(
         step.stopName,
@@ -959,12 +1005,6 @@ Te iré guiando paso a paso.
       );
       message =
           'Viajando en bus ${step.busRoute}. Faltan $km kilómetros hasta $simplifiedStopName';
-    } else if (step.type == 'wait_bus') {
-      final simplifiedStopName = _simplifyStopNameForTTS(
-        step.stopName,
-        isDestination: true,
-      );
-      message = 'Esperando el bus ${step.busRoute} en $simplifiedStopName';
     }
 
     if (message.isNotEmpty) {
@@ -999,17 +1039,16 @@ Te iré guiando paso a paso.
         onArrivalAtStop?.call(step.stopId ?? '');
         break;
 
-      case 'wait_bus':
-        announcement =
-            'Estás en el paradero correcto. Espera el bus Red ${step.busRoute}';
-        break;
-
-      case 'ride_bus':
+      case 'bus':
+        // Cuando llega al destino del paso de bus (paradero de bajada)
         final simplifiedStopName = _simplifyStopNameForTTS(
           step.stopName,
           isDestination: true,
         );
         announcement = 'Bájate aquí. Has llegado a $simplifiedStopName';
+        // Resetear control de paradas para el siguiente viaje
+        _announcedStops.clear();
+        _currentBusStopIndex = 0;
         break;
 
       case 'arrival':
@@ -1029,16 +1068,7 @@ Te iré guiando paso a paso.
     _lastProgressAnnouncement = null;
     _lastAnnouncedDistance = null;
 
-    // Si el siguiente paso es ride_bus, resetear control de paradas
     final nextStep = _activeNavigation!.currentStep;
-    if (nextStep?.type == 'ride_bus') {
-      _announcedStops.clear();
-      _currentBusStopIndex = 0;
-      developer.log(
-        '🚌 [BUS_STOPS] Iniciando nuevo viaje en bus - resetear paradas',
-      );
-    }
-
     onStepChanged?.call(nextStep ?? step);
 
     // Combinar anuncio actual con el siguiente paso
@@ -1054,86 +1084,60 @@ Te iré guiando paso a paso.
     }
   }
 
-  /// Detecta buses cercanos usando datos de tiempo real
-  Future<void> _detectNearbyBuses(
-    NavigationStep step,
-    LatLng userLocation,
-  ) async {
-    if (step.stopId == null) return;
+  // /// Detecta buses cercanos usando datos de tiempo real
+  // Future<void> _detectNearbyBuses(
+  //   NavigationStep step,
+  //   LatLng userLocation,
+  // ) async {
+  //   if (step.stopId == null) return;
 
-    // TODO: Implementar cuando ApiClient tenga método getBusArrivals()
-    /*
-    try {
-      // Consultar API de tiempo real para obtener llegadas próximas
-      final arrivals = await ApiClient.instance.getBusArrivals(step.stopId!);
-      
-      if (arrivals.isNotEmpty) {
-        final nextBus = arrivals.first;
-        final routeShortName = nextBus['route_short_name'] ?? '';
-        final etaMinutes = nextBus['eta_minutes'] ?? 0;
-        
-        if (etaMinutes <= 5) {
-          TtsService.instance.speak(
-            'El bus $routeShortName llegará en $etaMinutes minutos.',
-          );
-        }
-      }
-    } catch (e) {
-      developer.log('⚠️ [BUS_DETECTION] Error detectando buses cercanos: $e');
-    }
-    */
-  }
+  //   // TODO: Implementar cuando ApiClient tenga método getBusArrivals()
+  //   /*
+  //   try {
+  //     // Consultar API de tiempo real para obtener llegadas próximas
+  //     final arrivals = await ApiClient.instance.getBusArrivals(step.stopId!);
+  //     
+  //     if (arrivals.isNotEmpty) {
+  //       final nextBus = arrivals.first;
+  //       final routeShortName = nextBus['route_short_name'] ?? '';
+  //       final etaMinutes = nextBus['eta_minutes'] ?? 0;
+  //       
+  //       if (etaMinutes <= 5) {
+  //         TtsService.instance.speak(
+  //           'El bus $routeShortName llegará en $etaMinutes minutos.',
+  //         );
+  //       }
+  //     }
+  //   } catch (e) {
+  //     developer.log('⚠️ [BUS_DETECTION] Error detectando buses cercanos: $e');
+  //   }
+  //   */
+  // }
 
-  /// Verifica progreso a través de paradas de bus durante ride_bus
+  /// Verifica progreso a través de paradas de bus durante viaje en bus
   /// Anuncia cada parada cuando el usuario pasa cerca
   void _checkBusStopsProgress(NavigationStep step, LatLng userLocation) {
-    // Obtener lista de paradas del leg actual
-    final currentLegIndex = _activeNavigation?.currentStepIndex;
-    if (currentLegIndex == null) {
-      developer.log('⚠️ [BUS_STOPS] currentLegIndex es null');
-      return;
-    }
+    // Usar paradas almacenadas directamente en el NavigationStep
+    final busStops = step.busStops;
 
-    developer.log('🚌 [BUS_STOPS] currentLegIndex: $currentLegIndex');
-    developer.log(
-      '🚌 [BUS_STOPS] Total legs en itinerario: ${_activeNavigation!.itinerary.legs.length}',
-    );
-
-    // Buscar el leg de bus correspondiente en el itinerario
-    final busLegs = _activeNavigation!.itinerary.legs
-        .where((leg) => leg.type == 'bus')
-        .toList();
-
-    if (busLegs.isEmpty) {
+    if (busStops == null || busStops.isEmpty) {
       developer.log(
-        '⚠️ [BUS_STOPS] No se encontró ningún leg de bus en el itinerario',
+        '⚠️ [BUS_STOPS] No hay paradas disponibles en el paso actual',
       );
       return;
     }
 
-    developer.log('🚌 [BUS_STOPS] Encontrados ${busLegs.length} legs de bus');
-
-    // Usar el primer leg de bus (normalmente solo hay uno)
-    final busLeg = busLegs.first;
-    final stops = busLeg.stops;
-
-    if (stops == null || stops.isEmpty) {
-      developer.log(
-        '⚠️ [BUS_STOPS] No hay paradas disponibles en el leg de bus',
-      );
-      developer.log('⚠️ [BUS_STOPS] busLeg.type: ${busLeg.type}');
-      developer.log('⚠️ [BUS_STOPS] busLeg.routeNumber: ${busLeg.routeNumber}');
-      return;
-    }
-
     developer.log(
-      '🚌 [BUS_STOPS] Verificando progreso: ${stops.length} paradas totales, índice actual: $_currentBusStopIndex',
+      '🚌 [BUS_STOPS] Verificando progreso: ${busStops.length} paradas totales, índice actual: $_currentBusStopIndex',
     );
 
     // Verificar cercanía a cada parada (en orden)
-    for (int i = _currentBusStopIndex; i < stops.length; i++) {
-      final stop = stops[i];
-      final stopLocation = stop.location;
+    for (int i = _currentBusStopIndex; i < busStops.length; i++) {
+      final stop = busStops[i];
+      final stopLocation = LatLng(
+        stop['lat'] as double,
+        stop['lng'] as double,
+      );
 
       final distanceToStop = _distance.as(
         LengthUnit.Meter,
@@ -1142,16 +1146,16 @@ Te iré guiando paso a paso.
       );
 
       developer.log(
-        '🚌 [STOP $i] ${stop.name}: ${distanceToStop.toStringAsFixed(0)}m',
+        '🚌 [STOP $i] ${stop['name']}: ${distanceToStop.toStringAsFixed(0)}m',
       );
 
       // Si está cerca de esta parada (50m) y no se ha anunciado
-      final stopId = '${stop.name}_${stop.sequence}';
+      final stopId = '${stop['name']}_$i';
       if (distanceToStop <= 50.0 && !_announcedStops.contains(stopId)) {
         developer.log(
           '✅ [BUS_STOPS] Parada detectada a ${distanceToStop.toStringAsFixed(0)}m - Anunciando...',
         );
-        _announceCurrentBusStop(stop, i + 1, stops.length);
+        _announceCurrentBusStop(stop, i + 1, busStops.length);
         _announcedStops.add(stopId);
         _currentBusStopIndex = i + 1; // Avanzar al siguiente índice
         break; // Solo anunciar una parada a la vez
@@ -1161,7 +1165,7 @@ Te iré guiando paso a paso.
 
   /// Anuncia la parada actual del bus
   void _announceCurrentBusStop(
-    RedBusStop stop,
+    Map<String, dynamic> stop,
     int stopNumber,
     int totalStops,
   ) {
@@ -1181,24 +1185,27 @@ Te iré guiando paso a paso.
       }
     }
 
+    final stopName = stop['name'] as String;
+    final stopCode = stop['code'] as String?;
+
     String announcement;
     if (isLastStop) {
-      final stopCode = stop.code != null && stop.code!.isNotEmpty
-          ? 'código ${stop.code}, '
+      final codeStr = stopCode != null && stopCode.isNotEmpty
+          ? 'código $stopCode, '
           : '';
       announcement =
-          'Próxima parada: $stopCode${stop.name}. Es tu parada de bajada. Prepárate para descender.';
+          'Próxima parada: $codeStr$stopName. Es tu parada de bajada. Prepárate para descender.';
     } else if (isFirstStop) {
-      final stopCode = stop.code != null && stop.code!.isNotEmpty
-          ? 'código ${stop.code}, '
+      final codeStr = stopCode != null && stopCode.isNotEmpty
+          ? 'código $stopCode, '
           : '';
       announcement =
-          'Primera parada: $stopCode${stop.name}. Ahora estás en el bus.';
+          'Primera parada: $codeStr$stopName. Ahora estás en el bus.';
     } else {
-      final stopCode = stop.code != null && stop.code!.isNotEmpty
-          ? 'código ${stop.code}, '
+      final codeStr = stopCode != null && stopCode.isNotEmpty
+          ? 'código $stopCode, '
           : '';
-      announcement = 'Parada $stopNumber de $totalStops: $stopCode${stop.name}';
+      announcement = 'Parada $stopNumber de $totalStops: $codeStr$stopName';
     }
 
     developer.log('🔔 [TTS] $announcement');
@@ -1417,39 +1424,14 @@ Te iré guiando paso a paso.
   Future<bool> _handleBusArrivalsCommand() async {
     developer.log('🚌 [VOICE] Procesando comando: Cuando llega la micro');
 
-    // Si hay navegación activa y estamos esperando el bus
+    // Información de llegadas ya no se consulta durante navegación activa
+    // para evitar bloqueo del main thread
     if (_activeNavigation != null) {
-      final currentStep = _activeNavigation!.currentStep;
-
-      if (currentStep?.type == 'wait_bus' && currentStep?.stopId != null) {
-        developer.log(
-          '🚌 [VOICE] En paradero ${currentStep!.stopId}, consultando llegadas...',
-        );
-
-        try {
-          final arrivals = await BusArrivalsService.instance.getBusArrivals(
-            currentStep.stopId!,
-          );
-
-          if (arrivals != null && arrivals.arrivals.isNotEmpty) {
-            TtsService.instance.speak(arrivals.arrivalsSummary, urgent: true);
-            return true;
-          } else {
-            TtsService.instance.speak(
-              'No hay información de buses disponible para este paradero',
-              urgent: true,
-            );
-            return true;
-          }
-        } catch (e) {
-          developer.log('❌ [VOICE] Error obteniendo llegadas: $e');
-          TtsService.instance.speak(
-            'No pude obtener información de buses en este momento',
-            urgent: true,
-          );
-          return true;
-        }
-      }
+      TtsService.instance.speak(
+        'Las paradas serán anunciadas durante tu viaje en bus',
+        urgent: true,
+      );
+      return true;
     }
 
     // Si no hay navegación activa o no estamos en un paradero,
