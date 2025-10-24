@@ -3778,9 +3778,11 @@ class _MapScreenState extends State<MapScreen> {
         ? const Color(0xFFB71C1C)
         : const Color(0xFF0097A7);
 
-    // Calcular tiempo y distancia
-    final int durationMin = (activeNav.totalDurationSeconds ~/ 60);
-    final int distanceM = activeNav.totalDistanceMeters;
+    // Calcular tiempo y distancia de forma segura
+    final int durationMin = activeNav.totalDurationSeconds != null 
+        ? (activeNav.totalDurationSeconds ~/ 60) 
+        : 0;
+    final int distanceM = activeNav.totalDistanceMeters ?? 0;
 
     return SafeArea(
       top: false,
@@ -3953,20 +3955,6 @@ class _MapScreenState extends State<MapScreen> {
                         ),
                       ),
                     ),
-                    const SizedBox(height: 12),
-                    Text(
-                      _statusMessage(),
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                        color: isListening
-                            ? const Color(0xFF00BCD4)
-                            : const Color(0xFF111827),
-                      ),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
                     if (isListening && _speechConfidence > 0)
                       Padding(
                         padding: const EdgeInsets.only(top: 8),
@@ -4064,18 +4052,6 @@ class _MapScreenState extends State<MapScreen> {
                           ),
                           child: _buildMicrophoneContent(),
                         ),
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    AnimatedSize(
-                      duration: const Duration(milliseconds: 300),
-                      curve: Curves.easeInOut,
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          _buildMessageHistoryPanel(),
-                          _buildNavigationControlsPanel(),
-                        ],
                       ),
                     ),
                     const SizedBox(height: 18),
