@@ -556,8 +556,7 @@ class IntegratedNavigationService {
         developer.log('📍 Destino: (${itinerary.destination.latitude}, ${itinerary.destination.longitude})', name: 'Navigation');
         developer.log('🚌 Buses Red: ${itinerary.redBusRoutes.join(", ")}', name: 'Navigation');
         developer.log('⏱️  Duración total: ${itinerary.totalDuration} min', name: 'Navigation');
-        developer.log('📏 Distancia total: ${itinerary.totalDistance.toStringAsFixed(2)} km', name: 'Navigation');
-        developer.log('🛣️  Legs: ${itinerary.legs.length}', name: 'Navigation');
+        developer.log('️  Legs: ${itinerary.legs.length}', name: 'Navigation');
         developer.log('─' * 80, name: 'Navigation');
         
         for (int i = 0; i < itinerary.legs.length; i++) {
@@ -581,12 +580,36 @@ class IntegratedNavigationService {
             
             if (kDebugNavigation && leg.stops!.length > 2) {
               developer.log('      Intermedias: ${leg.stops!.length - 2} paradas', name: 'Navigation');
+              // Mostrar todas las paradas intermedias para debug completo
+              for (int j = 1; j < leg.stops!.length - 1; j++) {
+                final stop = leg.stops![j];
+                developer.log('        ${j}. ${stop.name} [${stop.code ?? "sin código"}] (${stop.location.latitude.toStringAsFixed(6)}, ${stop.location.longitude.toStringAsFixed(6)})', name: 'Navigation');
+              }
             }
           }
           
           if (leg.streetInstructions != null && leg.streetInstructions!.isNotEmpty) {
             developer.log('    Instrucciones: ${leg.streetInstructions!.length}', name: 'Navigation');
+            for (int k = 0; k < leg.streetInstructions!.length; k++) {
+              developer.log('      ${k + 1}. ${leg.streetInstructions![k]}', name: 'Navigation');
+            }
           }
+          
+          // Mostrar geometría completa si está en modo debug
+          if (leg.geometry != null && leg.geometry!.isNotEmpty) {
+            developer.log('    📍 Geometría completa (${leg.geometry!.length} puntos):', name: 'Navigation');
+            developer.log('      Inicio: [${leg.geometry!.first[1]}, ${leg.geometry!.first[0]}]', name: 'Navigation');
+            developer.log('      Fin: [${leg.geometry!.last[1]}, ${leg.geometry!.last[0]}]', name: 'Navigation');
+            if (leg.geometry!.length > 10) {
+              developer.log('      (${leg.geometry!.length - 2} puntos intermedios)', name: 'Navigation');
+            } else {
+              // Si son pocos puntos, mostrarlos todos
+              for (int p = 0; p < leg.geometry!.length; p++) {
+                developer.log('        ${p + 1}. [${leg.geometry![p][1]}, ${leg.geometry![p][0]}]', name: 'Navigation');
+              }
+            }
+          }
+          
           developer.log('', name: 'Navigation');
         }
         developer.log('═' * 80, name: 'Navigation');
