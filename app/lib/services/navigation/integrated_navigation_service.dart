@@ -9,12 +9,19 @@ import 'dart:developer' as developer;
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
-import 'api_client.dart';
-import 'tts_service.dart';
-import 'bus_arrivals_service.dart';
+import '../backend/api_client.dart';
+import '../device/tts_service.dart';
+import '../backend/bus_arrivals_service.dart';
+
+// Helper para logs que se muestran tanto en consola como en developer tools
+void _log(String message) {
+  debugPrint('[IntegratedNav] $message');
+  developer.log(message, name: 'IntegratedNavigation');
+}
 
 // =============================================================================
 // MODELOS DE DATOS DEL BACKEND (de /api/red/itinerary)
@@ -82,18 +89,56 @@ class RedBusLeg {
 
     List<LatLng>? geometry;
     if (json['geometry'] != null) {
-      geometry = (json['geometry'] as List)
-          .map((g) => LatLng(
-                (g['lat'] as num).toDouble(),
-                (g['lng'] as num).toDouble(),
-              ))
-          .toList();
+      try {
+        geometry = (json['geometry'] as List)
+            .map((g) {
+              if (g == null) return null;
+              
+              // El backend devuelve arrays: [LONGITUD, LATITUD] (formato GeoJSON estándar)
+              if (g is List && g.length >= 2) {
+                final lon = (g[0] as num?)?.toDouble();  // Primer valor es longitud
+                final lat = (g[1] as num?)?.toDouble();  // Segundo valor es latitud
+                
+                if (lat == null || lon == null) return null;
+                return LatLng(lat, lon);  // LatLng espera (latitud, longitud)
+              }
+              
+              // Fallback: si viene como Map {lat, lng}
+              if (g is Map) {
+                final gMap = g as Map<String, dynamic>;
+                final lat = (gMap['lat'] as num?)?.toDouble();
+                final lng = (gMap['lng'] as num?)?.toDouble();
+                
+                if (lat == null || lng == null) return null;
+                return LatLng(lat, lng);
+              }
+              
+              debugPrint('[RedBusLeg] ⚠️ geometry item formato desconocido: ${g.runtimeType}');
+              return null;
+            })
+            .whereType<LatLng>() // Filtrar nulls
+            .toList();
+      } catch (e) {
+        debugPrint('[RedBusLeg] ⚠️ Error parseando geometry: $e');
+        geometry = null;
+      }
+    }
+
+    // Inferir isRedBus del campo 'mode' o si tiene route_number
+    bool inferredIsRedBus = false;
+    if (json['is_red_bus'] != null) {
+      inferredIsRedBus = json['is_red_bus'] as bool;
+    } else if (json['mode'] != null) {
+      final mode = (json['mode'] as String).toLowerCase();
+      inferredIsRedBus = mode == 'red' || mode == 'bus';
+    } else if (json['route_number'] != null) {
+      inferredIsRedBus = true; // Si tiene número de ruta, asumimos que es Red
     }
 
     return RedBusLeg(
       type: json['type'] as String? ?? 'walk',
       instruction: json['instruction'] as String? ?? '',
-      isRedBus: json['is_red_bus'] as bool? ?? false,
+      isRedBus: inferredIsRedBus,
       routeNumber: json['route_number'] as String?,
       departStop: json['depart_stop'] != null
           ? RedBusStop.fromJson(json['depart_stop'] as Map<String, dynamic>)
@@ -130,6 +175,30 @@ class RedBusItinerary {
   });
 
   factory RedBusItinerary.fromJson(Map<String, dynamic> json) {
+    // Parsear origin con null-safety
+    LatLng origin;
+    if (json['origin'] != null && json['origin'] is Map) {
+      final originMap = json['origin'] as Map<String, dynamic>;
+      origin = LatLng(
+        (originMap['lat'] as num?)?.toDouble() ?? 0.0,
+        (originMap['lng'] as num?)?.toDouble() ?? 0.0,
+      );
+    } else {
+      origin = const LatLng(0.0, 0.0);
+    }
+
+    // Parsear destination con null-safety
+    LatLng destination;
+    if (json['destination'] != null && json['destination'] is Map) {
+      final destMap = json['destination'] as Map<String, dynamic>;
+      destination = LatLng(
+        (destMap['lat'] as num?)?.toDouble() ?? 0.0,
+        (destMap['lng'] as num?)?.toDouble() ?? 0.0,
+      );
+    } else {
+      destination = const LatLng(0.0, 0.0);
+    }
+
     return RedBusItinerary(
       summary: json['summary'] as String? ?? '',
       totalDuration: json['total_duration'] as int? ?? 0,
@@ -140,14 +209,8 @@ class RedBusItinerary {
               ?.map((l) => RedBusLeg.fromJson(l as Map<String, dynamic>))
               .toList() ??
           [],
-      origin: LatLng(
-        (json['origin']['lat'] as num).toDouble(),
-        (json['origin']['lng'] as num).toDouble(),
-      ),
-      destination: LatLng(
-        (json['destination']['lat'] as num).toDouble(),
-        (json['destination']['lng'] as num).toDouble(),
-      ),
+      origin: origin,
+      destination: destination,
     );
   }
 }
@@ -465,14 +528,18 @@ class IntegratedNavigationService {
     required String destinationName,
     RedBusItinerary? existingItinerary, // Usar itinerario ya obtenido si existe
   }) async {
-    developer.log('🚀 Iniciando navegación integrada a $destinationName');
+    _log('🚀 [START] Iniciando navegación integrada a $destinationName');
+    _log('📍 [START] Origen: ($originLat, $originLon)');
+    _log('📍 [START] Destino: ($destLat, $destLon)');
 
-    // Inicializar posición actual
     try {
-      _lastPosition = await Geolocator.getCurrentPosition();
-    } catch (e) {
-      developer.log('⚠️ No se pudo obtener posición actual: $e');
-      // Usar coordenadas del origen como fallback
+      // Inicializar posición actual
+      try {
+        _lastPosition = await Geolocator.getCurrentPosition();
+        _log('✅ [GPS] Posición actual obtenida');
+      } catch (e) {
+        _log('⚠️ [GPS] No se pudo obtener posición actual: $e');
+        // Usar coordenadas del origen como fallback
       _lastPosition = Position(
         latitude: originLat,
         longitude: originLon,
@@ -490,12 +557,12 @@ class IntegratedNavigationService {
     // 1. Usar itinerario existente o solicitar uno nuevo
     final RedBusItinerary itinerary;
     if (existingItinerary != null) {
-      developer.log(
+      _log(
         '♻️ Usando itinerario ya obtenido (evita llamada duplicada)',
       );
       itinerary = existingItinerary;
     } else {
-      developer.log('🔄 Solicitando nuevo itinerario al backend...');
+      _log('🔄 Solicitando nuevo itinerario al backend...');
       
       // Llamada directa al backend sin servicio intermedio
       final apiClient = ApiClient();
@@ -507,45 +574,96 @@ class IntegratedNavigationService {
         'dest_lon': destLon,
       };
 
+      _log('🌐 [HTTP] POST $uri');
+      _log('📤 [HTTP] Body: ${jsonEncode(body)}');
+
+      final requestTime = DateTime.now();
       final response = await http.post(
         uri,
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode(body),
       );
+      
+      final elapsed = DateTime.now().difference(requestTime);
+      _log('⏱️ [HTTP] Respuesta en ${elapsed.inSeconds}s (${elapsed.inMilliseconds}ms)');
+      _log('📥 [HTTP] Status: ${response.statusCode}');
+      _log('📥 [HTTP] Body length: ${response.body.length} bytes');
 
       if (response.statusCode != 200) {
+        _log('❌ [HTTP] Error response body: ${response.body}');
         throw Exception('Error al obtener itinerario: ${response.statusCode}');
       }
 
+      _log('✅ [HTTP] Decodificando JSON...');
       final data = jsonDecode(response.body) as Map<String, dynamic>;
-      itinerary = RedBusItinerary.fromJson(data);
+      _log('✅ [HTTP] JSON keys: ${data.keys.join(", ")}');
+      
+      // Debug: Imprimir JSON COMPLETO recibido del backend
+      _log('🔍 [JSON COMPLETO] ================================');
+      final jsonString = jsonEncode(data);
+      // Dividir en chunks de 1000 caracteres para que no se trunque
+      for (int i = 0; i < jsonString.length; i += 1000) {
+        final end = (i + 1000 < jsonString.length) ? i + 1000 : jsonString.length;
+        _log('🔍 [JSON PART ${i ~/ 1000 + 1}] ${jsonString.substring(i, end)}');
+      }
+      _log('🔍 [JSON COMPLETO] ================================');
+      
+      // Debug: Ver estructura completa
+      _log('🔍 [JSON] origin: ${data['origin']}');
+      _log('🔍 [JSON] destination: ${data['destination']}');
+      
+      // El backend devuelve la ruta en 'options' (array de opciones)
+      // Tomar la primera opción si existe
+      Map<String, dynamic> routeData;
+      if (data['options'] != null && data['options'] is List && (data['options'] as List).isNotEmpty) {
+        final options = data['options'] as List;
+        _log('🔍 [JSON] ${options.length} opciones de ruta disponibles');
+        routeData = options[0] as Map<String, dynamic>;
+        _log('🔍 [JSON] Usando opción 1: ${routeData.keys.join(", ")}');
+      } else {
+        _log('❌ [JSON] No hay opciones de ruta disponibles');
+        throw Exception('El backend no devolvió opciones de ruta');
+      }
+      
+      _log('🏗️ [PARSE] Construyendo RedBusItinerary...');
+      itinerary = RedBusItinerary.fromJson(routeData);
+      _log('✅ [PARSE] Itinerario construido exitosamente');
     }
 
-    developer.log('📋 Itinerario obtenido: ${itinerary.summary}');
-    developer.log(
+    _log('📋 Itinerario obtenido: ${itinerary.summary}');
+    _log(
       '🚌 Buses Red recomendados: ${itinerary.redBusRoutes.join(", ")}',
     );
+    _log('🗺️ [ITINERARY] Tiene ${itinerary.legs.length} legs');
 
     // 2. Construir pasos de navegación detallados
+    _log('🏗️ [BUILD] Construyendo pasos de navegación...');
     final steps = await _buildNavigationSteps(itinerary, originLat, originLon);
+    _log('✅ [BUILD] ${steps.length} pasos construidos');
 
     // 3. Obtener geometría completa de la ruta
+    _log('🗺️ [GEOMETRY] Construyendo geometría completa...');
     final geometry = await _buildCompleteRouteGeometry(itinerary);
+    _log('✅ [GEOMETRY] ${geometry.length} puntos en geometría');
 
     // 4. Construir geometrías individuales para cada paso
+    _log('🗺️ [STEP_GEO] Construyendo geometrías por paso...');
     final stepGeometries = await _buildStepGeometries(
       steps,
       itinerary,
       LatLng(originLat, originLon),
     );
+    _log('✅ [STEP_GEO] ${stepGeometries.length} geometrías de pasos');
 
     // 5. Calcular duración total estimada
     final totalDuration = itinerary.legs.fold<int>(
       0,
       (sum, leg) => sum + leg.durationMinutes,
     );
+    _log('⏱️ [DURATION] Duración total estimada: $totalDuration min');
 
     // 6. Crear navegación activa
+    _log('🎯 [NAV] Creando ActiveNavigation...');
     _activeNavigation = ActiveNavigation(
       destination: destinationName,
       steps: steps,
@@ -554,23 +672,34 @@ class IntegratedNavigationService {
       itinerary: itinerary,
       estimatedDuration: totalDuration,
     );
+    _log('✅ [NAV] ActiveNavigation creado exitosamente');
 
     // 6.1. Iniciar tiempos de navegación
     _activeNavigation!.start();
+    _log('⏰ [NAV] Tiempos de navegación iniciados');
 
     // 7. Reiniciar control de anuncios
     _lastProximityAnnouncedStepIndex = null;
     _lastArrivalAnnouncedStepIndex = null;
     _announcedStops.clear(); // Limpiar paradas anunciadas
     _currentBusStopIndex = 0; // Resetear índice de parada
+    _log('🔄 [NAV] Control de anuncios reiniciado');
 
     // 8. Anunciar inicio de navegación
     _announceNavigationStart(destinationName, itinerary);
 
     // 9. Iniciar seguimiento GPS
     _startLocationTracking();
+    _log('📍 [GPS] Seguimiento de ubicación iniciado');
 
+    _log('🎉 [SUCCESS] Navegación iniciada exitosamente con ${steps.length} pasos');
     return _activeNavigation!;
+    
+    } catch (e, stackTrace) {
+      _log('❌ [ERROR] Error crítico en startNavigation: $e');
+      _log('📚 [ERROR] Stack trace: $stackTrace');
+      rethrow;
+    }
   }
 
   /// Construye pasos de navegación detallados desde el itinerario
@@ -590,33 +719,50 @@ class IntegratedNavigationService {
     // Mapeo DIRECTO 1:1: cada leg del backend = 1 paso en el frontend
     for (var i = 0; i < itinerary.legs.length; i++) {
       final leg = itinerary.legs[i];
+      
+      developer.log('📦 Leg ${i+1}/${itinerary.legs.length}: type="${leg.type}", isRedBus=${leg.isRedBus}, routeNumber=${leg.routeNumber}');
 
       if (leg.type == 'walk') {
         // Paso de caminata
-        final walkTo = leg.arriveStop?.location;
+        developer.log('🚶 Paso ${i+1} WALK: ${leg.instruction}');
+        developer.log('   └─ Distancia RAW del JSON: ${leg.distanceKm}km');
+        developer.log('   └─ Distancia en metros (x1000): ${(leg.distanceKm * 1000).toInt()}m');
+        developer.log('   └─ Duración: ${leg.durationMinutes}min');
+        developer.log('   └─ DepartStop: ${leg.departStop?.name ?? "N/A"}');
+        developer.log('   └─ ArriveStop: ${leg.arriveStop?.name ?? "N/A"}');
 
-        if (walkTo != null) {
-          developer.log('🚶 Paso WALK hasta ${leg.arriveStop?.name}');
-
-          steps.add(
-            NavigationStep(
-              type: 'walk',
-              instruction: leg.instruction.isNotEmpty
-                  ? leg.instruction
-                  : 'Camina ${(leg.distanceKm * 1000).toInt()} metros hasta ${leg.arriveStop?.name}',
-              location: walkTo,
-              stopName: leg.arriveStop?.name,
-              estimatedDuration: leg.durationMinutes,
-              realDistanceMeters: leg.distanceKm * 1000,
-              realDurationSeconds: leg.durationMinutes * 60,
-              streetInstructions:
-                  (leg.streetInstructions != null &&
-                      leg.streetInstructions!.isNotEmpty)
-                  ? List<String>.from(leg.streetInstructions!)
-                  : <String>[leg.instruction],
-            ),
-          );
+        // Determinar destino del paso de caminata
+        String instruction = leg.instruction;
+        if (instruction.isEmpty) {
+          if (leg.arriveStop != null) {
+            instruction = 'Camina hacia el paradero ${leg.arriveStop!.name}';
+          } else if (leg.departStop != null) {
+            instruction = 'Camina desde ${leg.departStop!.name}';
+          } else if (i == 0) {
+            instruction = 'Camina hacia el paradero de inicio';
+          } else if (i == itinerary.legs.length - 1) {
+            instruction = 'Camina hacia tu destino';
+          } else {
+            instruction = 'Camina ${(leg.distanceKm * 1000).toInt()} metros';
+          }
         }
+
+        steps.add(
+          NavigationStep(
+            type: 'walk',
+            instruction: instruction,
+            location: leg.arriveStop?.location ?? leg.departStop?.location,
+            stopName: leg.arriveStop?.name ?? leg.departStop?.name,
+            estimatedDuration: leg.durationMinutes,
+            realDistanceMeters: leg.distanceKm * 1000,
+            realDurationSeconds: leg.durationMinutes * 60,
+            streetInstructions:
+                (leg.streetInstructions != null &&
+                    leg.streetInstructions!.isNotEmpty)
+                ? List<String>.from(leg.streetInstructions!)
+                : <String>[instruction],
+          ),
+        );
       } else if (leg.type == 'bus' && leg.isRedBus) {
         // Paso de bus: UN SOLO paso tipo 'bus' (simplificado)
         // La detección de subir al bus se hará por velocidad GPS
@@ -667,6 +813,11 @@ class IntegratedNavigationService {
             busStops: busStops, // Paradas del backend
           ),
         );
+      } else {
+        // Leg no reconocido
+        developer.log('⚠️ Leg tipo "${leg.type}" no reconocido o isRedBus=${leg.isRedBus}');
+        developer.log('   └─ routeNumber: ${leg.routeNumber}');
+        developer.log('   └─ instruction: ${leg.instruction}');
       }
     }
 
@@ -1100,6 +1251,12 @@ Te iré guiando paso a paso.
   void _announceProgressIfNeeded(NavigationStep step, double distanceMeters) {
     final now = DateTime.now();
 
+    // NUEVO: Anunciar instrucciones de calle para usuarios no videntes
+    if (step.type == 'walk' && step.streetInstructions != null && step.streetInstructions!.isNotEmpty) {
+      _announceStreetInstructionsIfNeeded(step, distanceMeters);
+      return; // Las instrucciones de calle reemplazan los anuncios genéricos
+    }
+
     // Intervalos de anuncio según tipo de paso
     final announceInterval = step.type == 'walk'
         ? const Duration(minutes: 1) // Cada minuto caminando
@@ -1165,6 +1322,35 @@ Te iré guiando paso a paso.
       _lastProgressAnnouncement = now;
       _lastAnnouncedDistance = distanceMeters;
     }
+  }
+
+  // Track para instrucciones de calle ya anunciadas
+  int _lastAnnouncedStreetInstructionIndex = -1;
+
+  /// Anuncia instrucciones de calle paso a paso basado en distancia recorrida
+  void _announceStreetInstructionsIfNeeded(NavigationStep step, double distanceRemaining) {
+    if (step.streetInstructions == null || step.streetInstructions!.isEmpty) return;
+    if (step.realDistanceMeters == null) return;
+
+    final totalDistance = step.realDistanceMeters!;
+    final distanceWalked = totalDistance - distanceRemaining;
+    final progressPercent = (distanceWalked / totalDistance).clamp(0.0, 1.0);
+
+    // Calcular qué instrucción debería anunciar basado en el progreso
+    final totalInstructions = step.streetInstructions!.length;
+    final currentInstructionIndex = (progressPercent * totalInstructions).floor();
+    final safeIndex = currentInstructionIndex.clamp(0, totalInstructions - 1);
+
+    // Si ya anunciamos esta instrucción, no repetir
+    if (safeIndex <= _lastAnnouncedStreetInstructionIndex) return;
+
+    // Anunciar la nueva instrucción
+    final instruction = step.streetInstructions![safeIndex];
+    developer.log('🧭 [CALLE] Instrucción $safeIndex/${totalInstructions-1}: $instruction');
+    developer.log('   └─ Progreso: ${(progressPercent * 100).toInt()}% ($distanceWalked/${totalDistance}m)');
+
+    TtsService.instance.speak(instruction);
+    _lastAnnouncedStreetInstructionIndex = safeIndex;
   }
 
   /// Maneja llegada a un paso
@@ -1464,6 +1650,9 @@ Te iré guiando paso a paso.
 
     _activeNavigation!.currentStepIndex++;
     final newStep = _activeNavigation!.currentStep;
+
+    // Resetear índice de instrucciones de calle al cambiar de paso
+    _lastAnnouncedStreetInstructionIndex = -1;
 
     developer.log(
       '📍 [STEP] Avanzando paso: $currentIndex → ${_activeNavigation!.currentStepIndex}',

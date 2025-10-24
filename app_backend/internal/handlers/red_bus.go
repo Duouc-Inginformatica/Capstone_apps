@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/yourorg/wayfindcl/internal/geometry"
@@ -13,7 +14,8 @@ import (
 
 // RedBusHandler maneja las solicitudes de rutas de buses Red
 type RedBusHandler struct {
-	scraper *moovit.Scraper
+	scraper    *moovit.Scraper
+	routeCache *RouteCache
 }
 
 // GeometryServiceAdapter adapta geometry.Service para moovit.GeometryService
@@ -76,8 +78,13 @@ func NewRedBusHandler(db *sql.DB) *RedBusHandler {
 	// NOTA: El servicio de geometría se configurará después con ConfigureRedBusGeometry()
 	// porque se inicializa después de que se crean los handlers
 
+	// Crear caché de rutas: 15 minutos TTL, máximo 100 rutas
+	cache := NewRouteCache(15*time.Minute, 100)
+	log.Printf("✅ RouteCache inicializado (TTL: 15 min, max: 100 rutas)")
+
 	return &RedBusHandler{
-		scraper: scraper,
+		scraper:    scraper,
+		routeCache: cache,
 	}
 }
 
@@ -146,6 +153,14 @@ func (h *RedBusHandler) GetRedBusItinerary(c *fiber.Ctx) error {
 	log.Printf("Fetching Red bus itinerary from (%.4f, %.4f) to (%.4f, %.4f)",
 		req.OriginLat, req.OriginLon, req.DestLat, req.DestLon)
 
+	// Intentar obtener del caché primero
+	if cachedRoute, found := h.routeCache.Get(req.OriginLat, req.OriginLon, req.DestLat, req.DestLon); found {
+		log.Printf("✅ Retornando ruta desde caché")
+		return c.JSON(cachedRoute)
+	}
+
+	log.Printf("🔄 Ruta no en caché, calculando nueva ruta...")
+
 	// Obtener múltiples opciones de rutas
 	routeOptions, err := h.scraper.GetRouteItinerary(
 		req.OriginLat,
@@ -159,6 +174,9 @@ func (h *RedBusHandler) GetRedBusItinerary(c *fiber.Ctx) error {
 			"error": fmt.Sprintf("error fetching itinerary: %v", err),
 		})
 	}
+
+	// Guardar en caché para futuras consultas
+	h.routeCache.Set(req.OriginLat, req.OriginLon, req.DestLat, req.DestLon, routeOptions)
 
 	// Retornar TODAS las opciones para que el usuario elija por voz en Flutter
 	return c.JSON(routeOptions)
@@ -478,6 +496,26 @@ func (h *RedBusHandler) GetRedBusStops(c *fiber.Ctx) error {
 		"route_name":   route.RouteName,
 		"total_stops":  len(route.Stops),
 		"stops":        route.Stops,
+	})
+}
+
+// GetCacheStats maneja GET /api/red/cache/stats
+// Devuelve estadísticas del caché de rutas
+func (h *RedBusHandler) GetCacheStats(c *fiber.Ctx) error {
+	stats := h.routeCache.Stats()
+	return c.JSON(fiber.Map{
+		"status": "ok",
+		"cache":  stats,
+	})
+}
+
+// ClearCache maneja POST /api/red/cache/clear
+// Limpia todo el caché de rutas
+func (h *RedBusHandler) ClearCache(c *fiber.Ctx) error {
+	h.routeCache.Clear()
+	return c.JSON(fiber.Map{
+		"status":  "ok",
+		"message": "Cache cleared successfully",
 	})
 }
 

@@ -12,7 +12,7 @@ import 'dart:async';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:vibration/vibration.dart';
-import 'tts_service.dart';
+import '../device/tts_service.dart';
 
 enum TurnDirection {
   straight,

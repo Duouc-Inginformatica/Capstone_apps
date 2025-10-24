@@ -14,7 +14,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:vibration/vibration.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
-import 'tts_service.dart';
+import '../device/tts_service.dart';
 
 enum NotificationType { audio, vibration, visual, all }
 

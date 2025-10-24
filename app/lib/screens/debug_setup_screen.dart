@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 
-import '../services/api_client.dart';
-import '../services/server_config.dart';
+import '../services/backend/api_client.dart';
+import '../services/backend/server_config.dart';
 import 'login_screen_v2.dart';
 import 'map_screen.dart';
+
+bool debug = true;
 
 /// Pantalla de utilidades para desarrolladores
 /// Permite ajustar la URL del backend y probar accesos rápidos antes del login.
