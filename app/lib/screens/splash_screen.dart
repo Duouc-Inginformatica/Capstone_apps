@@ -1,8 +1,8 @@
 import 'dart:async';
 import 'dart:developer' as developer;
 import 'package:flutter/material.dart';
-import '../services/device/npu_detector_service.dart';
-import '../services/device/tts_service.dart';
+import '../services/npu_detector_service.dart';
+import '../services/tts_service.dart';
 import 'login_screen_v2.dart'; // ✅ Nueva UI clásica de Figma
 
 /// Pantalla de carga inicial con animación y badge IA

@@ -1,6 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'services/backend/server_config.dart';
+import 'services/server_config.dart';
 import 'screens/login_screen_v2.dart'; // ✅ Login UI clásica Figma con badge IA
 import 'screens/biometric_login_screen.dart';
 import 'screens/map_screen.dart';

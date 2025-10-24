@@ -1,10 +1,10 @@
 import 'dart:developer' as developer;
 import 'package:flutter/material.dart';
 import 'package:local_auth/local_auth.dart';
-import '../services/device/biometric_auth_service.dart';
-import '../services/device/tts_service.dart';
-import '../services/device/npu_detector_service.dart';
-import '../services/backend/api_client.dart';
+import '../services/biometric_auth_service.dart';
+import '../services/tts_service.dart';
+import '../services/npu_detector_service.dart';
+import '../services/api_client.dart';
 import 'map_screen.dart';
 import 'biometric_register_screen.dart';
 
@@ -118,7 +118,7 @@ class _LoginScreenV2State extends State<LoginScreenV2>
   }
 
   /// Inicializa la detección de NPU en background
-  /// Cuando termine, activa el badge IA con animación Y precarga modelo Kokoro-TTS
+  /// Cuando termine, activa el badge IA con animación (preparado para futuros modelos)
   Future<void> _initializeNpuDetection() async {
     try {
       setState(() {
@@ -147,12 +147,12 @@ class _LoginScreenV2State extends State<LoginScreenV2>
 
       if (hasAcceleration) {
         developer.log(
-          '✅ NPU/NNAPI detectado - Aceleración de IA disponible',
+          '✅ NPU/NNAPI detectado - Badge IA activado. Dispositivo preparado para aceleración de modelos IA',
           name: 'LoginScreen',
         );
       } else {
         developer.log(
-          '⚠️ NPU no disponible - usando TTS estándar',
+          '⚠️ NPU no disponible - usando modo estándar',
           name: 'LoginScreen',
         );
       }
@@ -393,7 +393,15 @@ class _LoginScreenV2State extends State<LoginScreenV2>
         elevation: 0,
         title: Row(
           children: [
-            // Logo IA (IZQUIERDA)
+            const Text(
+              'WayFindCL',
+              style: TextStyle(
+                color: Colors.black,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const Spacer(),
+            // Badge "IA" - Se activa cuando se detecta NPU (preparado para futuros modelos)
             if (_npuLoading)
               Container(
                 padding: const EdgeInsets.symmetric(
@@ -403,8 +411,8 @@ class _LoginScreenV2State extends State<LoginScreenV2>
                 decoration: BoxDecoration(
                   gradient: LinearGradient(
                     colors: [
-                      const Color(0xFF7C3AED).withValues(alpha: 0.85),
-                      const Color(0xFFA855F7).withValues(alpha: 0.85),
+                      const Color(0xFF00BCD4).withValues(alpha: 0.3),
+                      const Color(0xFF0097A7).withValues(alpha: 0.3),
                     ],
                   ),
                   borderRadius: BorderRadius.circular(12),
@@ -412,59 +420,94 @@ class _LoginScreenV2State extends State<LoginScreenV2>
                 child: const Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(Icons.smart_toy, size: 14, color: Colors.white),
-                    SizedBox(width: 4),
+                    SizedBox(
+                      width: 12,
+                      height: 12,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                      ),
+                    ),
+                    SizedBox(width: 6),
                     Text(
                       'IA',
                       style: TextStyle(
-                        fontSize: 12,
+                        color: Colors.white70,
                         fontWeight: FontWeight.bold,
-                        color: Colors.white,
+                        fontSize: 14,
                       ),
                     ),
                   ],
                 ),
-              ),
-            
-            const Spacer(),
-            
-            // Texto WayFindCL (CENTRO)
-            const Text(
-              'WayFindCL',
-              style: TextStyle(
-                color: Color(0xFFE30613),
-                fontWeight: FontWeight.bold,
-                fontSize: 20,
-              ),
-            ),
-            
-            const Spacer(),
-            
-            // Logo Red Movilidad (DERECHA)
-            ClipRRect(
-              borderRadius: BorderRadius.circular(8),
-              child: Image.asset(
-                'assets/icons.webp',
-                width: 32,
-                height: 32,
-                fit: BoxFit.contain,
-                errorBuilder: (context, error, stackTrace) {
-                  return Container(
-                    width: 32,
-                    height: 32,
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFE30613).withValues(alpha: 0.12),
-                      shape: BoxShape.circle,
+              )
+            else if (_npuAvailable)
+              ScaleTransition(
+                scale: _badgeAnimation,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                      colors: [Color(0xFF00BCD4), Color(0xFF0097A7)],
                     ),
-                    child: const Icon(
-                      Icons.navigation_outlined,
-                      color: Color(0xFFE30613),
-                      size: 18,
+                    borderRadius: BorderRadius.circular(12),
+                    boxShadow: [
+                      BoxShadow(
+                        color: const Color(0xFF00BCD4).withValues(alpha: 0.4),
+                        blurRadius: 8,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: const Text(
+                    'IA',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 14,
                     ),
-                  );
-                },
+                  ),
+                ),
+              )
+            else
+              FadeTransition(
+                opacity: _badgeAnimation,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: _npuAvailable
+                          ? const [Color(0xFF00BCD4), Color(0xFF0097A7)]
+                          : const [Color(0xFFE53935), Color(0xFFD32F2F)],
+                    ),
+                    borderRadius: BorderRadius.circular(12),
+                    boxShadow: [
+                      BoxShadow(
+                        color:
+                            (_npuAvailable
+                                    ? const Color(0xFF00BCD4)
+                                    : const Color(0xFFE53935))
+                                .withValues(alpha: 0.4),
+                        blurRadius: 8,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: Text(
+                    _npuAvailable ? 'IA' : 'IA OFF',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 14,
+                    ),
+                  ),
+                ),
               ),
-            ),
           ],
         ),
       ),

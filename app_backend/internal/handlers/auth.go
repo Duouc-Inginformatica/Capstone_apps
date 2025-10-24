@@ -60,197 +60,21 @@ func Setup(db *sql.DB) {
 	gtfsLoader = gtfs.NewLoader(feedURL, fallbackURL, nil)
 
 	if auto := strings.TrimSpace(os.Getenv("GTFS_AUTO_SYNC")); strings.EqualFold(auto, "true") {
-		// Iniciar sincronización inicial y programar actualizaciones mensuales
-		go startGTFSAutoSync(dbConn)
+		go func() {
+			log.Printf("gtfs auto-sync: starting (this may take several minutes for large feeds)...")
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute) // Aumentado a 30 minutos
+			defer cancel()
+			summary, err := gtfsLoader.Sync(ctx, dbConn)
+			if err != nil {
+				log.Printf("gtfs auto-sync failed: %v", err)
+				return
+			}
+			gtfsSummaryMu.Lock()
+			gtfsLastSummary = summary
+			gtfsSummaryMu.Unlock()
+			log.Printf("gtfs auto-sync completed: %d stops imported from %s", summary.StopsImported, summary.SourceURL)
+		}()
 	}
-}
-
-// startGTFSAutoSync inicia la sincronización automática de GTFS y verifica mensualmente
-func startGTFSAutoSync(db *sql.DB) {
-	// Primera sincronización: verificar si los datos son recientes
-	shouldSync, lastSync := checkIfSyncNeeded(db)
-	
-	if shouldSync {
-		log.Printf("🔄 [GTFS-SYNC] Iniciando sincronización automática...")
-		log.Printf("📅 [GTFS-SYNC] Última sincronización: %v", lastSync)
-		performGTFSSync(db)
-	} else {
-		log.Printf("✅ [GTFS-SYNC] Datos GTFS actualizados (última sincronización: %v)", lastSync)
-		log.Printf("📅 [GTFS-SYNC] Próxima verificación en 30 días")
-	}
-	
-	// Programar verificaciones mensuales (cada 30 días)
-	ticker := time.NewTicker(30 * 24 * time.Hour)
-	defer ticker.Stop()
-	
-	for range ticker.C {
-		log.Printf("🔍 [GTFS-SYNC] Verificación mensual automática...")
-		
-		shouldSync, lastSync := checkIfSyncNeeded(db)
-		if shouldSync {
-			log.Printf("🔄 [GTFS-SYNC] Los datos tienen más de 30 días, actualizando...")
-			performGTFSSync(db)
-		} else {
-			log.Printf("✅ [GTFS-SYNC] Datos aún actualizados (última sincronización: %v)", lastSync)
-		}
-	}
-}
-
-// checkIfSyncNeeded verifica si los datos GTFS necesitan actualización (>30 días)
-func checkIfSyncNeeded(db *sql.DB) (bool, time.Time) {
-	var lastDownload time.Time
-	
-	err := db.QueryRow(`
-		SELECT MAX(downloaded_at) 
-		FROM gtfs_feeds 
-		WHERE downloaded_at IS NOT NULL
-	`).Scan(&lastDownload)
-	
-	if err != nil {
-		if err == sql.ErrNoRows {
-			log.Printf("⚠️  [GTFS-SYNC] No hay registros de sincronización previa")
-			return true, time.Time{} // Forzar sincronización
-		}
-		log.Printf("⚠️  [GTFS-SYNC] Error verificando última sincronización: %v", err)
-		return true, time.Time{} // Por seguridad, forzar sincronización
-	}
-	
-	daysSinceLastSync := time.Since(lastDownload).Hours() / 24
-	log.Printf("📊 [GTFS-SYNC] Días desde última sincronización: %.1f", daysSinceLastSync)
-	
-	// Sincronizar si han pasado más de 30 días
-	return daysSinceLastSync > 30, lastDownload
-}
-
-// performGTFSSync ejecuta la sincronización de GTFS
-func performGTFSSync(db *sql.DB) {
-	startTime := time.Now()
-	log.Printf("🚀 [GTFS-SYNC] Iniciando sincronización (puede tomar varios minutos)...")
-	
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
-	defer cancel()
-	
-	summary, err := gtfsLoader.Sync(ctx, db)
-	if err != nil {
-		log.Printf("❌ [GTFS-SYNC] Error en sincronización: %v", err)
-		return
-	}
-	
-	gtfsSummaryMu.Lock()
-	gtfsLastSummary = summary
-	gtfsSummaryMu.Unlock()
-	
-	elapsed := time.Since(startTime)
-	log.Printf("✅ [GTFS-SYNC] Sincronización completada en %.1f minutos", elapsed.Minutes())
-	log.Printf("╔══════════════════════════════════════════════════════════════╗")
-	log.Printf("║              📊 RESUMEN DE SINCRONIZACIÓN GTFS              ║")
-	log.Printf("╠══════════════════════════════════════════════════════════════╣")
-	log.Printf("║ 🚏 Paradas:        %6d                                    ║", summary.StopsImported)
-	log.Printf("║ 🚌 Rutas:          %6d                                    ║", summary.RoutesImported)
-	log.Printf("║ 🚐 Viajes:         %6d                                    ║", summary.TripsImported)
-	log.Printf("║ ⏰ Stop Times:     %6d                                    ║", summary.StopTimesImported)
-	log.Printf("║ ⏱️  Duración:       %.1f segundos                           ║", summary.DurationSeconds)
-	log.Printf("║ 📅 Fecha:          %s                         ║", summary.DownloadedAt.Format("2006-01-02 15:04:05"))
-	log.Printf("║ 🔗 Fuente:         %-42s ║", truncateString(summary.SourceURL, 42))
-	log.Printf("║ 📦 Versión:        %-42s ║", truncateString(summary.FeedVersion, 42))
-	log.Printf("╚══════════════════════════════════════════════════════════════╝")
-	log.Printf("📅 [GTFS-SYNC] Próxima verificación programada en 30 días")
-}
-
-// truncateString trunca un string a la longitud especificada
-func truncateString(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	if maxLen <= 3 {
-		return s[:maxLen]
-	}
-	return s[:maxLen-3] + "..."
-}
-
-// HandleGTFSStatus devuelve información sobre el estado de la sincronización GTFS
-func HandleGTFSStatus(c *fiber.Ctx) error {
-	gtfsSummaryMu.RLock()
-	summary := gtfsLastSummary
-	gtfsSummaryMu.RUnlock()
-
-	if summary == nil {
-		// Verificar si hay datos en la base de datos
-		var lastDownload time.Time
-		var feedVersion string
-		var sourceURL string
-		
-		err := dbConn.QueryRow(`
-			SELECT MAX(downloaded_at), feed_version, source_url 
-			FROM gtfs_feeds 
-			WHERE downloaded_at IS NOT NULL
-			GROUP BY feed_version, source_url
-			ORDER BY downloaded_at DESC
-			LIMIT 1
-		`).Scan(&lastDownload, &feedVersion, &sourceURL)
-		
-		if err != nil && err != sql.ErrNoRows {
-			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-				"error": "Error consultando estado GTFS",
-			})
-		}
-		
-		if err == sql.ErrNoRows {
-			return c.JSON(fiber.Map{
-				"status":      "no_data",
-				"message":     "No hay datos GTFS sincronizados",
-				"auto_sync":   os.Getenv("GTFS_AUTO_SYNC") == "true",
-			})
-		}
-		
-		// Hay datos pero no hay summary en memoria
-		daysSinceSync := time.Since(lastDownload).Hours() / 24
-		
-		return c.JSON(fiber.Map{
-			"status":          "synced",
-			"last_sync":       lastDownload.Format("2006-01-02 15:04:05"),
-			"days_since_sync": int(daysSinceSync),
-			"needs_update":    daysSinceSync > 30,
-			"feed_version":    feedVersion,
-			"source_url":      sourceURL,
-		})
-	}
-
-	// Hay summary en memoria
-	daysSinceSync := time.Since(summary.DownloadedAt).Hours() / 24
-	
-	return c.JSON(fiber.Map{
-		"status":             "synced",
-		"last_sync":          summary.DownloadedAt.Format("2006-01-02 15:04:05"),
-		"days_since_sync":    int(daysSinceSync),
-		"needs_update":       daysSinceSync > 30,
-		"feed_version":       summary.FeedVersion,
-		"source_url":         summary.SourceURL,
-		"stops_imported":     summary.StopsImported,
-		"routes_imported":    summary.RoutesImported,
-		"trips_imported":     summary.TripsImported,
-		"stop_times_imported": summary.StopTimesImported,
-		"sync_duration_seconds": summary.DurationSeconds,
-	})
-}
-
-// HandleGTFSForceSync fuerza una sincronización manual de GTFS
-func HandleGTFSForceSync(c *fiber.Ctx) error {
-	// Verificar que no haya otra sincronización en curso
-	if !gtfsSyncMu.TryLock() {
-		return c.Status(fiber.StatusConflict).JSON(fiber.Map{
-			"error": "Ya hay una sincronización GTFS en curso",
-		})
-	}
-	defer gtfsSyncMu.Unlock()
-
-	// Ejecutar sincronización en background
-	go performGTFSSync(dbConn)
-
-	return c.JSON(fiber.Map{
-		"message": "Sincronización GTFS iniciada. Puede tomar varios minutos.",
-		"status":  "in_progress",
-	})
 }
 
 type userClaims struct {

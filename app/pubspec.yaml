@@ -38,9 +38,9 @@ dependencies:
   
   # Accesibilidad (reconocimiento de voz y TTS)
   speech_to_text: ^7.3.0
-  flutter_tts: ^4.2.3  # TTS nativo de Android/iOS (funciona perfectamente)
+  flutter_tts: ^4.2.3  # Actualizado de 3.8.5
   
-  # Detección de hardware
+  # Detección de hardware (para NPU/NNAPI)
   device_info_plus: ^12.2.0  # Actualizado de 10.1.2
   
   # Seguridad y Autenticación
@@ -56,8 +56,6 @@ dependencies:
   geolocator: ^14.0.2  # Actualizado de 13.0.4
   flutter_map: ^8.2.2  # Actualizado de 7.0.2
   latlong2: ^0.9.1
-  flutter_compass: ^0.8.0  # Brújula precisa para orientación del mapa
-  sensors_plus: ^6.0.2  # Giroscopio y acelerómetro
   
   # Almacenamiento Local
   shared_preferences: ^2.3.2
@@ -86,10 +84,17 @@ flutter:
   # the material Icons class.
   uses-material-design: true
 
-  # Assets para TTS Neural con NPU
+  # Assets para modelos Piper TTS (ONNX) - Sistema Multi-Modelo
   assets:
-    # Logo de la aplicación (Red Movilidad)
-    - assets/icons.webp
+    # Modelos TTS Neural disponibles (4 modelos reales)
+    - assets/models/piper_es_carlfm_x_low.onnx
+    - assets/models/piper_es_carlfm_x_low.onnx.json
+    - assets/models/piper_es_sharvard_medium.onnx
+    - assets/models/piper_es_sharvard_medium.onnx.json
+    - assets/models/piper_es_mls_9972_low.onnx
+    - assets/models/piper_es_mls_9972_low.onnx.json
+    - assets/models/piper_es_mls_10246_low.onnx
+    - assets/models/piper_es_mls_10246_low.onnx.json
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

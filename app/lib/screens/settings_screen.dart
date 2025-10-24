@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../services/device/auth_storage.dart';
-import '../services/backend/server_config.dart';
-import '../services/device/tts_service.dart';
+import '../services/auth_storage.dart';
+import '../services/server_config.dart';
+import '../services/tts_service.dart';
 import '../widgets/server_address_dialog.dart';
 import 'login_screen_v2.dart';
 

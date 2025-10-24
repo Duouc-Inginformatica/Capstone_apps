@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
-import '../services/backend/api_client.dart';
-import '../services/backend/server_config.dart';
+import '../services/api_client.dart';
+import '../services/server_config.dart';
 
 Future<bool> showServerAddressDialog(BuildContext context) async {
   final result = await showDialog<bool>(
