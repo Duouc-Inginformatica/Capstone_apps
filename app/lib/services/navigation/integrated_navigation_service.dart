@@ -133,12 +133,30 @@ class RedBusLeg {
       inferredIsRedBus = mode == 'red' || mode == 'bus';
     } else if (json['route_number'] != null) {
       inferredIsRedBus = true; // Si tiene número de ruta, asumimos que es Red
+      geometry = (json['geometry'] as List)
+          .map((g) {
+            // La geometría viene como [[lon, lat], [lon, lat]] desde el backend (formato GeoJSON/GraphHopper)
+            // LatLng de Google Maps espera (lat, lon), así que invertimos el orden
+            if (g is List && g.length >= 2) {
+              return LatLng(
+                (g[1] as num).toDouble(), // lat - segunda posición en GeoJSON
+                (g[0] as num).toDouble(), // lon - primera posición en GeoJSON
+              );
+            }
+            // Fallback por si viene como objeto (compatibilidad)
+            return LatLng(
+              (g['lat'] as num?)?.toDouble() ?? 0.0,
+              (g['lng'] as num?)?.toDouble() ?? 0.0,
+            );
+          })
+          .toList();
+
     }
 
     return RedBusLeg(
       type: json['type'] as String? ?? 'walk',
       instruction: json['instruction'] as String? ?? '',
-      isRedBus: inferredIsRedBus,
+      isRedBus: (json['mode'] as String?) == 'Red', // Determinar si es Red Bus basado en el campo 'mode'
       routeNumber: json['route_number'] as String?,
       departStop: json['depart_stop'] != null
           ? RedBusStop.fromJson(json['depart_stop'] as Map<String, dynamic>)
@@ -200,8 +218,8 @@ class RedBusItinerary {
     }
 
     return RedBusItinerary(
-      summary: json['summary'] as String? ?? '',
-      totalDuration: json['total_duration'] as int? ?? 0,
+      summary: json['summary'] as String? ?? 'Ruta calculada',
+      totalDuration: json['total_duration_minutes'] as int? ?? 0,
       redBusRoutes: json['red_bus_routes'] != null
           ? List<String>.from(json['red_bus_routes'] as List)
           : [],
@@ -209,8 +227,14 @@ class RedBusItinerary {
               ?.map((l) => RedBusLeg.fromJson(l as Map<String, dynamic>))
               .toList() ??
           [],
-      origin: origin,
-      destination: destination,
+      origin: LatLng(
+        (json['origin']['latitude'] as num?)?.toDouble() ?? 0.0,
+        (json['origin']['longitude'] as num?)?.toDouble() ?? 0.0,
+      ),
+      destination: LatLng(
+        (json['destination']['latitude'] as num?)?.toDouble() ?? 0.0,
+        (json['destination']['longitude'] as num?)?.toDouble() ?? 0.0,
+      ),
     );
   }
 }
@@ -628,6 +652,14 @@ class IntegratedNavigationService {
       _log('🏗️ [PARSE] Construyendo RedBusItinerary...');
       itinerary = RedBusItinerary.fromJson(routeData);
       _log('✅ [PARSE] Itinerario construido exitosamente');
+      // El backend retorna RouteOptions con un array "options"
+      // Tomamos la primera opción
+      if (data['options'] == null || (data['options'] as List).isEmpty) {
+        throw Exception('No se encontraron opciones de ruta');
+      }
+      
+      final firstOption = (data['options'] as List)[0] as Map<String, dynamic>;
+      itinerary = RedBusItinerary.fromJson(firstOption);
     }
 
     _log('📋 Itinerario obtenido: ${itinerary.summary}');

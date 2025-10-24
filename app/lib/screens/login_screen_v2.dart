@@ -414,6 +414,7 @@ class _LoginScreenV2State extends State<LoginScreenV2>
                   children: [
                     Icon(Icons.smart_toy, size: 14, color: Colors.white),
                     SizedBox(width: 4),
+<<<<<<< HEAD
                     Text(
                       'IA',
                       style: TextStyle(
@@ -480,85 +481,59 @@ class _LoginScreenV2State extends State<LoginScreenV2>
                       ),
                     ),
                     SizedBox(width: 6),
+=======
+>>>>>>> 59bed1a (t)
                     Text(
                       'IA',
                       style: TextStyle(
-                        color: Colors.white70,
+                        fontSize: 12,
                         fontWeight: FontWeight.bold,
-                        fontSize: 14,
+                        color: Colors.white,
                       ),
                     ),
                   ],
                 ),
-              )
-            else if (_npuAvailable)
-              ScaleTransition(
-                scale: _badgeAnimation,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 4,
-                  ),
-                  decoration: BoxDecoration(
-                    gradient: const LinearGradient(
-                      colors: [Color(0xFF00BCD4), Color(0xFF0097A7)],
-                    ),
-                    borderRadius: BorderRadius.circular(12),
-                    boxShadow: [
-                      BoxShadow(
-                        color: const Color(0xFF00BCD4).withValues(alpha: 0.4),
-                        blurRadius: 8,
-                        offset: const Offset(0, 2),
-                      ),
-                    ],
-                  ),
-                  child: const Text(
-                    'IA',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 14,
-                    ),
-                  ),
-                ),
-              )
-            else
-              FadeTransition(
-                opacity: _badgeAnimation,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 4,
-                  ),
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      colors: _npuAvailable
-                          ? const [Color(0xFF00BCD4), Color(0xFF0097A7)]
-                          : const [Color(0xFFE53935), Color(0xFFD32F2F)],
-                    ),
-                    borderRadius: BorderRadius.circular(12),
-                    boxShadow: [
-                      BoxShadow(
-                        color:
-                            (_npuAvailable
-                                    ? const Color(0xFF00BCD4)
-                                    : const Color(0xFFE53935))
-                                .withValues(alpha: 0.4),
-                        blurRadius: 8,
-                        offset: const Offset(0, 2),
-                      ),
-                    ],
-                  ),
-                  child: Text(
-                    _npuAvailable ? 'IA' : 'IA OFF',
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 14,
-                    ),
-                  ),
-                ),
               ),
+            
+            const Spacer(),
+            
+            // Texto WayFindCL (CENTRO)
+            const Text(
+              'WayFindCL',
+              style: TextStyle(
+                color: Color(0xFFE30613),
+                fontWeight: FontWeight.bold,
+                fontSize: 20,
+              ),
+            ),
+            
+            const Spacer(),
+            
+            // Logo Red Movilidad (DERECHA)
+            ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: Image.asset(
+                'assets/icons.webp',
+                width: 32,
+                height: 32,
+                fit: BoxFit.contain,
+                errorBuilder: (context, error, stackTrace) {
+                  return Container(
+                    width: 32,
+                    height: 32,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFE30613).withValues(alpha: 0.12),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.navigation_outlined,
+                      color: Color(0xFFE30613),
+                      size: 18,
+                    ),
+                  );
+                },
+              ),
+            ),
           ],
         ),
       ),
