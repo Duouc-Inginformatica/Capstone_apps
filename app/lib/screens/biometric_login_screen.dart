@@ -3,9 +3,9 @@ import 'dart:developer' as developer;
 import 'package:flutter/material.dart';
 import 'package:speech_to_text/speech_recognition_result.dart';
 import 'package:speech_to_text/speech_to_text.dart';
-import '../services/biometric_auth_service.dart';
-import '../services/tts_service.dart';
-import '../services/api_client.dart';
+import '../services/device/biometric_auth_service.dart';
+import '../services/device/tts_service.dart';
+import '../services/backend/api_client.dart';
 import '../widgets/accessible_button.dart';
 import 'map_screen.dart';
 

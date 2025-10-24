@@ -4,7 +4,7 @@ import 'dart:developer' as developer;
 import 'dart:io' show SocketException;
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
-import 'auth_storage.dart';
+import '../device/auth_storage.dart';
 import 'server_config.dart';
 
 // ============================================================================

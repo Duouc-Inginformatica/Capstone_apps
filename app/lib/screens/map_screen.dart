@@ -9,14 +9,14 @@ import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:vibration/vibration.dart';
 import 'package:flutter_compass/flutter_compass.dart';
-import '../services/tts_service.dart';
-import '../services/api_client.dart';
-import '../services/address_validation_service.dart';
-import '../services/route_tracking_service.dart';
-import '../services/transit_boarding_service.dart';
-import '../services/integrated_navigation_service.dart';
-import '../services/geometry_service.dart';
-import '../services/npu_detector_service.dart';
+import '../services/device/tts_service.dart';
+import '../services/backend/api_client.dart';
+import '../services/backend/address_validation_service.dart';
+import '../services/navigation/route_tracking_service.dart';
+import '../services/navigation/transit_boarding_service.dart';
+import '../services/navigation/integrated_navigation_service.dart';
+import '../services/backend/geometry_service.dart';
+import '../services/device/npu_detector_service.dart';
 import '../widgets/map/accessible_notification.dart';
 import 'settings_screen.dart';
 import '../widgets/bottom_nav.dart';
@@ -1749,8 +1749,12 @@ class _MapScreenState extends State<MapScreen> {
 
   /// Normaliza ángulo a rango -180 a 180
   double _normalizeAngle(double angle) {
-    while (angle > 180) angle -= 360;
-    while (angle < -180) angle += 360;
+    while (angle > 180) {
+      angle -= 360;
+    }
+    while (angle < -180) {
+      angle += 360;
+    }
     return angle;
   }
 

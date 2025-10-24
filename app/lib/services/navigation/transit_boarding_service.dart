@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'package:geolocator/geolocator.dart';
 import 'package:vibration/vibration.dart';
-import 'tts_service.dart';
+import '../device/tts_service.dart';
 
 /// CAP-29: Confirmación de micro abordada
 /// Detecta cuando el usuario aborda un bus y confirma el número de línea

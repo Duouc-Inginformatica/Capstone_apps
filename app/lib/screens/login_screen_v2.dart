@@ -1,10 +1,10 @@
 import 'dart:developer' as developer;
 import 'package:flutter/material.dart';
 import 'package:local_auth/local_auth.dart';
-import '../services/biometric_auth_service.dart';
-import '../services/tts_service.dart';
-import '../services/npu_detector_service.dart';
-import '../services/api_client.dart';
+import '../services/device/biometric_auth_service.dart';
+import '../services/device/tts_service.dart';
+import '../services/device/npu_detector_service.dart';
+import '../services/backend/api_client.dart';
 import 'map_screen.dart';
 import 'biometric_register_screen.dart';
 

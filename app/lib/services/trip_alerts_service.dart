@@ -2,7 +2,7 @@ import 'dart:async';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:vibration/vibration.dart';
-import 'tts_service.dart';
+import 'device/tts_service.dart';
 
 /// Sprint 5: Servicio para alertas contextuales durante el viaje
 class TripAlertsService {

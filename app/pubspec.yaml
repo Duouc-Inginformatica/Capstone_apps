@@ -85,18 +85,6 @@ flutter:
   # the material Icons class.
   uses-material-design: true
 
-  # Assets para modelos Piper TTS (ONNX) - Sistema Multi-Modelo
-  assets:
-    # Modelos TTS Neural disponibles (4 modelos reales)
-    - assets/models/piper_es_carlfm_x_low.onnx
-    - assets/models/piper_es_carlfm_x_low.onnx.json
-    - assets/models/piper_es_sharvard_medium.onnx
-    - assets/models/piper_es_sharvard_medium.onnx.json
-    - assets/models/piper_es_mls_9972_low.onnx
-    - assets/models/piper_es_mls_9972_low.onnx.json
-    - assets/models/piper_es_mls_10246_low.onnx
-    - assets/models/piper_es_mls_10246_low.onnx.json
-
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images
 

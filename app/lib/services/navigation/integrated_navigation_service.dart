@@ -12,9 +12,9 @@ import 'dart:math' as math;
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
-import 'api_client.dart';
-import 'tts_service.dart';
-import 'bus_arrivals_service.dart';
+import '../backend/api_client.dart';
+import '../device/tts_service.dart';
+import '../backend/bus_arrivals_service.dart';
 
 // DEBUG MODE - Habilita logs detallados de JSON y geometrías
 const bool kDebugNavigation = bool.fromEnvironment('DEBUG_NAV', defaultValue: true);
@@ -583,7 +583,7 @@ class IntegratedNavigationService {
               // Mostrar todas las paradas intermedias para debug completo
               for (int j = 1; j < leg.stops!.length - 1; j++) {
                 final stop = leg.stops![j];
-                developer.log('        ${j}. ${stop.name} [${stop.code ?? "sin código"}] (${stop.location.latitude.toStringAsFixed(6)}, ${stop.location.longitude.toStringAsFixed(6)})', name: 'Navigation');
+                developer.log('        $j. ${stop.name} [${stop.code ?? "sin código"}] (${stop.location.latitude.toStringAsFixed(6)}, ${stop.location.longitude.toStringAsFixed(6)})', name: 'Navigation');
               }
             }
           }
@@ -598,14 +598,14 @@ class IntegratedNavigationService {
           // Mostrar geometría completa si está en modo debug
           if (leg.geometry != null && leg.geometry!.isNotEmpty) {
             developer.log('    📍 Geometría completa (${leg.geometry!.length} puntos):', name: 'Navigation');
-            developer.log('      Inicio: [${leg.geometry!.first[1]}, ${leg.geometry!.first[0]}]', name: 'Navigation');
-            developer.log('      Fin: [${leg.geometry!.last[1]}, ${leg.geometry!.last[0]}]', name: 'Navigation');
+            developer.log('      Inicio: [${leg.geometry!.first.latitude}, ${leg.geometry!.first.longitude}]', name: 'Navigation');
+            developer.log('      Fin: [${leg.geometry!.last.latitude}, ${leg.geometry!.last.longitude}]', name: 'Navigation');
             if (leg.geometry!.length > 10) {
               developer.log('      (${leg.geometry!.length - 2} puntos intermedios)', name: 'Navigation');
             } else {
               // Si son pocos puntos, mostrarlos todos
               for (int p = 0; p < leg.geometry!.length; p++) {
-                developer.log('        ${p + 1}. [${leg.geometry![p][1]}, ${leg.geometry![p][0]}]', name: 'Navigation');
+                developer.log('        ${p + 1}. [${leg.geometry![p].latitude}, ${leg.geometry![p].longitude}]', name: 'Navigation');
               }
             }
           }
