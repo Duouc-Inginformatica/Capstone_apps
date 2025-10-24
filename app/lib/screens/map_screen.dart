@@ -70,7 +70,7 @@ class _MapScreenState extends State<MapScreen> {
   List<String> _currentInstructions = [];
   int _currentInstructionStep = 0;
   int _instructionFocusIndex = 0;
-  final bool _isCalculatingRoute = false;
+  bool _isCalculatingRoute = false;
   bool _showInstructionsPanel = false;
 
   // Lectura automática de instrucciones
@@ -2185,6 +2185,8 @@ class _MapScreenState extends State<MapScreen> {
     final dest = RouteTrackingService.instance.destination!;
     final destName = RouteTrackingService.instance.destinationName ?? 'destino';
 
+    setState(() => _isCalculatingRoute = true); // 🔄 Mostrar indicador
+    
     TtsService.instance.speak('Recalculando ruta a $destName');
 
     try {
@@ -2202,6 +2204,8 @@ class _MapScreenState extends State<MapScreen> {
       }
     } catch (e) {
       _showErrorNotification('Error recalculando ruta');
+    } finally {
+      setState(() => _isCalculatingRoute = false); // ✅ Ocultar indicador
     }
   }
 
@@ -2467,6 +2471,7 @@ class _MapScreenState extends State<MapScreen> {
     // (solo mostrar la ruta del bus en el mapa)
     setState(() {
       _hasActiveTrip = true;
+      _isCalculatingRoute = true; // 🔄 Mostrar indicador de carga
       // NO activar _showStops - solo mostrar la ruta del bus
     });
 
@@ -2481,6 +2486,7 @@ class _MapScreenState extends State<MapScreen> {
           .suggestAddresses(destination, limit: 1);
 
       if (suggestions.isEmpty) {
+        setState(() => _isCalculatingRoute = false); // ❌ Ocultar indicador
         _showErrorNotification('No se encontró el destino: $destination');
         TtsService.instance.speak('No se encontró el destino $destination');
         return;
@@ -2492,7 +2498,10 @@ class _MapScreenState extends State<MapScreen> {
 
       // Iniciar navegación directamente usando IntegratedNavigationService
       await _startIntegratedMoovitNavigation(destination, destLat, destLon);
+      
+      setState(() => _isCalculatingRoute = false); // ✅ Ocultar indicador al finalizar
     } catch (e) {
+      setState(() => _isCalculatingRoute = false); // ❌ Ocultar indicador en error
       _showErrorNotification('Error calculando ruta: ${e.toString()}');
       TtsService.instance.speak(
         'Error al calcular la ruta. Por favor intenta nuevamente.',
@@ -3269,17 +3278,53 @@ class _MapScreenState extends State<MapScreen> {
   Widget _buildMicrophoneContent() {
     // UI SIMPLIFICADA: Solo mostrar estado del micrófono y brújula
     if (_isCalculatingRoute) {
-      return const Column(
+      return Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          CircularProgressIndicator(color: Colors.white, strokeWidth: 2.5),
-          SizedBox(height: 8),
-          Text(
-            'Calculando...',
+          // Animación de carga mejorada
+          SizedBox(
+            width: 45,
+            height: 45,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                const CircularProgressIndicator(
+                  color: Colors.white,
+                  strokeWidth: 3,
+                ),
+                Container(
+                  width: 30,
+                  height: 30,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.2),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.route,
+                    color: Colors.white,
+                    size: 16,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+          const Text(
+            'Procesando ruta...',
             style: TextStyle(
               color: Colors.white,
-              fontSize: 12,
-              fontWeight: FontWeight.w500,
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              letterSpacing: 0.3,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Por favor espera',
+            style: TextStyle(
+              color: Colors.white.withOpacity(0.8),
+              fontSize: 11,
+              fontWeight: FontWeight.w400,
             ),
           ),
         ],
