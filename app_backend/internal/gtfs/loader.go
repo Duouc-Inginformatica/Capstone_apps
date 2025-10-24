@@ -24,10 +24,14 @@ type Loader struct {
 
 // Summary describes the result of a GTFS sync.
 type Summary struct {
-	FeedVersion   string    `json:"feed_version"`
-	StopsImported int       `json:"stops_imported"`
-	DownloadedAt  time.Time `json:"downloaded_at"`
-	SourceURL     string    `json:"source_url"`
+	FeedVersion     string    `json:"feed_version"`
+	StopsImported   int       `json:"stops_imported"`
+	RoutesImported  int       `json:"routes_imported"`
+	TripsImported   int       `json:"trips_imported"`
+	StopTimesImported int     `json:"stop_times_imported"`
+	DownloadedAt    time.Time `json:"downloaded_at"`
+	SourceURL       string    `json:"source_url"`
+	DurationSeconds float64   `json:"duration_seconds"`
 }
 
 // NewLoader builds a loader for the provided GTFS feed URL. Optionally accepts a fallback URL that will
@@ -48,6 +52,8 @@ func (l *Loader) Sync(ctx context.Context, db *sql.DB) (*Summary, error) {
 	if l.feedURL == "" {
 		return nil, errors.New("gtfs loader: feed url is empty")
 	}
+
+	syncStartTime := time.Now()
 
 	data, sourceURL, err := l.obtainFeed(ctx)
 	if err != nil {
@@ -144,17 +150,24 @@ func (l *Loader) Sync(ctx context.Context, db *sql.DB) (*Summary, error) {
 		return nil, fmt.Errorf("gtfs loader: commit: %w", err)
 	}
 
+	syncDuration := time.Since(syncStartTime).Seconds()
+
 	fmt.Printf("✅ GTFS import complete:\n")
 	fmt.Printf("   - Stops: %d\n", stopsCount)
 	fmt.Printf("   - Routes: %d\n", routesCount)
 	fmt.Printf("   - Trips: %d\n", tripsCount)
 	fmt.Printf("   - Stop Times: %d\n", stopTimesCount)
+	fmt.Printf("   - Duration: %.1f seconds\n", syncDuration)
 
 	summary := &Summary{
-		FeedVersion:   feedVersion,
-		StopsImported: stopsCount,
-		DownloadedAt:  time.Now().UTC(),
-		SourceURL:     sourceURL,
+		FeedVersion:       feedVersion,
+		StopsImported:     stopsCount,
+		RoutesImported:    routesCount,
+		TripsImported:     tripsCount,
+		StopTimesImported: stopTimesCount,
+		DownloadedAt:      time.Now().UTC(),
+		SourceURL:         sourceURL,
+		DurationSeconds:   syncDuration,
 	}
 	return summary, nil
 }

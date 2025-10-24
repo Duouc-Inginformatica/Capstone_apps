@@ -2,7 +2,7 @@ import 'dart:async';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:vibration/vibration.dart';
-import 'tts_service.dart';
+import '../device/tts_service.dart';
 
 /// CAP-30: Seguimiento en tiempo real del usuario durante el viaje
 /// CAP-20: Recalcular ruta si me desvío

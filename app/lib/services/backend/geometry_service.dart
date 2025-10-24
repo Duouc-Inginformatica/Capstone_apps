@@ -2,15 +2,15 @@ import 'dart:developer' as developer;
 // ============================================================================
 // Geometry Service - WayFindCL Flutter
 // ============================================================================
-// Servicio MODERNO para cálculos geométricos usando endpoints centralizados
-// Reemplaza graphhopper_service.dart y elimina código legacy
+// Servicio para cálculos geométricos usando endpoints del backend
+// Proporciona: rutas peatonales, distancias, paradas cercanas
 // ============================================================================
 
 import 'dart:async';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
-import 'server_config.dart';
+import 'package:wayfindcl/services/backend/server_config.dart';
 
 class GeometryService {
   GeometryService._();

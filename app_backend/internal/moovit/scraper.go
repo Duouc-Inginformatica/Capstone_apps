@@ -1250,28 +1250,78 @@ func (s *Scraper) buildItineraryFromStops(routeNumber string, duration int, stop
 		}
 	}
 
+
 	busGeometry := [][]float64{}
 
 	// Intentar obtener geometría realista usando GraphHopper (perfil vehicular)
+	// IMPORTANTE: Pasar por CADA PARADERO como waypoint
 	if s.geometryService != nil {
-		log.Printf("🗺️ [GraphHopper] Calculando ruta vehicular: %s → %s", originStop.Name, destStop.Name)
+		log.Printf("🗺️ [GraphHopper] Calculando ruta vehicular con %d waypoints (paraderos)", len(stops))
 
-		vehicleRoute, err := s.geometryService.GetVehicleRoute(
-			originStop.Latitude, originStop.Longitude,
-			destStop.Latitude, destStop.Longitude,
-		)
+		// Si hay pocos paraderos (< 5), usar todos como waypoints
+		// Si hay muchos, seleccionar cada N paraderos para evitar request muy grande
+		waypointStops := stops
+		if len(stops) > 20 {
+			log.Printf("⚠️  Muchos paraderos (%d), seleccionando cada 3 para waypoints", len(stops))
+			selected := []BusStop{stops[0]} // Siempre incluir primero
+			for i := 3; i < len(stops)-1; i += 3 {
+				selected = append(selected, stops[i])
+			}
+			selected = append(selected, stops[len(stops)-1]) // Siempre incluir último
+			waypointStops = selected
+			log.Printf("✅ Waypoints reducidos de %d a %d paraderos", len(stops), len(waypointStops))
+		}
 
-		if err == nil && len(vehicleRoute.MainGeometry) > 0 {
-			log.Printf("✅ [GraphHopper] Ruta vehicular: %.0fm, %d segundos, %d puntos de geometría",
-				vehicleRoute.TotalDistance, vehicleRoute.TotalDuration, len(vehicleRoute.MainGeometry))
+		// Construir geometría pasando por waypoints
+		// Calcular segmentos entre cada par de paraderos consecutivos
+		totalBusGeometry := [][]float64{}
+		totalBusDistance := 0.0
+		
+		for i := 0; i < len(waypointStops)-1; i++ {
+			fromStop := waypointStops[i]
+			toStop := waypointStops[i+1]
+			
+			log.Printf("   🗺️  Segmento %d/%d: %s → %s", i+1, len(waypointStops)-1, fromStop.Name, toStop.Name)
+			
+			vehicleSegment, err := s.geometryService.GetVehicleRoute(
+				fromStop.Latitude, fromStop.Longitude,
+				toStop.Latitude, toStop.Longitude,
+			)
+			
+			if err == nil && len(vehicleSegment.MainGeometry) > 0 {
+				// Agregar geometría del segmento (evitar duplicar punto de unión)
+				if i == 0 {
+					totalBusGeometry = append(totalBusGeometry, vehicleSegment.MainGeometry...)
+				} else {
+					// Saltar primer punto del segmento para evitar duplicados
+					totalBusGeometry = append(totalBusGeometry, vehicleSegment.MainGeometry[1:]...)
+				}
+				totalBusDistance += vehicleSegment.TotalDistance
+				log.Printf("      ✅ Segmento: %.0fm, %d puntos", vehicleSegment.TotalDistance, len(vehicleSegment.MainGeometry))
+			} else {
+				// Fallback: línea recta entre paraderos
+				log.Printf("      ⚠️  GraphHopper falló, usando línea recta")
+				if i == 0 || len(totalBusGeometry) == 0 {
+					totalBusGeometry = append(totalBusGeometry, []float64{fromStop.Longitude, fromStop.Latitude})
+				}
+				totalBusGeometry = append(totalBusGeometry, []float64{toStop.Longitude, toStop.Latitude})
+				
+				segmentDist := s.calculateDistance(
+					fromStop.Latitude, fromStop.Longitude,
+					toStop.Latitude, toStop.Longitude,
+				)
+				totalBusDistance += segmentDist
+			}
+		}
+		
+		busGeometry = totalBusGeometry
+		busDistance := totalBusDistance
 
-			busGeometry = vehicleRoute.MainGeometry
-			busDistance := vehicleRoute.TotalDistance
+		if len(busGeometry) > 0 {
+			log.Printf("✅ [GraphHopper] Ruta vehicular completa: %.0fm, %d puntos de geometría (pasando por %d waypoints)",
+				busDistance, len(busGeometry), len(waypointStops))
 
-			// Loggear info de geometría
-			log.Printf("✅ [GEOMETRY] Geometría de bus: %d puntos (ruta vehicular GraphHopper)", len(busGeometry))
-
-			// Crear leg con geometría realista
+			// Crear leg con geometría realista que pasa por paraderos
 			busLeg := TripLeg{
 				Type:        "bus",
 				Mode:        "Red",
@@ -1294,8 +1344,8 @@ func (s *Scraper) buildItineraryFromStops(routeNumber string, duration int, stop
 			log.Printf("   🚌 Bus: %.2fkm, %d min, %d paradas, %d puntos de geometría",
 				busDistance/1000, duration, len(stops), len(busGeometry))
 		} else {
-			// Fallback: usar solo coordenadas de paradas conocidas
-			log.Printf("⚠️  [GraphHopper] Error obteniendo ruta vehicular (%v), usando puntos de paradas", err)
+			// Fallback completo: usar coordenadas de paradas
+			log.Printf("⚠️  [GraphHopper] No se pudo construir geometría, usando puntos de paradas")
 
 			// Agregar las coordenadas de TODAS las paradas geocodificadas
 			for i, stop := range stops {

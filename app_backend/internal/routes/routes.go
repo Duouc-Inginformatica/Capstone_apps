@@ -158,6 +158,16 @@ func Register(app *fiber.App, db *sql.DB) {
 	// GET /api/stops/code/PC1237
 
 	// ============================================================================
+	// GTFS (Estado y sincronización de datos GTFS)
+	// ============================================================================
+	gtfs := api.Group("/gtfs")
+	gtfs.Get("/status", handlers.HandleGTFSStatus)
+	// GET /api/gtfs/status - Consultar estado de la sincronización
+	
+	gtfs.Post("/sync", handlers.HandleGTFSForceSync)
+	// POST /api/gtfs/sync - Forzar sincronización manual (requiere autenticación en producción)
+
+	// ============================================================================
 	// RED BUS (Moovit - Información específica de rutas Red)
 	// ============================================================================
 	red := api.Group("/red")
@@ -169,6 +179,10 @@ func Register(app *fiber.App, db *sql.DB) {
 	red.Post("/itinerary", redBusHandler.GetRedBusItinerary)
 	red.Post("/itinerary/options", redBusHandler.GetRedBusItineraryOptions)
 	red.Post("/itinerary/detail", redBusHandler.GetRedBusItineraryDetail)
+	
+	// Cache management endpoints
+	red.Get("/cache/stats", redBusHandler.GetCacheStats)
+	red.Post("/cache/clear", redBusHandler.ClearCache)
 
 	// ============================================================================
 	// BUS ARRIVALS (Llegadas en tiempo real desde Red.cl)
