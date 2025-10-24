@@ -9,12 +9,12 @@
 
 import 'dart:async';
 import 'dart:convert';
-import 'dart:developer' as developer;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:vibration/vibration.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import '../device/tts_service.dart';
+import '../debug_logger.dart';
 
 enum NotificationType { audio, vibration, visual, all }
 
@@ -131,13 +131,8 @@ class CustomNotificationsService {
           _preferences = NotificationPreferences.fromJson(decoded);
         }
       }
-    } catch (e, st) {
-      developer.log(
-        'Error loading notification preferences: $e',
-        name: 'CustomNotificationsService',
-        error: e,
-        stackTrace: st,
-      );
+    } catch (e) {
+      DebugLogger.error('[CustomNotificationsService] Error loading notification preferences: $e');
     }
   }
 
@@ -160,13 +155,8 @@ class CustomNotificationsService {
       });
 
       await prefs.setString(_prefsKey, payload);
-    } catch (e, st) {
-      developer.log(
-        'Error saving notification preferences: $e',
-        name: 'CustomNotificationsService',
-        error: e,
-        stackTrace: st,
-      );
+    } catch (e) {
+      DebugLogger.error('[CustomNotificationsService] Error saving notification preferences: $e');
     }
   }
 
@@ -297,13 +287,8 @@ class CustomNotificationsService {
           ),
         );
       }
-    } catch (e, st) {
-      developer.log(
-        'Error checking proximity: $e',
-        name: 'CustomNotificationsService',
-        error: e,
-        stackTrace: st,
-      );
+    } catch (e) {
+      DebugLogger.error('[CustomNotificationsService] Error checking proximity: $e');
     }
   }
 
@@ -393,10 +378,7 @@ class CustomNotificationsService {
   void _showVisual(CustomNotification notification) {
     // Este método será implementado en la UI
     // Aquí solo emitimos el evento para que la UI lo capture
-    developer.log(
-      '📢 Visual Notification: ${notification.fullMessage}',
-      name: 'CustomNotificationsService',
-    );
+    DebugLogger.info('[CustomNotificationsService] 📢 Visual Notification: ${notification.fullMessage}');
   }
 
   void dispose() {

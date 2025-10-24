@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:developer' as developer;
+import '../debug_logger.dart';
 import 'dart:io' show SocketException;
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -89,7 +89,7 @@ class RouteCache {
         _cache.removeWhere((route) => route.isExpired());
       }
     } catch (e) {
-      developer.log('Error loading route cache: $e');
+      DebugLogger.network('Error loading route cache: $e');
     }
   }
 
@@ -99,7 +99,7 @@ class RouteCache {
       final cacheJson = jsonEncode(_cache.map((r) => r.toJson()).toList());
       await prefs.setString(cacheKey, cacheJson);
     } catch (e) {
-      developer.log('Error saving route cache: $e');
+      DebugLogger.network('Error saving route cache: $e');
     }
   }
 
@@ -379,7 +379,7 @@ class ApiClient {
 
       return false;
     } catch (e) {
-      developer.log('⚠️ [API] Error verificando huella biométrica: $e');
+      DebugLogger.network('⚠️ [API] Error verificando huella biométrica: $e');
       // En caso de error, permitir continuar (modo offline)
       return false;
     }
@@ -498,7 +498,7 @@ class ApiClient {
       );
 
       if (cached != null) {
-        developer.log('✅ Ruta de transporte público encontrada en caché');
+        DebugLogger.network('✅ Ruta de transporte público encontrada en caché');
         cached['fromCache'] = true;
         return cached;
       }
@@ -516,10 +516,10 @@ class ApiClient {
       body['departure_time'] = departureTime.toUtc().toIso8601String();
     }
 
-    developer.log('🚌 Enviando solicitud de transporte público a: $uri');
-    developer.log('📝 Body: $body');
-    developer.log('📍 Origin: lat=$originLat, lon=$originLon');
-    developer.log('📍 Destination: lat=$destLat, lon=$destLon');
+    DebugLogger.network('🚌 Enviando solicitud de transporte público a: $uri');
+    DebugLogger.network('📝 Body: $body');
+    DebugLogger.network('📍 Origin: lat=$originLat, lon=$originLon');
+    DebugLogger.network('📍 Destination: lat=$destLat, lon=$destLon');
 
     try {
       final headers = <String, String>{
@@ -536,15 +536,15 @@ class ApiClient {
         body: jsonEncode(body),
       );
 
-      developer.log('📡 Status Code: ${response.statusCode}');
-      developer.log('📄 Response: ${response.body}');
+      DebugLogger.network('📡 Status Code: ${response.statusCode}');
+      DebugLogger.network('📄 Response: ${response.body}');
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body) as Map<String, dynamic>;
 
         // Verificar si es un fallback a Moovit
         if (data['fallback'] == 'moovit') {
-          developer.log(
+          DebugLogger.network(
             '🔄 Backend sugiere usar Moovit, consultando endpoint de Red...',
           );
 
@@ -566,12 +566,12 @@ class ApiClient {
           if (redResponse.statusCode == 200) {
             final redData =
                 jsonDecode(redResponse.body) as Map<String, dynamic>;
-            developer.log('✅ Ruta obtenida desde Moovit/Red');
+            DebugLogger.network('✅ Ruta obtenida desde Moovit/Red');
 
             // Convertir formato de Moovit a formato GTFS para compatibilidad
             return _convertMoovitToGTFSFormat(redData);
           } else {
-            developer.log(
+            DebugLogger.network(
               '⚠️ Error obteniendo ruta de Moovit: ${redResponse.statusCode}',
             );
             throw ApiException(
@@ -602,7 +602,7 @@ class ApiClient {
         );
       }
     } catch (e) {
-      developer.log('❌ Error en solicitud de transporte público: $e');
+      DebugLogger.network('❌ Error en solicitud de transporte público: $e');
       rethrow;
     }
   }
@@ -643,7 +643,7 @@ class ApiClient {
       );
       routes.add(mainRoute);
     } catch (e) {
-      developer.log('No se pudo obtener ruta principal: $e');
+      DebugLogger.network('No se pudo obtener ruta principal: $e');
     }
 
     // Agregar rutas alternativas de caché

@@ -669,19 +669,116 @@ func (s *Scraper) scrapeMovitWithCorrectURL(originName, destName string, originL
 		}),
 		chromedp.Sleep(1500*time.Millisecond), // Reducido de 2s a 1.5s - el lazy loading es rápido
 
-		// ETAPA 5: Extraer paraderos con JavaScript detallado
+		// ETAPA 5: Extraer paraderos, rutas de bus Y líneas de metro con JavaScript detallado
 		chromedp.ActionFunc(func(ctx context.Context) error {
-			log.Printf("   🔍 ETAPA 5: Extrayendo paraderos con JavaScript...")
+			log.Printf("   🔍 ETAPA 5: Extrayendo paraderos, rutas y líneas de metro con JavaScript...")
 			var result interface{}
 			_ = chromedp.Evaluate(`
 				(function() {
 					console.log('[EXTRACTOR] Iniciando extracción detallada...');
 					
-					// Buscar códigos PC en TODO el HTML
+					// =================================================================
+					// PARTE 1: DETECCIÓN DE LÍNEAS DE METRO
+					// =================================================================
+					const metroLines = new Set();
+					const metroInfo = [];
+					
+					// 1.1: Buscar imágenes con src que contengan "metro" o iconos base64
+					const metroImages = document.querySelectorAll('img');
+					console.log('[METRO] Total de imágenes encontradas:', metroImages.length);
+					
+					metroImages.forEach((img, idx) => {
+						const src = img.src || img.getAttribute('src') || '';
+						const alt = img.alt || '';
+						const title = img.title || '';
+						
+						// Detectar si es imagen de metro (por src, alt, title, o contexto)
+						const isMetroIcon = src.includes('metro') || 
+						                   src.includes('subway') ||
+						                   src.includes('train') ||
+						                   alt.toLowerCase().includes('metro') ||
+						                   alt.toLowerCase().includes('línea') ||
+						                   title.toLowerCase().includes('metro') ||
+						                   src.startsWith('data:image'); // base64
+						
+						if (isMetroIcon) {
+							console.log('[METRO-IMG]', idx, 'src:', src.substring(0, 100), 'alt:', alt, 'title:', title);
+							
+							// Buscar texto de línea cerca de la imagen
+							const parent = img.closest('.line-image, .agency, .mv-wrapper, div, span');
+							if (parent) {
+								const parentText = parent.textContent || '';
+								console.log('[METRO-PARENT]', parentText);
+								
+								// Patrones para detectar líneas: "L1", "L2", "Línea 1", etc.
+								const linePattern = /(?:L|Línea)\s*(\d+[A-Z]?)|Metro\s+(\d+)/gi;
+								let match;
+								while ((match = linePattern.exec(parentText)) !== null) {
+									const lineNum = match[1] || match[2];
+									if (lineNum) {
+										const lineName = 'L' + lineNum;
+										metroLines.add(lineName);
+										console.log('[METRO-LINE] Detectada:', lineName);
+										metroInfo.push({
+											line: lineName,
+											context: parentText.substring(0, 50)
+										});
+									}
+								}
+							}
+						}
+					});
+					
+					// 1.2: Buscar spans con clases específicas de líneas de metro
+					const lineSpans = document.querySelectorAll('span[class*="line"], div[class*="line"], .agency span');
+					console.log('[METRO] Spans con "line" en clase:', lineSpans.length);
+					
+					lineSpans.forEach(span => {
+						const text = span.textContent.trim();
+						const className = span.className || '';
+						
+						// Detectar "L1", "L2", "L3", etc.
+						if (/^L\d+[A-Z]?$/.test(text) || /^Línea\s+\d+/.test(text)) {
+							const lineMatch = text.match(/L?(\d+[A-Z]?)/);
+							if (lineMatch) {
+								const lineName = 'L' + lineMatch[1];
+								metroLines.add(lineName);
+								console.log('[METRO-SPAN] Detectada:', lineName, 'clase:', className);
+								metroInfo.push({
+									line: lineName,
+									element: 'span',
+									class: className
+								});
+							}
+						}
+					});
+					
+					// 1.3: Buscar en atributos data-* y aria-label
+					const elementsWithData = document.querySelectorAll('[data-line], [aria-label*="Metro"], [aria-label*="Línea"]');
+					console.log('[METRO] Elementos con data-line o aria-label:', elementsWithData.length);
+					
+					elementsWithData.forEach(el => {
+						const dataLine = el.getAttribute('data-line') || '';
+						const ariaLabel = el.getAttribute('aria-label') || '';
+						
+						// Buscar patrones de línea
+						const combined = dataLine + ' ' + ariaLabel;
+						const linePattern = /(?:L|Línea)\s*(\d+[A-Z]?)/gi;
+						let match;
+						while ((match = linePattern.exec(combined)) !== null) {
+							const lineName = 'L' + match[1];
+							metroLines.add(lineName);
+							console.log('[METRO-DATA] Detectada:', lineName);
+						}
+					});
+					
+					// =================================================================
+					// PARTE 2: DETECCIÓN DE CÓDIGOS DE PARADEROS (P C, PA, etc.)
+					// =================================================================
 					const stopPattern = /\b(P[CABDEIJLRSUX]\d{3,5})\b/gi;
 					const foundStops = new Set();
 					
-					// 1. Buscar en innerText (más confiable)
+					// 2.1: Buscar en innerText (más confiable)
 					const bodyText = document.body.innerText;
 					console.log('[EXTRACTOR] Tamaño de innerText:', bodyText.length);
 					console.log('[EXTRACTOR] Muestra de texto:', bodyText.substring(0, 500));
@@ -695,7 +792,7 @@ func (s *Scraper) scrapeMovitWithCorrectURL(originName, destName string, originL
 					}
 					console.log('[EXTRACTOR] Matches en innerText:', matchCount);
 					
-					// 2. Buscar en outerHTML
+					// 2.2: Buscar en outerHTML
 					const htmlSource = document.documentElement.outerHTML;
 					console.log('[EXTRACTOR] Tamaño de outerHTML:', htmlSource.length);
 					stopPattern.lastIndex = 0;
@@ -706,7 +803,7 @@ func (s *Scraper) scrapeMovitWithCorrectURL(originName, destName string, originL
 					}
 					console.log('[EXTRACTOR] Matches en outerHTML:', htmlMatchCount);
 					
-					// 3. Buscar específicamente en elementos mv-suggested-route
+					// 2.3: Buscar específicamente en elementos mv-suggested-route
 					const routeElements = document.querySelectorAll('mv-suggested-route');
 					console.log('[EXTRACTOR] Elementos mv-suggested-route encontrados:', routeElements.length);
 					routeElements.forEach((el, idx) => {
@@ -719,21 +816,40 @@ func (s *Scraper) scrapeMovitWithCorrectURL(originName, destName string, originL
 					});
 					
 					const stops = Array.from(foundStops).sort();
+					const metroLinesArray = Array.from(metroLines).sort();
+					
 					console.log('[EXTRACTOR] TOTAL paraderos únicos:', stops.length);
 					console.log('[EXTRACTOR] Lista:', stops);
+					console.log('[METRO] TOTAL líneas de metro:', metroLinesArray.length);
+					console.log('[METRO] Líneas:', metroLinesArray);
+					console.log('[METRO] Detalles:', metroInfo);
 					
-					// Inyectar en HTML
+					// =================================================================
+					// PARTE 3: INYECTAR RESULTADOS EN HTML
+					// =================================================================
+					// Inyectar paraderos
 					if (stops.length > 0) {
 						const injectedDiv = document.createElement('div');
 						injectedDiv.id = 'moovit-extracted-stops';
 						injectedDiv.textContent = 'EXTRACTED_STOPS: ' + stops.join(', ');
 						document.body.appendChild(injectedDiv);
-						console.log('[EXTRACTOR] Inyectado en HTML');
+						console.log('[EXTRACTOR] Paraderos inyectados en HTML');
+					}
+					
+					// Inyectar líneas de metro
+					if (metroLinesArray.length > 0) {
+						const metroDiv = document.createElement('div');
+						metroDiv.id = 'moovit-extracted-metro';
+						metroDiv.textContent = 'EXTRACTED_METRO: ' + metroLinesArray.join(', ');
+						document.body.appendChild(metroDiv);
+						console.log('[METRO] Líneas inyectadas en HTML');
 					}
 					
 					return {
 						clicks: 0,
-						stops: stops
+						stops: stops,
+						metroLines: metroLinesArray,
+						metroInfo: metroInfo
 					};
 				})();
 			`, &result).Do(ctx)
@@ -742,7 +858,8 @@ func (s *Scraper) scrapeMovitWithCorrectURL(originName, destName string, originL
 				if resultMap, ok := result.(map[string]interface{}); ok {
 					clicks := resultMap["clicks"]
 					stops := resultMap["stops"]
-					log.Printf("      ✅ Clicks: %v, Paraderos extraídos: %v", clicks, stops)
+					metroLines := resultMap["metroLines"]
+					log.Printf("      ✅ Clicks: %v, Paraderos: %v, Líneas Metro: %v", clicks, stops, metroLines)
 				} else {
 					log.Printf("      ℹ️  Resultado: %v", result)
 				}
@@ -825,6 +942,33 @@ func (s *Scraper) parseMovitHTML(html string, originLat, originLon, destLat, des
 	// Guardar HTML completo para búsquedas posteriores
 	fullHTML := html
 
+	// EXTRAER LÍNEAS DE METRO detectadas por JavaScript
+	extractedMetroRegex := regexp.MustCompile(`<div id="moovit-extracted-metro"[^>]*>EXTRACTED_METRO:\s*([^<]+)</div>`)
+	extractedMetroMatch := extractedMetroRegex.FindStringSubmatch(html)
+	
+	var metroLines []string
+	if len(extractedMetroMatch) > 1 {
+		log.Printf("✅ [METRO] Encontrado div con líneas de metro extraídas")
+		metroText := strings.TrimSpace(extractedMetroMatch[1])
+		metroLines = strings.Split(metroText, ",")
+		
+		// Limpiar líneas
+		cleanedMetro := []string{}
+		for _, line := range metroLines {
+			cleaned := strings.TrimSpace(line)
+			if len(cleaned) > 0 {
+				cleanedMetro = append(cleanedMetro, cleaned)
+			}
+		}
+		metroLines = cleanedMetro
+		
+		if len(metroLines) > 0 {
+			log.Printf("✅ [METRO] Líneas detectadas: %d - %v", len(metroLines), metroLines)
+		}
+	} else {
+		log.Printf("ℹ️  [METRO] No se detectaron líneas de metro en esta ruta")
+	}
+
 	// PRIORIDAD 1: Buscar div inyectado con paraderos extraídos desde página de itinerario
 	extractedStopsRegex := regexp.MustCompile(`<div id="moovit-extracted-stops"[^>]*>EXTRACTED_STOPS:\s*([^<]+)</div>`)
 	extractedStopsMatch := extractedStopsRegex.FindStringSubmatch(html)
@@ -846,8 +990,8 @@ func (s *Scraper) parseMovitHTML(html string, originLat, originLon, destLat, des
 		if len(cleanedStops) > 0 {
 			log.Printf("✅ [ITINERARIO] Paraderos extraídos: %d - %v", len(cleanedStops), cleanedStops)
 
-			// Crear opción de ruta usando los paraderos extraídos
-			return s.parseItineraryPageWithStops(html, cleanedStops, originLat, originLon, destLat, destLon)
+			// Crear opción de ruta usando los paraderos extraídos Y las líneas de metro
+			return s.parseItineraryPageWithStopsAndMetro(html, cleanedStops, metroLines, originLat, originLon, destLat, destLon)
 		}
 	}
 
@@ -1009,6 +1153,123 @@ func (s *Scraper) parseItineraryPageWithStops(html string, stopCodes []string, o
 	for i, leg := range itinerary.Legs {
 		log.Printf("🔍 [DEBUG-LEG-%d] Tipo:%s Mode:%s Puntos:%d From:%s To:%s",
 			i+1, leg.Type, leg.Mode, len(leg.Geometry), leg.From, leg.To)
+		if len(leg.Geometry) > 0 {
+			log.Printf("   Primer punto: [%.6f, %.6f]", leg.Geometry[0][1], leg.Geometry[0][0])
+			log.Printf("   Último punto: [%.6f, %.6f]",
+				leg.Geometry[len(leg.Geometry)-1][1], leg.Geometry[len(leg.Geometry)-1][0])
+		} else {
+			log.Printf("   ⚠️  SIN GEOMETRÍA")
+		}
+	}
+
+	return routeOptions, nil
+}
+
+// parseItineraryPageWithStopsAndMetro procesa paraderos Y líneas de metro extraídas
+func (s *Scraper) parseItineraryPageWithStopsAndMetro(html string, stopCodes []string, metroLines []string, originLat, originLon, destLat, destLon float64) (*RouteOptions, error) {
+	log.Printf("🔍 [ITINERARIO-METRO] Procesando %d paraderos y %d líneas de metro...", len(stopCodes), len(metroLines))
+	
+	// Mostrar líneas de metro detectadas
+	if len(metroLines) > 0 {
+		log.Printf("🚇 [METRO] Líneas detectadas en el itinerario: %v", metroLines)
+	}
+
+	// Buscar número de ruta en el HTML de itinerario
+	routeNumber := s.extractRouteNumberFromItinerary(html)
+	if routeNumber == "" {
+		// Si hay líneas de metro pero no ruta de bus, usar la primera línea de metro
+		if len(metroLines) > 0 {
+			routeNumber = metroLines[0]
+			log.Printf("   ℹ️  [RUTA] Usando línea de metro como ruta principal: %s", routeNumber)
+		} else {
+			log.Printf("[WARN] No se pudo extraer número de ruta del HTML de itinerario")
+			routeNumber = "Red" // Fallback genérico
+		}
+	}
+
+	// Buscar duración en el HTML
+	durationRegex := regexp.MustCompile(`(\d+)\s*min`)
+	durationMatch := durationRegex.FindStringSubmatch(html)
+	duration := 30 // default
+	if len(durationMatch) > 1 {
+		fmt.Sscanf(durationMatch[1], "%d", &duration)
+	}
+	log.Printf("   ⏱️  Duración estimada: %d min", duration)
+
+	// Geocodificar paraderos usando GTFS
+	geocodedStops := []BusStop{}
+	seenCodes := make(map[string]bool)
+
+	for i, code := range stopCodes {
+		code = strings.TrimSpace(code)
+		if code == "" || seenCodes[code] {
+			continue
+		}
+		seenCodes[code] = true
+
+		stop, err := s.getStopByCode(code)
+		if err == nil && stop != nil {
+			// Asignar secuencia basada en orden en el array
+			stop.Sequence = i + 1
+			geocodedStops = append(geocodedStops, *stop)
+			log.Printf("   ✅ [GTFS] %s: %s (%.6f, %.6f)", code, stop.Name, stop.Latitude, stop.Longitude)
+		} else {
+			log.Printf("   ⚠️  [GTFS] No encontrado: %s", code)
+		}
+	}
+
+	log.Printf("✅ [MOOVIT-HTML] Total paraderos geocodificados: %d de %d", len(geocodedStops), len(stopCodes))
+
+	if len(geocodedStops) < 2 && len(metroLines) == 0 {
+		return nil, fmt.Errorf("no se pudieron geocodificar suficientes paraderos (%d) y no hay líneas de metro", len(geocodedStops))
+	}
+
+	// Crear RouteOptions con una sola opción de ruta
+	routeOptions := &RouteOptions{
+		Origin:      Coordinate{Latitude: originLat, Longitude: originLon},
+		Destination: Coordinate{Latitude: destLat, Longitude: destLon},
+		Options:     []RouteItinerary{},
+	}
+
+	// Construir itinerario con los paraderos geocodificados Y líneas de metro
+	var itinerary *RouteItinerary
+	
+	if len(geocodedStops) >= 2 {
+		// Caso normal: hay paraderos de bus
+		itinerary = s.buildItineraryFromStopsWithMetro(routeNumber, duration, geocodedStops, metroLines, originLat, originLon, destLat, destLon)
+	} else if len(metroLines) > 0 {
+		// Caso especial: solo metro, sin paraderos de bus
+		log.Printf("ℹ️  [METRO-ONLY] Ruta solo con metro, sin buses Red")
+		itinerary = s.buildMetroOnlyItinerary(metroLines, duration, originLat, originLon, destLat, destLon)
+	} else {
+		return nil, fmt.Errorf("no hay suficiente información para construir el itinerario")
+	}
+	
+	routeOptions.Options = append(routeOptions.Options, *itinerary)
+
+	log.Printf("✅ [ITINERARIO-METRO] Ruta generada: %s con %d piernas y %d puntos de geometría",
+		routeNumber, len(itinerary.Legs), s.countGeometryPoints(itinerary))
+
+	// 🔍 DEBUG: Mostrar paraderos de la ruta
+	log.Printf("🔍 [DEBUG-PARADEROS] Total paraderos en ruta: %d", len(geocodedStops))
+	for i, stop := range geocodedStops {
+		log.Printf("   [%d] %s [%s] - Seq:%d - (%.6f, %.6f)",
+			i+1, stop.Name, stop.Code, stop.Sequence, stop.Latitude, stop.Longitude)
+	}
+	
+	// 🔍 DEBUG: Mostrar líneas de metro
+	if len(metroLines) > 0 {
+		log.Printf("🔍 [DEBUG-METRO] Líneas en ruta: %v", metroLines)
+	}
+
+	// 🔍 DEBUG: Mostrar origen y destino del itinerario
+	log.Printf("🔍 [DEBUG-ITINERARIO] Origen request: (%.6f, %.6f)", originLat, originLon)
+	log.Printf("🔍 [DEBUG-ITINERARIO] Destino request: (%.6f, %.6f)", destLat, destLon)
+
+	// 🔍 DEBUG: Mostrar geometría de cada pierna
+	for i, leg := range itinerary.Legs {
+		log.Printf("🔍 [DEBUG-LEG-%d] Tipo:%s Mode:%s RouteNumber:%s Puntos:%d From:%s To:%s",
+			i+1, leg.Type, leg.Mode, leg.RouteNumber, len(leg.Geometry), leg.From, leg.To)
 		if len(leg.Geometry) > 0 {
 			log.Printf("   Primer punto: [%.6f, %.6f]", leg.Geometry[0][1], leg.Geometry[0][0])
 			log.Printf("   Último punto: [%.6f, %.6f]",
@@ -1576,6 +1837,120 @@ func (s *Scraper) buildItineraryFromStops(routeNumber string, duration int, stop
 			i+1, leg.Type, leg.Mode, len(leg.Geometry), leg.From, leg.To)
 	}
 
+	return itinerary
+}
+
+// buildItineraryFromStopsWithMetro construye itinerario con paraderos de bus Y líneas de metro
+func (s *Scraper) buildItineraryFromStopsWithMetro(routeNumber string, duration int, stops []BusStop, metroLines []string, originLat, originLon, destLat, destLon float64) *RouteItinerary {
+	log.Printf("🚇 [GEOMETRY-METRO] Construyendo geometría con %d paraderos y %d líneas de metro...", len(stops), len(metroLines))
+
+	// Primero construir itinerario normal con buses
+	itinerary := s.buildItineraryFromStops(routeNumber, duration, stops, originLat, originLon, destLat, destLon)
+	
+	// Agregar información de líneas de metro al itinerario
+	if len(metroLines) > 0 {
+		log.Printf("🚇 [METRO] Agregando %d líneas de metro al itinerario", len(metroLines))
+		
+		// Buscar si alguna de las piernas debería ser de metro
+		for i, leg := range itinerary.Legs {
+			// Si es un leg de bus que coincide con una línea de metro, convertirlo
+			if leg.Type == "bus" {
+				for _, metroLine := range metroLines {
+					// Si el número de ruta coincide con una línea de metro (ej: "L1" en RouteNumber)
+					if strings.Contains(metroLine, leg.RouteNumber) || strings.Contains(leg.RouteNumber, metroLine) {
+						log.Printf("   🔄 [METRO] Convirtiendo leg %d a Metro %s", i+1, metroLine)
+						itinerary.Legs[i].Type = "metro"
+						itinerary.Legs[i].Mode = "Metro"
+						itinerary.Legs[i].RouteNumber = metroLine
+						itinerary.Legs[i].Instruction = fmt.Sprintf("Toma el Metro %s en %s hacia %s", 
+							metroLine, leg.From, leg.To)
+					}
+				}
+			}
+		}
+		
+		// Agregar líneas de metro a RedBusRoutes (aunque no sean buses)
+		// Esto permite que el cliente sepa qué líneas de transporte se usan
+		for _, metroLine := range metroLines {
+			// Solo agregar si no está ya en la lista
+			found := false
+			for _, existing := range itinerary.RedBusRoutes {
+				if existing == metroLine {
+					found = true
+					break
+				}
+			}
+			if !found {
+				itinerary.RedBusRoutes = append(itinerary.RedBusRoutes, metroLine)
+				log.Printf("   ➕ [METRO] Agregada línea %s a rutas del itinerario", metroLine)
+			}
+		}
+	}
+	
+	return itinerary
+}
+
+// buildMetroOnlyItinerary construye itinerario solo con líneas de metro (sin buses Red)
+func (s *Scraper) buildMetroOnlyItinerary(metroLines []string, duration int, originLat, originLon, destLat, destLon float64) *RouteItinerary {
+	log.Printf("🚇 [METRO-ONLY] Construyendo itinerario solo con metro: %v", metroLines)
+	
+	itinerary := &RouteItinerary{
+		Origin:        Coordinate{Latitude: originLat, Longitude: originLon},
+		Destination:   Coordinate{Latitude: destLat, Longitude: destLon},
+		Legs:          []TripLeg{},
+		RedBusRoutes:  metroLines, // Usar líneas de metro como "rutas"
+		TotalDuration: duration,
+	}
+	
+	// PIERNA 1: Caminata al metro
+	walkToMetroLeg := TripLeg{
+		Type:        "walk",
+		Mode:        "walk",
+		Duration:    5, // Estimado
+		Distance:    0.3, // Estimado 300m
+		Instruction: "Camina hacia la estación de metro más cercana",
+		Geometry:    s.generateStraightLineGeometry(originLat, originLon, originLat, originLon, 2),
+	}
+	itinerary.Legs = append(itinerary.Legs, walkToMetroLeg)
+	
+	// PIERNA 2: Viaje en metro
+	for i, metroLine := range metroLines {
+		metroLeg := TripLeg{
+			Type:        "metro",
+			Mode:        "Metro",
+			RouteNumber: metroLine,
+			From:        fmt.Sprintf("Estación origen %s", metroLine),
+			To:          fmt.Sprintf("Estación destino %s", metroLine),
+			Duration:    duration - 10, // Restar tiempo de caminatas
+			Distance:    5.0, // Estimado 5km
+			Instruction: fmt.Sprintf("Toma el Metro Línea %s", metroLine),
+			Geometry:    s.generateStraightLineGeometry(originLat, originLon, destLat, destLon, 10),
+		}
+		
+		if i > 0 {
+			// Es un transbordo
+			metroLeg.Instruction = fmt.Sprintf("Transbordo a Metro Línea %s", metroLine)
+			log.Printf("   🔄 [TRANSBORDO] Cambio a línea %s", metroLine)
+		}
+		
+		itinerary.Legs = append(itinerary.Legs, metroLeg)
+		itinerary.TotalDistance += metroLeg.Distance
+	}
+	
+	// PIERNA 3: Caminata desde metro al destino
+	walkFromMetroLeg := TripLeg{
+		Type:        "walk",
+		Mode:        "walk",
+		Duration:    5, // Estimado
+		Distance:    0.3, // Estimado 300m
+		Instruction: "Camina desde la estación de metro hacia tu destino",
+		Geometry:    s.generateStraightLineGeometry(destLat, destLon, destLat, destLon, 2),
+	}
+	itinerary.Legs = append(itinerary.Legs, walkFromMetroLeg)
+	itinerary.TotalDistance += 0.6 // Suma de caminatas
+	
+	log.Printf("✅ [METRO-ONLY] Itinerario creado con %d líneas de metro y %d legs", len(metroLines), len(itinerary.Legs))
+	
 	return itinerary
 }
 

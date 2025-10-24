@@ -1,4 +1,4 @@
-import 'dart:developer' as developer;
+import '../debug_logger.dart';
 // ============================================================================
 // ADDRESS VALIDATION SERVICE - Sprint 3 CAP-23
 // ============================================================================
@@ -101,7 +101,7 @@ class AddressValidationService {
       _cache[normalizedAddress] = result;
       return result;
     } catch (e) {
-      developer.log('Error validating address: $e');
+      DebugLogger.network('Error validating address: $e');
       return AddressValidationResult(
         status: AddressValidationStatus.networkError,
         confidence: 0.0,
@@ -155,7 +155,7 @@ class AddressValidationService {
 
       return result;
     } catch (e) {
-      developer.log('Error validating coordinates: $e');
+      DebugLogger.network('Error validating coordinates: $e');
       return AddressValidationResult(
         status: AddressValidationStatus.networkError,
         confidence: 0.0,
@@ -185,7 +185,7 @@ class AddressValidationService {
         };
       }).toList();
     } catch (e) {
-      developer.log('Error suggesting addresses: $e');
+      DebugLogger.network('Error suggesting addresses: $e');
       return [];
     }
   }

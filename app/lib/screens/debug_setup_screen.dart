@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 
 import '../services/backend/api_client.dart';
 import '../services/backend/server_config.dart';
+import '../services/debug_logger.dart';
 import 'login_screen_v2.dart';
 import 'map_screen.dart';
 
+// 🔧 FLAG GLOBAL DE DEBUG - Controla TODOS los logs de la aplicación
 bool debug = true;
 
 /// Pantalla de utilidades para desarrolladores
@@ -29,6 +31,12 @@ class _DebugSetupScreenState extends State<DebugSetupScreen> {
   @override
   void initState() {
     super.initState();
+    
+    // 🔧 Sincronizar flag de debug con el logger global
+    DebugLogger.setDebugEnabled(debug);
+    DebugLogger.separator(title: 'DEBUG SETUP SCREEN INICIADA');
+    DebugLogger.info('Flag de debug global: $debug', context: 'DebugSetup');
+    
     _syncManualFieldsWithConfig();
   }
 
@@ -154,28 +162,25 @@ class _DebugSetupScreenState extends State<DebugSetupScreen> {
           builder: (context, constraints) {
             return SingleChildScrollView(
               padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
-              child: ConstrainedBox(
-                constraints: BoxConstraints(
-                  minHeight: constraints.maxHeight - 36,
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    _buildHeader(context),
-                    const SizedBox(height: 20),
-                    const _InfoBanner(),
-                    const SizedBox(height: 20),
-                    ValueListenableBuilder<String>(
-                      valueListenable: ServerConfig.instance.baseUrlListenable,
-                      builder: (context, baseUrl, _) {
-                        return _buildBackendCard(context, baseUrl);
-                      },
-                    ),
-                    const SizedBox(height: 20),
-                    _buildQuickActionsCard(context),
-                    const SizedBox(height: 24),
-                  ],
-                ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _buildHeader(context),
+                  const SizedBox(height: 20),
+                  const _InfoBanner(),
+                  const SizedBox(height: 20),
+                  _buildDebugToggleCard(context),
+                  const SizedBox(height: 20),
+                  ValueListenableBuilder<String>(
+                    valueListenable: ServerConfig.instance.baseUrlListenable,
+                    builder: (context, baseUrl, _) {
+                      return _buildBackendCard(context, baseUrl);
+                    },
+                  ),
+                  const SizedBox(height: 20),
+                  _buildQuickActionsCard(context),
+                  const SizedBox(height: 24),
+                ],
               ),
             );
           },
@@ -244,6 +249,128 @@ class _DebugSetupScreenState extends State<DebugSetupScreen> {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildDebugToggleCard(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.08),
+            blurRadius: 18,
+            offset: const Offset(0, 10),
+          ),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: debug ? const Color(0xFF4CAF50).withValues(alpha: 0.15) : const Color(0xFF9E9E9E).withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Icon(
+                    debug ? Icons.bug_report : Icons.bug_report_outlined,
+                    color: debug ? const Color(0xFF4CAF50) : const Color(0xFF9E9E9E),
+                    size: 24,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                const Expanded(
+                  child: Text(
+                    'Control de Logs',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                  ),
+                ),
+                Switch(
+                  value: debug,
+                  onChanged: (value) {
+                    setState(() {
+                      debug = value;
+                      DebugLogger.setDebugEnabled(debug);
+                      if (debug) {
+                        DebugLogger.success('✅ Logs habilitados - Todos los mensajes se mostrarán en consola');
+                      } else {
+                        print('🔇 Logs deshabilitados');
+                      }
+                    });
+                  },
+                  activeColor: const Color(0xFF4CAF50),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(12),
+                color: debug ? const Color(0xFF4CAF50).withValues(alpha: 0.08) : const Color(0xFFF5F5F5),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    debug ? Icons.visibility : Icons.visibility_off,
+                    size: 18,
+                    color: debug ? const Color(0xFF4CAF50) : const Color(0xFF9E9E9E),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      debug 
+                        ? 'Logs activos: print(), developer.log() y DebugLogger() se mostrarán en consola'
+                        : 'Logs desactivados: Solo mensajes críticos se mostrarán',
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: debug ? const Color(0xFF2E7D32) : const Color(0xFF757575),
+                        height: 1.4,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            ElevatedButton.icon(
+              onPressed: debug ? () {
+                DebugLogger.separator();
+                DebugLogger.info('🧪 Test de logging iniciado');
+                DebugLogger.success('✅ Success log funcionando');
+                DebugLogger.warning('⚠️ Warning log funcionando');
+                DebugLogger.error('❌ Error log funcionando');
+                DebugLogger.navigation('🧭 Navigation log funcionando');
+                DebugLogger.network('🌐 Network log funcionando');
+                DebugLogger.separator();
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Revisa la consola para ver los logs de prueba'),
+                    backgroundColor: Color(0xFF4CAF50),
+                  ),
+                );
+              } : null,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF4CAF50),
+                foregroundColor: Colors.white,
+                disabledBackgroundColor: const Color(0xFFE0E0E0),
+                disabledForegroundColor: const Color(0xFF9E9E9E),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+              icon: const Icon(Icons.play_arrow, size: 20),
+              label: const Text('Probar Logs'),
+            ),
+          ],
+        ),
       ),
     );
   }

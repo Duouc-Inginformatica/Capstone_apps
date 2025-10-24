@@ -1,7 +1,7 @@
-import 'dart:developer' as developer;
 import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:device_info_plus/device_info_plus.dart';
+import '../debug_logger.dart';
 
 /// Servicio para detectar capacidades de NPU/NNAPI en dispositivos Android
 /// Determina si el dispositivo puede ejecutar modelos TensorFlow Lite con aceleración por hardware
@@ -65,7 +65,7 @@ class NpuDetectorService {
             await _channel.invokeMapMethod<String, dynamic>('detectNpu') ??
                 <String, dynamic>{};
       } catch (e) {
-        developer.log('⚠️ [NPU] Platform channel no disponible: $e');
+        DebugLogger.info('⚠️ [NPU] Platform channel no disponible: $e');
       }
 
       final hasGpuDelegate = nativeCapabilities['has_gpu'] as bool? ?? false;
@@ -107,17 +107,17 @@ class NpuDetectorService {
   chipset: rawHardware.isNotEmpty ? rawHardware : 'unknown',
       );
 
-      developer.log('🧠 [NPU] Capacidades detectadas:');
-      developer.log('   - NNAPI: ${hasNnapi ? "v${nnApiVersion / 10}" : "No"}');
-      developer.log('   - GPU Delegate: $hasGpuDelegate');
-      developer.log('   - NPU Delegate: $hasNpuDelegate');
-      developer.log('   - Acelerador: ${acceleratorType.name}');
-      developer.log('   - Dispositivo: ${_cachedCapabilities!.deviceInfo}');
-      developer.log('   - Chipset: ${_cachedCapabilities!.chipset}');
+      DebugLogger.info('🧠 [NPU] Capacidades detectadas:');
+      DebugLogger.info('   - NNAPI: ${hasNnapi ? "v${nnApiVersion / 10}" : "No"}');
+      DebugLogger.info('   - GPU Delegate: $hasGpuDelegate');
+      DebugLogger.info('   - NPU Delegate: $hasNpuDelegate');
+      DebugLogger.info('   - Acelerador: ${acceleratorType.name}');
+      DebugLogger.info('   - Dispositivo: ${_cachedCapabilities!.deviceInfo}');
+      DebugLogger.info('   - Chipset: ${_cachedCapabilities!.chipset}');
 
       return _cachedCapabilities!;
     } catch (e) {
-      developer.log('❌ [NPU] Error detectando capacidades: $e');
+      DebugLogger.info('❌ [NPU] Error detectando capacidades: $e');
 
       _cachedCapabilities = NpuCapabilities(
         hasNnapi: false,

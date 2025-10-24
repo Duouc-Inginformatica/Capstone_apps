@@ -527,7 +527,7 @@ class _LoginScreenV2State extends State<LoginScreenV2>
               ),
               child: ClipOval(
                 child: Image.asset(
-                  'assets/icons.webp',
+                  'assets/icons.png',
                   width: 32,
                   height: 32,
                   fit: BoxFit.cover,

@@ -1,5 +1,5 @@
 import 'package:flutter_tts/flutter_tts.dart';
-import 'dart:developer' as developer;
+import '../debug_logger.dart';
 
 /// Servicio TTS clásico usando flutter_tts
 class TtsService {
@@ -29,7 +29,7 @@ class TtsService {
   Future<void> initialize() async {
     if (_initialized) return;
 
-    developer.log('🔊 [TTS] Inicializando motor TTS clásico');
+    DebugLogger.voice('🔊 [TTS] Inicializando motor TTS clásico');
 
     // Configurar TTS nativo
     await _initializeNativeTts();
@@ -86,7 +86,7 @@ class TtsService {
       }
     } catch (e) {
       // Si falla, usar configuración por defecto
-      developer.log('No se pudieron cargar voces del sistema: $e');
+      DebugLogger.voice('No se pudieron cargar voces del sistema: $e');
     }
 
     _initialized = true;
@@ -155,7 +155,7 @@ class TtsService {
 
       // Evitar hablar si el contexto no coincide y no es urgente
       if (targetContext != _activeContext && !urgent) {
-        developer.log(
+        DebugLogger.voice(
           '🔇 [TTS] Mensaje descartado por contexto inactivo ($targetContext)',
         );
         return;
@@ -194,7 +194,7 @@ class TtsService {
         }
       }
     } catch (e) {
-      developer.log('Error en TTS: $e');
+      DebugLogger.voice('Error en TTS: $e');
       _isSpeaking = false;
     }
   }
@@ -206,7 +206,7 @@ class TtsService {
 
     // Usar TTS nativo clásico
     final text = message.text;
-    developer.log(
+    DebugLogger.voice(
       '🔊 [TTS] (${message.context}) "${text.substring(0, text.length > 50 ? 50 : text.length)}..."',
     );
     final textWithPauses = text.replaceAll('.', '... ').replaceAll(',', ', ');
@@ -268,7 +268,10 @@ class TtsService {
       }
       _isSpeaking = false;
       _currentContext = null;
-    } catch (_) {}
+    } catch (e) {
+      // Ignorar errores al detener TTS - puede ocurrir si ya estaba detenido
+      DebugLogger.voice('[TtsService] ⚠️ Error al detener TTS: $e');
+    }
   }
 
   /// Establece la velocidad de habla

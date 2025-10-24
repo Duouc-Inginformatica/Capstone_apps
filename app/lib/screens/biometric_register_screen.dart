@@ -60,8 +60,8 @@ class _BiometricRegisterScreenState extends State<BiometricRegisterScreen> {
 
   Future<void> _initializeSpeech() async {
     _speechAvailable = await _speech.initialize(
-      onStatus: (status) => debugPrint('🎤 Speech status: $status'),
-      onError: (error) => debugPrint('❌ Speech error: $error'),
+      onStatus: (status) => developer.log('🎤 Speech status: $status', name: 'BiometricRegister'),
+      onError: (error) => developer.log('❌ Speech error: $error', name: 'BiometricRegister', error: error),
     );
   }
 
@@ -253,7 +253,7 @@ class _BiometricRegisterScreenState extends State<BiometricRegisterScreen> {
         'Hubo un error al crear tu cuenta. Por favor, intenta de nuevo.',
       );
 
-      debugPrint('❌ Error en registro: $e');
+      developer.log('❌ Error en registro', name: 'BiometricRegister', error: e);
     }
   }
 

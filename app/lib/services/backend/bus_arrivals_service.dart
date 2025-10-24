@@ -1,6 +1,7 @@
 import 'dart:convert';
-import 'dart:developer' as developer;
 import 'package:http/http.dart' as http;
+import 'server_config.dart';
+import '../debug_logger.dart';
 
 class BusArrival {
   final String routeNumber;
@@ -115,43 +116,44 @@ class BusArrivalsService {
   static final BusArrivalsService instance = BusArrivalsService._();
   BusArrivalsService._();
 
-  static const String baseUrl = 'http://192.168.1.156:8080/api';
+  // ⚠️ No hardcodear URLs - usar ServerConfig para consistencia
+  String get baseUrl => '${ServerConfig.instance.baseUrl}/api';
   static const Duration timeout = Duration(seconds: 10);
 
   /// Obtiene las llegadas de buses para un paradero específico
   Future<StopArrivals?> getBusArrivals(String stopCode) async {
-    developer.log('🚌 [ARRIVALS] Obteniendo llegadas para paradero: $stopCode');
+    DebugLogger.network('🚌 [ARRIVALS] Obteniendo llegadas para paradero: $stopCode');
 
     try {
       final url = Uri.parse('$baseUrl/bus-arrivals/$stopCode');
-      developer.log('🌐 [ARRIVALS] URL: $url');
+      DebugLogger.network('🌐 [ARRIVALS] URL: $url');
 
       final response = await http.get(url).timeout(timeout);
 
-      developer.log('📡 [ARRIVALS] Status: ${response.statusCode}');
+      DebugLogger.network('📡 [ARRIVALS] Status: ${response.statusCode}');
 
       if (response.statusCode == 200) {
         final jsonData = json.decode(response.body) as Map<String, dynamic>;
         final arrivals = StopArrivals.fromJson(jsonData);
 
-        developer.log(
+        DebugLogger.network(
           '✅ [ARRIVALS] ${arrivals.arrivals.length} buses encontrados para ${arrivals.stopCode}',
         );
 
         return arrivals;
       } else if (response.statusCode == 404) {
-        developer.log(
+        DebugLogger.network(
           '⚠️ [ARRIVALS] No se encontraron llegadas para paradero $stopCode',
         );
         return null;
       } else {
-        developer.log(
+        DebugLogger.network(
           '❌ [ARRIVALS] Error del servidor: ${response.statusCode} - ${response.body}',
         );
         return null;
       }
     } catch (e) {
-      developer.log('❌ [ARRIVALS] Error obteniendo llegadas: $e');
+      DebugLogger.network('❌ [ARRIVALS] Error obteniendo llegadas: $e');
       return null;
     }
   }
@@ -162,11 +164,11 @@ class BusArrivalsService {
     double longitude, {
     int radius = 200,
   }) async {
-    developer.log('🚌 [ARRIVALS] Obteniendo llegadas cerca de ($latitude, $longitude)');
+    DebugLogger.network('🚌 [ARRIVALS] Obteniendo llegadas cerca de ($latitude, $longitude)');
 
     try {
       final url = Uri.parse('$baseUrl/bus-arrivals/nearby');
-      developer.log('🌐 [ARRIVALS] URL: $url');
+      DebugLogger.network('🌐 [ARRIVALS] URL: $url');
 
       final response = await http
           .post(
@@ -180,24 +182,24 @@ class BusArrivalsService {
           )
           .timeout(timeout);
 
-      developer.log('📡 [ARRIVALS] Status: ${response.statusCode}');
+      DebugLogger.network('📡 [ARRIVALS] Status: ${response.statusCode}');
 
       if (response.statusCode == 200) {
         final jsonData = json.decode(response.body) as Map<String, dynamic>;
         final arrivals = StopArrivals.fromJson(jsonData);
 
-        developer.log('✅ [ARRIVALS] ${arrivals.arrivals.length} buses encontrados');
+        DebugLogger.network('✅ [ARRIVALS] ${arrivals.arrivals.length} buses encontrados');
 
         return arrivals;
       } else if (response.statusCode == 501) {
-        developer.log('⚠️ [ARRIVALS] Endpoint no implementado aún');
+        DebugLogger.network('⚠️ [ARRIVALS] Endpoint no implementado aún');
         return null;
       } else {
-        developer.log('❌ [ARRIVALS] Error: ${response.statusCode}');
+        DebugLogger.network('❌ [ARRIVALS] Error: ${response.statusCode}');
         return null;
       }
     } catch (e) {
-      developer.log('❌ [ARRIVALS] Error: $e');
+      DebugLogger.network('❌ [ARRIVALS] Error: $e');
       return null;
     }
   }

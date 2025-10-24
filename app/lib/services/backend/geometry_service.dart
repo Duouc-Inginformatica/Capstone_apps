@@ -1,4 +1,3 @@
-import 'dart:developer' as developer;
 // ============================================================================
 // Geometry Service - WayFindCL Flutter
 // ============================================================================
@@ -8,6 +7,7 @@ import 'dart:developer' as developer;
 
 import 'dart:async';
 import 'dart:convert';
+import '../debug_logger.dart';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 import 'server_config.dart';
@@ -35,7 +35,7 @@ class GeometryService {
         '&dest_lon=${destination.longitude}',
       );
 
-      developer.log('🚶 [Geometry] Solicitando geometría peatonal');
+      DebugLogger.network('🚶 [Geometry] Solicitando geometría peatonal');
 
       final response = await http
           .get(url)
@@ -49,9 +49,9 @@ class GeometryService {
         return WalkingGeometry.fromJson(data);
       }
 
-      developer.log('⚠️ [Geometry] Error HTTP: ${response.statusCode}');
+      DebugLogger.network('⚠️ [Geometry] Error HTTP: ${response.statusCode}');
     } catch (e) {
-      developer.log('❌ [Geometry] Error: $e');
+      DebugLogger.network('❌ [Geometry] Error: $e');
     }
 
     return null;
@@ -76,7 +76,7 @@ class GeometryService {
         '&dest_lon=${destination.longitude}',
       );
 
-      developer.log('🚗 [Geometry] Solicitando geometría vehicular');
+      DebugLogger.network('🚗 [Geometry] Solicitando geometría vehicular');
 
       final response = await http.get(url).timeout(const Duration(seconds: 10));
 
@@ -85,9 +85,9 @@ class GeometryService {
         return DrivingGeometry.fromJson(data);
       }
 
-      developer.log('⚠️ [Geometry] Error HTTP: ${response.statusCode}');
+      DebugLogger.network('⚠️ [Geometry] Error HTTP: ${response.statusCode}');
     } catch (e) {
-      developer.log('❌ [Geometry] Error: $e');
+      DebugLogger.network('❌ [Geometry] Error: $e');
     }
 
     return null;
@@ -118,7 +118,7 @@ class GeometryService {
         'departure_time': departure.toIso8601String(),
       });
 
-      developer.log('🚌 [Geometry] Solicitando geometría de transporte público');
+      DebugLogger.network('🚌 [Geometry] Solicitando geometría de transporte público');
 
       final response = await http
           .post(url, headers: {'Content-Type': 'application/json'}, body: body)
@@ -129,9 +129,9 @@ class GeometryService {
         return TransitGeometry.fromJson(data);
       }
 
-      developer.log('⚠️ [Geometry] Error HTTP: ${response.statusCode}');
+      DebugLogger.network('⚠️ [Geometry] Error HTTP: ${response.statusCode}');
     } catch (e) {
-      developer.log('❌ [Geometry] Error: $e');
+      DebugLogger.network('❌ [Geometry] Error: $e');
     }
 
     return null;
@@ -157,7 +157,7 @@ class GeometryService {
         '&limit=$limit',
       );
 
-      developer.log('📍 [Geometry] Buscando paradas cercanas');
+      DebugLogger.network('📍 [Geometry] Buscando paradas cercanas');
 
       final response = await http.get(url).timeout(const Duration(seconds: 5));
 
@@ -167,9 +167,9 @@ class GeometryService {
         return stops.map((s) => NearbyStop.fromJson(s)).toList();
       }
 
-      developer.log('⚠️ [Geometry] Error HTTP: ${response.statusCode}');
+      DebugLogger.network('⚠️ [Geometry] Error HTTP: ${response.statusCode}');
     } catch (e) {
-      developer.log('❌ [Geometry] Error: $e');
+      DebugLogger.network('❌ [Geometry] Error: $e');
     }
 
     return [];
@@ -196,7 +196,7 @@ class GeometryService {
             .toList(),
       });
 
-      developer.log(
+      DebugLogger.network(
         '⏱️ [Geometry] Calculando tiempos batch (${destinations.length} destinos)',
       );
 
@@ -213,9 +213,9 @@ class GeometryService {
         );
       }
 
-      developer.log('⚠️ [Geometry] Error HTTP: ${response.statusCode}');
+      DebugLogger.network('⚠️ [Geometry] Error HTTP: ${response.statusCode}');
     } catch (e) {
-      developer.log('❌ [Geometry] Error: $e');
+      DebugLogger.network('❌ [Geometry] Error: $e');
     }
 
     return {};
@@ -241,7 +241,7 @@ class GeometryService {
         '&profile=$profile',
       );
 
-      developer.log('🗺️ [Geometry] Calculando isócrona ($timeMinutes min)');
+      DebugLogger.network('🗺️ [Geometry] Calculando isócrona ($timeMinutes min)');
 
       final response = await http.get(url).timeout(const Duration(seconds: 15));
 
@@ -250,9 +250,9 @@ class GeometryService {
         return IsochroneArea.fromJson(data);
       }
 
-      developer.log('⚠️ [Geometry] Error HTTP: ${response.statusCode}');
+      DebugLogger.network('⚠️ [Geometry] Error HTTP: ${response.statusCode}');
     } catch (e) {
-      developer.log('❌ [Geometry] Error: $e');
+      DebugLogger.network('❌ [Geometry] Error: $e');
     }
 
     return null;

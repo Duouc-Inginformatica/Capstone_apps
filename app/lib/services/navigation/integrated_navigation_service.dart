@@ -1,4 +1,3 @@
-import 'dart:developer' as developer;
 // ============================================================================
 // INTEGRATED NAVIGATION SERVICE
 // ============================================================================
@@ -15,9 +14,17 @@ import 'package:geolocator/geolocator.dart';
 import '../backend/api_client.dart';
 import '../device/tts_service.dart';
 import '../backend/bus_arrivals_service.dart';
+import '../debug_logger.dart';
 
-// DEBUG MODE - Habilita logs detallados de JSON y geometrías  
-const bool kDebugNavigation = true; // SIEMPRE ACTIVADO para ver logs completos
+// DEBUG MODE - Habilita logs detallados de JSON y geometrías
+// ⚠️ IMPORTANTE: Cambiar a false en producción para optimizar rendimiento
+const bool kDebugNavigation = true; // HABILITADO para debugging - ver todos los logs
+
+// Helper function para logging que se muestra en consola
+void _navLog(String message, {String? name}) {
+  // No agregar prefijo extra - DebugLogger.navigation ya lo hace
+  DebugLogger.navigation(message);
+}
 
 // =============================================================================
 // MODELOS DE DATOS DEL BACKEND (de /api/red/itinerary)
@@ -87,20 +94,41 @@ class RedBusLeg {
     if (json['geometry'] != null) {
       geometry = (json['geometry'] as List)
           .map((g) {
-            final lat = g['lat'];
-            final lng = g['lng'];
-            return LatLng(
-              (lat is num) ? lat.toDouble() : (lat is String ? double.tryParse(lat) ?? 0.0 : 0.0),
-              (lng is num) ? lng.toDouble() : (lng is String ? double.tryParse(lng) ?? 0.0 : 0.0),
-            );
+            // Soportar dos formatos:
+            // 1. Array: [longitude, latitude]
+            // 2. Objeto: {"lat": ..., "lng": ...} o {"latitude": ..., "longitude": ...}
+            if (g is List && g.length >= 2) {
+              // Formato array [lng, lat] - estándar GeoJSON
+              final lng = g[0];
+              final lat = g[1];
+              return LatLng(
+                (lat is num) ? lat.toDouble() : (lat is String ? double.tryParse(lat) ?? 0.0 : 0.0),
+                (lng is num) ? lng.toDouble() : (lng is String ? double.tryParse(lng) ?? 0.0 : 0.0),
+              );
+            } else if (g is Map<String, dynamic>) {
+              // Formato objeto
+              final lat = g['latitude'] ?? g['lat'];
+              final lng = g['longitude'] ?? g['lng'];
+              return LatLng(
+                (lat is num) ? lat.toDouble() : (lat is String ? double.tryParse(lat) ?? 0.0 : 0.0),
+                (lng is num) ? lng.toDouble() : (lng is String ? double.tryParse(lng) ?? 0.0 : 0.0),
+              );
+            } else {
+              return const LatLng(0.0, 0.0);
+            }
           })
           .toList();
     }
 
+    // Determinar si es bus de la Red: el backend envía mode: "Red"
+    final mode = json['mode'] as String? ?? '';
+    final backendIsRedBus = json['is_red_bus'] as bool? ?? false;
+    final isRedBus = (mode == 'Red' || backendIsRedBus);
+
     return RedBusLeg(
       type: json['type'] as String? ?? 'walk',
       instruction: json['instruction'] as String? ?? '',
-      isRedBus: json['is_red_bus'] as bool? ?? false,
+      isRedBus: isRedBus,
       routeNumber: json['route_number'] as String?,
       departStop: json['depart_stop'] != null
           ? RedBusStop.fromJson(json['depart_stop'] as Map<String, dynamic>)
@@ -137,23 +165,33 @@ class RedBusItinerary {
   });
 
   factory RedBusItinerary.fromJson(Map<String, dynamic> json) {
+    // El backend puede envolver la respuesta en "options"[0] o directamente
+    final data = json['options'] != null && (json['options'] as List).isNotEmpty
+        ? (json['options'] as List)[0] as Map<String, dynamic>
+        : json;
+
     return RedBusItinerary(
-      summary: json['summary'] as String? ?? '',
-      totalDuration: json['total_duration'] as int? ?? 0,
-      redBusRoutes: json['red_bus_routes'] != null
-          ? List<String>.from(json['red_bus_routes'] as List)
+      summary: data['summary'] as String? ?? '',
+      totalDuration: data['total_duration_minutes'] as int? ?? 
+                     data['total_duration'] as int? ?? 0,
+      redBusRoutes: data['red_bus_routes'] != null
+          ? List<String>.from(data['red_bus_routes'] as List)
           : [],
-      legs: (json['legs'] as List?)
+      legs: (data['legs'] as List?)
               ?.map((l) => RedBusLeg.fromJson(l as Map<String, dynamic>))
               .toList() ??
           [],
       origin: LatLng(
-        (json['origin']['lat'] as num).toDouble(),
-        (json['origin']['lng'] as num).toDouble(),
+        (data['origin']['latitude'] as num?)?.toDouble() ?? 
+        (data['origin']['lat'] as num?)?.toDouble() ?? 0.0,
+        (data['origin']['longitude'] as num?)?.toDouble() ?? 
+        (data['origin']['lng'] as num?)?.toDouble() ?? 0.0,
       ),
       destination: LatLng(
-        (json['destination']['lat'] as num).toDouble(),
-        (json['destination']['lng'] as num).toDouble(),
+        (data['destination']['latitude'] as num?)?.toDouble() ?? 
+        (data['destination']['lat'] as num?)?.toDouble() ?? 0.0,
+        (data['destination']['longitude'] as num?)?.toDouble() ?? 
+        (data['destination']['lng'] as num?)?.toDouble() ?? 0.0,
       ),
     );
   }
@@ -288,28 +326,22 @@ class ActiveNavigation {
   List<LatLng> getCurrentStepGeometry(LatLng currentPosition) {
     final step = currentStep;
     if (step == null) {
-      developer.log('🔍 getCurrentStepGeometry: step es null');
+      _navLog('🔍 getCurrentStepGeometry: step es null');
       return [];
     }
 
-    developer.log(
-      '🔍 getCurrentStepGeometry: Paso actual = ${step.type} (índice $currentStepIndex)',
-    );
-    developer.log('🔍 Geometrías disponibles: ${stepGeometries.keys.toList()}');
+    _navLog('🔍 getCurrentStepGeometry: Paso actual = ${step.type} (índice $currentStepIndex)');
+    _navLog('🔍 Geometrías disponibles: ${stepGeometries.keys.toList()}');
 
     // Si tenemos geometría pre-calculada para este paso, usarla
     if (stepGeometries.containsKey(currentStepIndex)) {
       final geometry = stepGeometries[currentStepIndex]!;
-      developer.log(
-        '🔍 Geometría encontrada para paso $currentStepIndex: ${geometry.length} puntos',
-      );
+      _navLog('🔍 Geometría encontrada para paso $currentStepIndex: ${geometry.length} puntos');
 
       // Si es paso de walk o bus, recortar geometría desde el punto más cercano al usuario
       if ((step.type == 'walk' || step.type == 'bus') &&
           geometry.length >= 2) {
-        developer.log(
-          '🔍 Paso ${step.type.toUpperCase()}: Recortando geometría desde posición actual',
-        );
+        _navLog('🔍 Paso ${step.type.toUpperCase()}: Recortando geometría desde posición actual');
 
         // Encontrar el punto más cercano en la ruta al usuario
         int closestIndex = 0;
@@ -330,9 +362,7 @@ class ActiveNavigation {
           }
         }
 
-        developer.log(
-          '🔍 Punto más cercano: índice $closestIndex (${minDistance.toStringAsFixed(0)}m)',
-        );
+        _navLog('🔍 Punto más cercano: índice $closestIndex (${minDistance.toStringAsFixed(0)}m)');
 
         // Si el usuario está muy cerca del punto más cercano (< 10m), usar ese punto
         // Si no, agregar la posición actual como primer punto
@@ -345,23 +375,21 @@ class ActiveNavigation {
         }
       }
 
-      developer.log('🔍 Retornando geometría pre-calculada');
+      _navLog('🔍 Retornando geometría pre-calculada');
       return geometry;
     }
 
-    developer.log(
-      '⚠️ No hay geometría pre-calculada para paso $currentStepIndex',
-    );
+    _navLog('⚠️ No hay geometría pre-calculada para paso $currentStepIndex');
 
     // Fallback: generar geometría básica
     if (step.location != null) {
       if (step.type == 'walk') {
-        developer.log('🔍 Fallback: Creando geometría básica para WALK');
+        _navLog('🔍 Fallback: Creando geometría básica para WALK');
         return [currentPosition, step.location!];
       }
     }
 
-    developer.log('⚠️ Sin geometría para este paso');
+    _navLog('⚠️ Sin geometría para este paso');
     return []; // Sin geometría
   }
 
@@ -395,8 +423,21 @@ class ActiveNavigation {
 
   void advanceToNextStep() {
     if (!isComplete) {
+      // Guardar la ubicación del paso actual antes de avanzar
+      final previousStep = currentStep;
+      
       currentStepIndex++;
       stepStartTime = DateTime.now(); // Reiniciar tiempo del paso
+      
+      _navLog('➡️ Avanzando al paso $currentStepIndex');
+      
+      // CRÍTICO: Si el paso anterior tenía una ubicación (ej: paradero de bus),
+      // actualizar _lastPosition para que la geometría del siguiente paso 
+      // se dibuje desde ahí y no desde el origen inicial
+      if (previousStep?.location != null) {
+        _navLog('📍 Actualizando posición base a: ${previousStep!.location}');
+        // Esta será la nueva posición de referencia para getCurrentStepGeometry
+      }
     }
   }
 
@@ -472,13 +513,13 @@ class IntegratedNavigationService {
     required String destinationName,
     RedBusItinerary? existingItinerary, // Usar itinerario ya obtenido si existe
   }) async {
-    developer.log('🚀 Iniciando navegación integrada a $destinationName');
+    _navLog('🚀 Iniciando navegación integrada a $destinationName');
 
     // Inicializar posición actual
     try {
       _lastPosition = await Geolocator.getCurrentPosition();
     } catch (e) {
-      developer.log('⚠️ No se pudo obtener posición actual: $e');
+      _navLog('⚠️ No se pudo obtener posición actual: $e');
       // Usar coordenadas del origen como fallback
       _lastPosition = Position(
         latitude: originLat,
@@ -497,12 +538,12 @@ class IntegratedNavigationService {
     // 1. Usar itinerario existente o solicitar uno nuevo
     final RedBusItinerary itinerary;
     if (existingItinerary != null) {
-      developer.log(
+      _navLog(
         '♻️ Usando itinerario ya obtenido (evita llamada duplicada)',
       );
       itinerary = existingItinerary;
     } else {
-      developer.log('🔄 Solicitando nuevo itinerario al backend...');
+      _navLog('🔄 Solicitando nuevo itinerario al backend...');
       
       // Llamada directa al backend sin servicio intermedio
       final apiClient = ApiClient();
@@ -524,104 +565,89 @@ class IntegratedNavigationService {
         throw Exception('Error al obtener itinerario: ${response.statusCode}');
       }
 
-      // 🔍 DEBUG: Mostrar JSON completo del backend si está habilitado
+      // 🔍 DEBUG: Mostrar resumen del backend (SIN geometrías completas)
       if (kDebugNavigation) {
-        developer.log('═' * 80, name: 'Navigation');
-        developer.log('📥 [DEBUG] RESPUESTA COMPLETA DEL BACKEND', name: 'Navigation');
-        developer.log('═' * 80, name: 'Navigation');
-        developer.log('🔗 URL: ${uri.toString()}', name: 'Navigation');
-        developer.log('📤 Request Body:', name: 'Navigation');
-        developer.log(const JsonEncoder.withIndent('  ').convert(body), name: 'Navigation');
-        developer.log('─' * 80, name: 'Navigation');
-        developer.log('📥 Response Status: ${response.statusCode}', name: 'Navigation');
-        developer.log('📥 Response Body (Pretty JSON):', name: 'Navigation');
-        
-        try {
-          final prettyJson = const JsonEncoder.withIndent('  ').convert(
-            jsonDecode(response.body),
-          );
-          developer.log(prettyJson, name: 'Navigation');
-        } catch (e) {
-          developer.log('⚠️ No se pudo formatear JSON: $e', name: 'Navigation');
-          developer.log(response.body, name: 'Navigation');
-        }
-        developer.log('═' * 80, name: 'Navigation');
+        _navLog('═' * 80);
+        _navLog('📥 [DEBUG] RESPUESTA DEL BACKEND (RESUMEN)');
+        _navLog('═' * 80);
+        _navLog('🔗 URL: ${uri.toString()}');
+        _navLog('📤 Request: Origen=($originLat,$originLon), Destino=($destLat,$destLon)');
+        _navLog('─' * 80);
+        _navLog('📥 Response Status: ${response.statusCode}');
+        _navLog('📦 Response Size: ${response.body.length} caracteres');
+        _navLog('═' * 80);
       }
 
-      final data = jsonDecode(response.body) as Map<String, dynamic>;
-      itinerary = RedBusItinerary.fromJson(data);
+      try {
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        _navLog('✅ JSON parseado correctamente');
+        itinerary = RedBusItinerary.fromJson(data);
+        _navLog('✅ Itinerario creado: ${itinerary.legs.length} legs');
+      } catch (parseError, stackTrace) {
+        _navLog('❌ ERROR parseando respuesta del backend:');
+        _navLog('   Error: $parseError');
+        _navLog('   Stack: ${stackTrace.toString().split('\n').take(5).join('\n')}');
+        _navLog('   Response body (primeros 500 chars): ${response.body.substring(0, response.body.length > 500 ? 500 : response.body.length)}');
+        rethrow;
+      }
       
       // 🔍 DEBUG: Mostrar estructura del itinerario parseado
       if (kDebugNavigation) {
-        developer.log('', name: 'Navigation');
-        developer.log('📊 [DEBUG] ITINERARIO PARSEADO', name: 'Navigation');
-        developer.log('═' * 80, name: 'Navigation');
-        developer.log('📍 Origen: (${itinerary.origin.latitude}, ${itinerary.origin.longitude})', name: 'Navigation');
-        developer.log('📍 Destino: (${itinerary.destination.latitude}, ${itinerary.destination.longitude})', name: 'Navigation');
-        developer.log('🚌 Buses Red: ${itinerary.redBusRoutes.join(", ")}', name: 'Navigation');
-        developer.log('⏱️  Duración total: ${itinerary.totalDuration} min', name: 'Navigation');
-        developer.log('️  Legs: ${itinerary.legs.length}', name: 'Navigation');
-        developer.log('─' * 80, name: 'Navigation');
+        _navLog('', name: 'Navigation');
+        _navLog('📊 [DEBUG] ITINERARIO PARSEADO');
+        _navLog('═' * 80, name: 'Navigation');
+        _navLog('📍 Origen: (${itinerary.origin.latitude}, ${itinerary.origin.longitude})');
+        _navLog('📍 Destino: (${itinerary.destination.latitude}, ${itinerary.destination.longitude})');
+        _navLog('🚌 Buses Red: ${itinerary.redBusRoutes.join(", ")}');
+        _navLog('⏱️  Duración total: ${itinerary.totalDuration} min');
+        _navLog('️  Legs: ${itinerary.legs.length}');
+        _navLog('─' * 80, name: 'Navigation');
         
         for (int i = 0; i < itinerary.legs.length; i++) {
           final leg = itinerary.legs[i];
-          developer.log('  Leg ${i + 1}/${itinerary.legs.length}:', name: 'Navigation');
-          developer.log('    Tipo: ${leg.type}', name: 'Navigation');
-          developer.log('    Modo: ${leg.isRedBus ? "Red Bus" : "Normal"}', name: 'Navigation');
+          _navLog('  Leg ${i + 1}/${itinerary.legs.length}:');
+          _navLog('    Tipo: ${leg.type}');
+          _navLog('    Modo: ${leg.isRedBus ? "Red Bus" : "Normal"}');
           if (leg.routeNumber != null) {
-            developer.log('    Ruta: ${leg.routeNumber}', name: 'Navigation');
+            _navLog('    Ruta: ${leg.routeNumber}');
           }
-          developer.log('    Desde: ${leg.departStop?.name ?? "N/A"}', name: 'Navigation');
-          developer.log('    Hasta: ${leg.arriveStop?.name ?? "N/A"}', name: 'Navigation');
-          developer.log('    Duración: ${leg.durationMinutes} min', name: 'Navigation');
-          developer.log('    Distancia: ${leg.distanceKm.toStringAsFixed(2)} km', name: 'Navigation');
-          developer.log('    Geometría: ${leg.geometry?.length ?? 0} puntos', name: 'Navigation');
+          _navLog('    Desde: ${leg.departStop?.name ?? "N/A"}');
+          _navLog('    Hasta: ${leg.arriveStop?.name ?? "N/A"}');
+          _navLog('    Duración: ${leg.durationMinutes} min');
+          _navLog('    Distancia: ${leg.distanceKm.toStringAsFixed(2)} km');
+          _navLog('    Geometría: ${leg.geometry?.length ?? 0} puntos');
           
           if (leg.stops != null && leg.stops!.isNotEmpty) {
-            developer.log('    Paradas: ${leg.stops!.length}', name: 'Navigation');
-            developer.log('      Primera: ${leg.stops!.first.name} [${leg.stops!.first.code ?? "sin código"}]', name: 'Navigation');
-            developer.log('      Última: ${leg.stops!.last.name} [${leg.stops!.last.code ?? "sin código"}]', name: 'Navigation');
-            
-            if (kDebugNavigation && leg.stops!.length > 2) {
-              developer.log('      Intermedias: ${leg.stops!.length - 2} paradas', name: 'Navigation');
-              // Mostrar todas las paradas intermedias para debug completo
-              for (int j = 1; j < leg.stops!.length - 1; j++) {
-                final stop = leg.stops![j];
-                developer.log('        $j. ${stop.name} [${stop.code ?? "sin código"}] (${stop.location.latitude.toStringAsFixed(6)}, ${stop.location.longitude.toStringAsFixed(6)})', name: 'Navigation');
-              }
+            _navLog('    Paradas: ${leg.stops!.length}');
+            _navLog('      Primera: ${leg.stops!.first.name} [${leg.stops!.first.code ?? "sin código"}]');
+            _navLog('      Última: ${leg.stops!.last.name} [${leg.stops!.last.code ?? "sin código"}]');
+            if (leg.stops!.length > 2) {
+              _navLog('      Intermedias: ${leg.stops!.length - 2} paradas');
             }
           }
           
           if (leg.streetInstructions != null && leg.streetInstructions!.isNotEmpty) {
-            developer.log('    Instrucciones: ${leg.streetInstructions!.length}', name: 'Navigation');
+            _navLog('    Instrucciones: ${leg.streetInstructions!.length}');
             for (int k = 0; k < leg.streetInstructions!.length; k++) {
-              developer.log('      ${k + 1}. ${leg.streetInstructions![k]}', name: 'Navigation');
+              _navLog('      ${k + 1}. ${leg.streetInstructions![k]}');
             }
           }
           
-          // Mostrar geometría completa si está en modo debug
+          // Mostrar RESUMEN de geometría (NO iterar miles de puntos)
           if (leg.geometry != null && leg.geometry!.isNotEmpty) {
-            developer.log('    📍 Geometría completa (${leg.geometry!.length} puntos):', name: 'Navigation');
-            developer.log('      Inicio: [${leg.geometry!.first.latitude}, ${leg.geometry!.first.longitude}]', name: 'Navigation');
-            developer.log('      Fin: [${leg.geometry!.last.latitude}, ${leg.geometry!.last.longitude}]', name: 'Navigation');
-            if (leg.geometry!.length > 10) {
-              developer.log('      (${leg.geometry!.length - 2} puntos intermedios)', name: 'Navigation');
-            } else {
-              // Si son pocos puntos, mostrarlos todos
-              for (int p = 0; p < leg.geometry!.length; p++) {
-                developer.log('        ${p + 1}. [${leg.geometry![p].latitude}, ${leg.geometry![p].longitude}]', name: 'Navigation');
-              }
-            }
+            _navLog('    📍 Geometría: ${leg.geometry!.length} puntos');
+            _navLog('      Inicio: [${leg.geometry!.first.latitude.toStringAsFixed(6)}, ${leg.geometry!.first.longitude.toStringAsFixed(6)}]');
+            _navLog('      Fin: [${leg.geometry!.last.latitude.toStringAsFixed(6)}, ${leg.geometry!.last.longitude.toStringAsFixed(6)}]');
           }
           
-          developer.log('', name: 'Navigation');
+          _navLog('');
         }
-        developer.log('═' * 80, name: 'Navigation');
+        _navLog('═' * 80);
       }
     }
 
-    developer.log('📋 Itinerario obtenido: ${itinerary.summary}');
-    developer.log(
+    _navLog('📋 Itinerario obtenido: ${itinerary.summary}');
+    _navLog(
       '🚌 Buses Red recomendados: ${itinerary.redBusRoutes.join(", ")}',
     );
 
@@ -681,10 +707,10 @@ class IntegratedNavigationService {
   ) async {
     final steps = <NavigationStep>[];
 
-    developer.log(
+    _navLog(
       '🚶 Construyendo pasos de navegación (1:1 con legs del backend)...',
     );
-    developer.log('🚶 Legs del itinerario: ${itinerary.legs.length}');
+    _navLog('🚶 Legs del itinerario: ${itinerary.legs.length}');
 
     // Mapeo DIRECTO 1:1: cada leg del backend = 1 paso en el frontend
     for (var i = 0; i < itinerary.legs.length; i++) {
@@ -695,7 +721,7 @@ class IntegratedNavigationService {
         final walkTo = leg.arriveStop?.location;
 
         if (walkTo != null) {
-          developer.log('🚶 Paso WALK hasta ${leg.arriveStop?.name}');
+          _navLog('🚶 Paso WALK hasta ${leg.arriveStop?.name}');
 
           steps.add(
             NavigationStep(
@@ -719,10 +745,10 @@ class IntegratedNavigationService {
       } else if (leg.type == 'bus' && leg.isRedBus) {
         // Paso de bus: UN SOLO paso tipo 'bus' (simplificado)
         // La detección de subir al bus se hará por velocidad GPS
-        developer.log(
+        _navLog(
           '🚌 Paso BUS ${leg.routeNumber}: ${leg.departStop?.name} → ${leg.arriveStop?.name}',
         );
-        developer.log(
+        _navLog(
           '🚌 Paradas en el bus: ${leg.stops?.length ?? 0}',
         );
 
@@ -738,13 +764,13 @@ class IntegratedNavigationService {
             };
           }).toList();
 
-          developer.log(
+          _navLog(
             '🚌 Paradas convertidas: ${busStops.length} paradas',
           );
-          developer.log(
+          _navLog(
             '   Primera: ${busStops.first['name']} [${busStops.first['code']}]',
           );
-          developer.log(
+          _navLog(
             '   Última: ${busStops.last['name']} [${busStops.last['code']}]',
           );
         }
@@ -770,17 +796,17 @@ class IntegratedNavigationService {
     }
 
     // Log de todos los pasos generados
-    developer.log('🚶 ===== PASOS DE NAVEGACIÓN GENERADOS =====');
+    _navLog('🚶 ===== PASOS DE NAVEGACIÓN GENERADOS =====');
     for (var i = 0; i < steps.length; i++) {
       final step = steps[i];
-      developer.log('🚶 Paso $i: ${step.type} - ${step.instruction}');
+      _navLog('🚶 Paso $i: ${step.type} - ${step.instruction}');
       if (step.type == 'bus') {
-        developer.log(
+        _navLog(
           '   └─ Bus: ${step.busRoute}, StopName: ${step.stopName}',
         );
       }
     }
-    developer.log('🚶 ==========================================');
+    _navLog('🚶 ==========================================');
 
     return steps;
   }
@@ -831,25 +857,25 @@ class IntegratedNavigationService {
       final step = steps[i];
       final leg = itinerary.legs[i];
 
-      developer.log(
+      _navLog(
         '🗺️ [SIMPLE] Paso $i: step.type=${step.type} ← leg.type=${leg.type}',
       );
 
       // Validar que los tipos coincidan
       if ((step.type == 'walk' && leg.type != 'walk') ||
           (step.type == 'bus' && leg.type != 'bus')) {
-        developer.log('   ⚠️ [SIMPLE] ADVERTENCIA: Tipos no coinciden!');
+        _navLog('   ⚠️ [SIMPLE] ADVERTENCIA: Tipos no coinciden!');
       }
 
       // Usar geometría del backend directamente
       if (leg.geometry != null && leg.geometry!.isNotEmpty) {
         geometries[i] = List.from(leg.geometry!);
-        developer.log(
+        _navLog(
           '   ✅ [SIMPLE] Geometría: ${leg.geometry!.length} puntos',
         );
 
         if (leg.departStop != null || leg.arriveStop != null) {
-          developer.log(
+          _navLog(
             '   📍 [SIMPLE] ${leg.departStop?.name ?? "Inicio"} → ${leg.arriveStop?.name ?? "Destino"}',
           );
         }
@@ -860,14 +886,14 @@ class IntegratedNavigationService {
 
         if (end != null) {
           geometries[i] = [start, end];
-          developer.log('   ⚠️ [SIMPLE] Fallback línea recta (2 puntos)');
+          _navLog('   ⚠️ [SIMPLE] Fallback línea recta (2 puntos)');
         } else {
-          developer.log('   ❌ [SIMPLE] Sin geometría disponible');
+          _navLog('   ❌ [SIMPLE] Sin geometría disponible');
         }
       }
     }
 
-    developer.log(
+    _navLog(
       '🗺️ [SIMPLE] Geometrías creadas: ${geometries.keys.toList()}',
     );
     return geometries;
@@ -875,8 +901,8 @@ class IntegratedNavigationService {
 
   /// Anuncia el inicio de navegación por voz
   void _announceNavigationStart(String destination, RedBusItinerary itinerary) {
-    developer.log('🔊 [TTS] _announceNavigationStart llamado');
-    developer.log(
+    _navLog('🔊 [TTS] _announceNavigationStart llamado');
+    _navLog(
       '🔊 [TTS] _activeNavigation != null? ${_activeNavigation != null}',
     );
 
@@ -912,9 +938,9 @@ class IntegratedNavigationService {
     String firstStepInstruction = '';
     if (_activeNavigation?.currentStep != null) {
       final step = _activeNavigation!.currentStep!;
-      developer.log('🔊 [TTS] currentStep.type = ${step.type}');
-      developer.log('🔊 [TTS] currentStep.stopName = ${step.stopName}');
-      developer.log('🔊 [TTS] currentStep.instruction = ${step.instruction}');
+      _navLog('🔊 [TTS] currentStep.type = ${step.type}');
+      _navLog('🔊 [TTS] currentStep.stopName = ${step.stopName}');
+      _navLog('🔊 [TTS] currentStep.instruction = ${step.instruction}');
 
       // SOLO anunciar el primer paso si es 'walk'
       if (step.type == 'walk' && step.stopName != null) {
@@ -936,16 +962,16 @@ class IntegratedNavigationService {
           firstStepInstruction += 'Comienza así: $firstStreetInstruction. ';
         }
 
-        developer.log(
+        _navLog(
           '🔊 [TTS] firstStepInstruction creado: $firstStepInstruction',
         );
       } else {
-        developer.log(
+        _navLog(
           '🔊 [TTS] NO se creó firstStepInstruction (type=${step.type}, stopName=${step.stopName})',
         );
       }
     } else {
-      developer.log('🔊 [TTS] currentStep es NULL');
+      _navLog('🔊 [TTS] currentStep es NULL');
     }
 
     // Mensaje inicial completo y directo
@@ -963,10 +989,10 @@ Te iré guiando paso a paso.
 ''';
     }
 
-    developer.log('🔊 [TTS] Mensaje completo a anunciar:');
-    developer.log('🔊 [TTS] ===========================');
-    developer.log(message);
-    developer.log('🔊 [TTS] ===========================');
+    _navLog('🔊 [TTS] Mensaje completo a anunciar:');
+    _navLog('🔊 [TTS] ===========================');
+    _navLog(message);
+    _navLog('🔊 [TTS] ===========================');
 
     // Una sola llamada TTS para todo el anuncio inicial
     TtsService.instance.speak(message, urgent: true);
@@ -987,6 +1013,18 @@ Te iré guiando paso a paso.
         });
   }
 
+  /// Actualiza la posición simulada (para testing/simulación)
+  /// Esto permite que la geometría se recorte desde la posición correcta
+  void updateSimulatedPosition(Position position) {
+    _lastPosition = position;
+    _navLog('📍 [SIMULATED] Posición actualizada: ${position.latitude}, ${position.longitude}');
+    
+    // Notificar cambio de geometría para actualizar el mapa
+    if (onGeometryUpdated != null) {
+      onGeometryUpdated!();
+    }
+  }
+
   /// Maneja actualizaciones de ubicación
   void _onLocationUpdate(Position position) {
     if (_activeNavigation == null || _activeNavigation!.isComplete) return;
@@ -1001,7 +1039,7 @@ Te iré guiando paso a paso.
 
     // Filtrar posiciones con baja precisión GPS
     if (position.accuracy > gpsAccuracyThreshold) {
-      developer.log(
+      _navLog(
         '⚠️ GPS con baja precisión: ${position.accuracy.toStringAsFixed(1)}m - Ignorando',
       );
       return;
@@ -1046,7 +1084,7 @@ Te iré guiando paso a paso.
               geometry[i + 1],
             );
           }
-          developer.log(
+          _navLog(
             '🗺️ Distancia real restante (GraphHopper): ${distanceToTarget.toStringAsFixed(1)}m',
           );
         } else {
@@ -1056,7 +1094,7 @@ Te iré guiando paso a paso.
             userLocation,
             currentStep.location!,
           );
-          developer.log(
+          _navLog(
             '⚠️ Usando distancia línea recta (sin geometría): ${distanceToTarget.toStringAsFixed(1)}m',
           );
         }
@@ -1067,12 +1105,12 @@ Te iré guiando paso a paso.
           userLocation,
           currentStep.location!,
         );
-        developer.log(
+        _navLog(
           '📍 Distancia línea recta: ${distanceToTarget.toStringAsFixed(1)}m',
         );
       }
 
-      developer.log(
+      _navLog(
         '📍 Distancia al objetivo: ${distanceToTarget.toStringAsFixed(1)}m (GPS: ${position.accuracy.toStringAsFixed(1)}m)',
       );
 
@@ -1094,7 +1132,7 @@ Te iré guiando paso a paso.
         maxArrivalThreshold,
       );
 
-      developer.log(
+      _navLog(
         '🎯 Umbral ajustado: ${adjustedThreshold.toStringAsFixed(1)}m (GPS accuracy: ${position.accuracy.toStringAsFixed(1)}m)',
       );
 
@@ -1123,11 +1161,11 @@ Te iré guiando paso a paso.
           
           // Si está cerca del paradero de inicio (< 50m) y velocidad baja, está esperando
           if (distanceToStart < 50 && position.speed < 1.0) {
-            developer.log('🚌 Usuario esperando el bus en el paradero');
+            _navLog('🚌 Usuario esperando el bus en el paradero');
           }
           // Si está moviéndose rápido, asumimos que subió al bus
           else if (position.speed > 2.0) {
-            developer.log(
+            _navLog(
               '🚌 [BUS-RIDING] Usuario en movimiento (${position.speed.toStringAsFixed(1)} m/s) - Anunciando paradas',
             );
             // Anunciar paradas intermedias
@@ -1259,7 +1297,7 @@ Te iré guiando paso a paso.
     }
 
     if (message.isNotEmpty) {
-      developer.log('📢 [PROGRESO] $message');
+      _navLog('📢 [PROGRESO] $message');
       TtsService.instance.speak(message);
       _lastProgressAnnouncement = now;
       _lastAnnouncedDistance = distanceMeters;
@@ -1268,7 +1306,7 @@ Te iré guiando paso a paso.
 
   /// Maneja llegada a un paso
   void _handleStepArrival(NavigationStep step) {
-    developer.log('✅ Llegada al paso: ${step.type}');
+    _navLog('✅ Llegada al paso: ${step.type}');
 
     // Evitar anuncios duplicados para el mismo paso
     if (_lastArrivalAnnouncedStepIndex == _activeNavigation?.currentStepIndex) {
@@ -1360,7 +1398,7 @@ Te iré guiando paso a paso.
   //       }
   //     }
   //   } catch (e) {
-  //     developer.log('⚠️ [BUS_DETECTION] Error detectando buses cercanos: $e');
+  //     _navLog('⚠️ [BUS_DETECTION] Error detectando buses cercanos: $e');
   //   }
   //   */
   // }
@@ -1372,13 +1410,13 @@ Te iré guiando paso a paso.
     final busStops = step.busStops;
 
     if (busStops == null || busStops.isEmpty) {
-      developer.log(
+      _navLog(
         '⚠️ [BUS_STOPS] No hay paradas disponibles en el paso actual',
       );
       return;
     }
 
-    developer.log(
+    _navLog(
       '🚌 [BUS_STOPS] Verificando progreso: ${busStops.length} paradas totales, índice actual: $_currentBusStopIndex',
     );
 
@@ -1396,14 +1434,14 @@ Te iré guiando paso a paso.
         stopLocation,
       );
 
-      developer.log(
+      _navLog(
         '🚌 [STOP $i] ${stop['name']}: ${distanceToStop.toStringAsFixed(0)}m',
       );
 
       // Si está cerca de esta parada (50m) y no se ha anunciado
       final stopId = '${stop['name']}_$i';
       if (distanceToStop <= 50.0 && !_announcedStops.contains(stopId)) {
-        developer.log(
+        _navLog(
           '✅ [BUS_STOPS] Parada detectada a ${distanceToStop.toStringAsFixed(0)}m - Anunciando...',
         );
         _announceCurrentBusStop(stop, i + 1, busStops.length);
@@ -1429,7 +1467,7 @@ Te iré guiando paso a paso.
       // Calcular si esta parada debe ser anunciada
       final shouldAnnounce = _shouldAnnounceStop(stopNumber, totalStops);
       if (!shouldAnnounce) {
-        developer.log(
+        _navLog(
           '⏭️ [TTS] Parada $stopNumber omitida (solo anuncio de paradas clave)',
         );
         return; // Saltar esta parada
@@ -1459,7 +1497,7 @@ Te iré guiando paso a paso.
       announcement = 'Parada $stopNumber de $totalStops: $codeStr$stopName';
     }
 
-    developer.log('🔔 [TTS] $announcement');
+    _navLog('🔔 [TTS] $announcement');
     TtsService.instance.speak(announcement);
   }
 
@@ -1499,7 +1537,7 @@ Te iré guiando paso a paso.
     _activeNavigation = null;
     _announcedStops.clear(); // Limpiar paradas anunciadas
     _currentBusStopIndex = 0; // Resetear índice
-    developer.log('🛑 Navegación detenida');
+    _navLog('🛑 Navegación detenida');
   }
 
   /// Obtiene el paso actual
@@ -1517,7 +1555,7 @@ Te iré guiando paso a paso.
   // Geometría del paso actual usando la última posición GPS
   List<LatLng> get currentStepGeometry {
     if (_activeNavigation == null || _lastPosition == null) {
-      developer.log('🗺️ [GEOMETRY] activeNavigation o lastPosition es null');
+      _navLog('🗺️ [GEOMETRY] activeNavigation o lastPosition es null');
       return [];
     }
 
@@ -1527,7 +1565,7 @@ Te iré guiando paso a paso.
     );
 
     final geometry = _activeNavigation!.getCurrentStepGeometry(currentPos);
-    developer.log(
+    _navLog(
       '🗺️ [GEOMETRY] Retornando geometría del paso ${_activeNavigation!.currentStepIndex}: ${geometry.length} puntos',
     );
 
@@ -1551,36 +1589,62 @@ Te iré guiando paso a paso.
   /// Avanza al siguiente paso de navegación
   void advanceToNextStep() {
     if (_activeNavigation == null) {
-      developer.log('⚠️ No hay navegación activa');
+      _navLog('⚠️ No hay navegación activa');
       return;
     }
 
     final currentIndex = _activeNavigation!.currentStepIndex;
     if (currentIndex + 1 >= _activeNavigation!.steps.length) {
-      developer.log('⚠️ Ya estás en el último paso de navegación');
+      _navLog('⚠️ Ya estás en el último paso de navegación');
       return;
     }
 
+    // Guardar el paso actual antes de avanzar
+    final previousStep = _activeNavigation!.currentStep;
+    
     _activeNavigation!.currentStepIndex++;
     final newStep = _activeNavigation!.currentStep;
 
-    developer.log(
+    _navLog(
       '📍 [STEP] Avanzando paso: $currentIndex → ${_activeNavigation!.currentStepIndex}',
     );
-    developer.log(
+    _navLog(
       '📍 [STEP] Nuevo paso: ${newStep?.type} - ${newStep?.instruction}',
     );
+
+    // CRÍTICO: Actualizar _lastPosition a la ubicación del paso anterior
+    // Esto asegura que la geometría del nuevo paso se dibuje desde la posición correcta
+    if (previousStep?.location != null && _lastPosition != null) {
+      _lastPosition = Position(
+        latitude: previousStep!.location!.latitude,
+        longitude: previousStep.location!.longitude,
+        timestamp: DateTime.now(),
+        accuracy: 10.0,
+        altitude: _lastPosition!.altitude,
+        altitudeAccuracy: _lastPosition!.altitudeAccuracy,
+        heading: _lastPosition!.heading,
+        headingAccuracy: _lastPosition!.headingAccuracy,
+        speed: 0.0,
+        speedAccuracy: _lastPosition!.speedAccuracy,
+      );
+      _navLog('📍 [STEP] Posición actualizada al final del paso anterior: ${previousStep.location}');
+    }
 
     // Notificar cambio de paso
     if (newStep != null && onStepChanged != null) {
       onStepChanged!(newStep);
+    }
+    
+    // Notificar cambio de geometría
+    if (onGeometryUpdated != null) {
+      onGeometryUpdated!();
     }
   }
 
   /// TEST: Simula una posición GPS para testing
   /// Útil para probar la navegación sin caminar físicamente
   void simulatePosition(Position position) {
-    developer.log(
+    _navLog(
       '🧪 [TEST] Inyectando posición simulada: ${position.latitude}, ${position.longitude}',
     );
     _onLocationUpdate(position);
@@ -1595,7 +1659,7 @@ Te iré guiando paso a paso.
   Future<bool> handleVoiceCommand(String command) async {
     final lowerCommand = command.toLowerCase().trim();
 
-    developer.log('🎤 [VOICE] Comando recibido: "$lowerCommand"');
+    _navLog('🎤 [VOICE] Comando recibido: "$lowerCommand"');
 
     // Comando: "cuando llega la micro" / "cuando llega el bus"
     if (_isAskingForBusArrivals(lowerCommand)) {
@@ -1617,7 +1681,7 @@ Te iré guiando paso a paso.
       return await _handleRepeatInstructionCommand();
     }
 
-    developer.log('⚠️ [VOICE] Comando no reconocido');
+    _navLog('⚠️ [VOICE] Comando no reconocido');
     return false;
   }
 
@@ -1673,7 +1737,7 @@ Te iré guiando paso a paso.
   }
 
   Future<bool> _handleBusArrivalsCommand() async {
-    developer.log('🚌 [VOICE] Procesando comando: Cuando llega la micro');
+    _navLog('🚌 [VOICE] Procesando comando: Cuando llega la micro');
 
     // Información de llegadas ya no se consulta durante navegación activa
     // para evitar bloqueo del main thread
@@ -1688,7 +1752,7 @@ Te iré guiando paso a paso.
     // Si no hay navegación activa o no estamos en un paradero,
     // buscar paradero más cercano usando GPS
     if (_lastPosition != null) {
-      developer.log('🚌 [VOICE] Buscando paradero cercano a posición GPS...');
+      _navLog('🚌 [VOICE] Buscando paradero cercano a posición GPS...');
 
       try {
         final arrivals = await BusArrivalsService.instance
@@ -1708,7 +1772,7 @@ Te iré guiando paso a paso.
           return true;
         }
       } catch (e) {
-        developer.log('❌ [VOICE] Error buscando paradero cercano: $e');
+        _navLog('❌ [VOICE] Error buscando paradero cercano: $e');
         TtsService.instance.speak(
           'No pude encontrar paraderos cercanos',
           urgent: true,
@@ -1725,7 +1789,7 @@ Te iré guiando paso a paso.
   }
 
   Future<bool> _handleLocationCommand() async {
-    developer.log('📍 [VOICE] Procesando comando: Dónde estoy');
+    _navLog('📍 [VOICE] Procesando comando: Dónde estoy');
 
     if (_lastPosition != null) {
       final lat = _lastPosition!.latitude.toStringAsFixed(6);
@@ -1746,7 +1810,7 @@ Te iré guiando paso a paso.
   }
 
   Future<bool> _handleRemainingTimeCommand() async {
-    developer.log('⏱️ [VOICE] Procesando comando: Cuánto falta');
+    _navLog('⏱️ [VOICE] Procesando comando: Cuánto falta');
 
     if (_activeNavigation == null) {
       TtsService.instance.speak('No hay navegación activa', urgent: true);
@@ -1782,7 +1846,7 @@ Te iré guiando paso a paso.
   }
 
   Future<bool> _handleRepeatInstructionCommand() async {
-    developer.log('🔄 [VOICE] Procesando comando: Repetir instrucción');
+    _navLog('🔄 [VOICE] Procesando comando: Repetir instrucción');
 
     if (_activeNavigation == null) {
       TtsService.instance.speak('No hay navegación activa', urgent: true);
