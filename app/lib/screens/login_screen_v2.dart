@@ -393,14 +393,6 @@ class _LoginScreenV2State extends State<LoginScreenV2>
         elevation: 0,
         title: Row(
           children: [
-            const Text(
-              'WayFindCL',
-              style: TextStyle(
-                color: Colors.black,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const Spacer(),
             // Badge "IA" - Se activa cuando se detecta NPU (preparado para futuros modelos)
             if (_npuLoading)
               Container(
@@ -508,6 +500,48 @@ class _LoginScreenV2State extends State<LoginScreenV2>
                   ),
                 ),
               ),
+            const Spacer(),
+            const Text(
+              'WayFindCL',
+              style: TextStyle(
+                color: Colors.black,
+                fontWeight: FontWeight.bold,
+                fontSize: 16,
+              ),
+            ),
+            const Spacer(),
+            // Logo Red Movilidad (32x32)
+            Container(
+              width: 32,
+              height: 32,
+              decoration: BoxDecoration(
+                color: Colors.white,
+                shape: BoxShape.circle,
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.1),
+                    blurRadius: 4,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
+              ),
+              child: ClipOval(
+                child: Image.asset(
+                  'assets/icons.webp',
+                  width: 32,
+                  height: 32,
+                  fit: BoxFit.cover,
+                  errorBuilder: (context, error, stackTrace) {
+                    // Fallback si no existe la imagen
+                    return const Icon(
+                      Icons.directions_bus,
+                      color: Color(0xFFE30613),
+                      size: 18,
+                    );
+                  },
+                ),
+              ),
+            ),
           ],
         ),
       ),

@@ -56,6 +56,7 @@ dependencies:
   geolocator: ^14.0.2  # Actualizado de 13.0.4
   flutter_map: ^8.2.2  # Actualizado de 7.0.2
   latlong2: ^0.9.1
+  flutter_compass: ^0.8.0  # Brújula y orientación del dispositivo
   
   # Almacenamiento Local
   shared_preferences: ^2.3.2

@@ -8,6 +8,7 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:vibration/vibration.dart';
+import 'package:flutter_compass/flutter_compass.dart';
 import '../services/tts_service.dart';
 import '../services/api_client.dart';
 import '../services/address_validation_service.dart';
@@ -88,6 +89,15 @@ class _MapScreenState extends State<MapScreen> {
   bool _autoCenter = true; // Por defecto activado
   bool _userManuallyMoved = false; // Detecta si el usuario movió el mapa
 
+  // Simulación de caminata
+  bool _isSimulatingWalk = false;
+
+  // Sistema de brújula y orientación
+  double _currentHeading = 0.0; // Orientación actual del dispositivo
+  double _deviceHeading = 0.0; // Heading del dispositivo para guía contextual
+  StreamSubscription<CompassEvent>? _compassSubscription;
+  DateTime? _lastOrientationAnnouncement;
+
   // Control de visualización de ruta de bus
   bool _busRouteShown =
       false; // Rastrea si ya se mostró la ruta del bus en wait_bus
@@ -131,6 +141,7 @@ class _MapScreenState extends State<MapScreen> {
       _initServices();
       _setupTrackingCallbacks();
       _setupBoardingCallbacks();
+      _setupCompass(); // Configurar brújula
     });
   }
 
@@ -959,7 +970,6 @@ class _MapScreenState extends State<MapScreen> {
     // Cancelar simulaciones previas
     _walkSimulationTimer?.cancel();
     _walkSimulationTimer = null;
-    // TODO: Simulación de GPS eliminada - usar GPS real del dispositivo
 
     if (stops.length < 2) {
       _log('⚠️ [BUS_SIM] Ruta insuficiente (${stops.length} puntos)');
@@ -967,13 +977,13 @@ class _MapScreenState extends State<MapScreen> {
       return;
     }
 
-    _log('🚌 [BUS_SIM] Modo simulación deshabilitado - usar GPS real');
+    _log('🚌 [BUS_SIM] Navegación en bus con GPS real');
     
-    // TODO(dev): Implementar seguimiento con GPS real del dispositivo
-    // La navegación en bus debe usar Geolocator.getPositionStream() 
-    // para obtener la ubicación real del usuario, no una simulación.
+    // La navegación en bus usa GPS real del dispositivo
+    // El listener GPS ya configurado en _setupGPSListener() detectará
+    // automáticamente cuando el usuario se acerca a cada parada
     
-    TtsService.instance.speak('Navegación con GPS real no implementada aún.');
+    TtsService.instance.speak('Sube al bus. Te avisaré cuando llegues a tu parada.');
   }
 
   List<String>? _getActiveWalkInstructions() {
@@ -1085,7 +1095,6 @@ class _MapScreenState extends State<MapScreen> {
   void _startWalkSimulation(NavigationStep walkStep) async {
     // Cancelar simulación previa si existe
     _walkSimulationTimer?.cancel();
-    // TODO: NavigationSimulator.instance.stop(); // Simulación deshabilitada
 
     if (walkStep.location == null || _currentPosition == null) {
       TtsService.instance.speak('Error: no se puede simular la caminata');
@@ -1148,17 +1157,119 @@ class _MapScreenState extends State<MapScreen> {
       }
     }
 
-    _log(
-      '🚶 [SIMULATOR] Navegación peatonal con GPS real (no simulación)',
+    _log('🚶 [SIMULATOR] Iniciando simulación realista de caminata');
+    _log('� [SIMULATOR] Puntos de ruta: ${stepGeometry.length}');
+
+    setState(() {
+      _isSimulatingWalk = true;
+    });
+
+    TtsService.instance.speak('Iniciando simulación de caminata');
+    _showSuccessNotification('Simulación de caminata iniciada');
+
+    int currentWaypointIndex = 0;
+    LatLng currentSimulatedPosition = stepGeometry[0];
+
+    // Simulador realista: actualización cada 1 segundo con velocidad variable
+    _walkSimulationTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted || currentWaypointIndex >= stepGeometry.length - 1) {
+        timer.cancel();
+        _walkSimulationTimer = null;
+        
+        if (mounted) {
+          setState(() {
+            _isSimulatingWalk = false;
+          });
+          
+          _log('✅ [SIMULATOR] Simulación de caminata completada');
+          TtsService.instance.speak('Has llegado al destino');
+          _showSuccessNotification('Simulación completada');
+        }
+        return;
+      }
+
+      final targetWaypoint = stepGeometry[currentWaypointIndex + 1];
+      
+      // Calcular distancia al siguiente waypoint
+      final distanceToTarget = Geolocator.distanceBetween(
+        currentSimulatedPosition.latitude,
+        currentSimulatedPosition.longitude,
+        targetWaypoint.latitude,
+        targetWaypoint.longitude,
+      );
+
+      // Velocidad de caminata realista: 1.2-1.5 m/s (4.3-5.4 km/h)
+      final random = math.Random();
+      final walkingSpeed = 1.2 + (random.nextDouble() * 0.3); // Variable entre pasos
+
+      if (distanceToTarget <= walkingSpeed) {
+        // Alcanzamos el waypoint, avanzar al siguiente
+        currentWaypointIndex++;
+        currentSimulatedPosition = stepGeometry[currentWaypointIndex];
+        _log('📍 [SIMULATOR] Waypoint $currentWaypointIndex/${stepGeometry.length}');
+      } else {
+        // Calcular bearing hacia el siguiente waypoint
+        final bearing = Geolocator.bearingBetween(
+          currentSimulatedPosition.latitude,
+          currentSimulatedPosition.longitude,
+          targetWaypoint.latitude,
+          targetWaypoint.longitude,
+        );
+
+        // Mover hacia el waypoint
+        final newPosition = _calculateNewPosition(
+          currentSimulatedPosition,
+          bearing,
+          walkingSpeed,
+        );
+        currentSimulatedPosition = newPosition;
+      }
+
+      // Actualizar posición simulada
+      if (mounted) {
+        setState(() {
+          _currentPosition = Position(
+            latitude: currentSimulatedPosition.latitude,
+            longitude: currentSimulatedPosition.longitude,
+            timestamp: DateTime.now(),
+            accuracy: 5.0,
+            altitude: 0.0,
+            altitudeAccuracy: 0.0,
+            heading: 0.0,
+            headingAccuracy: 0.0,
+            speed: walkingSpeed,
+            speedAccuracy: 0.0,
+          );
+        });
+
+        _updateCurrentLocationMarker();
+
+        // Auto-centrar en la posición actual si está habilitado
+        if (_autoCenter && !_userManuallyMoved) {
+          _moveMap(currentSimulatedPosition, _mapController.camera.zoom);
+        }
+      }
+    });
+  }
+
+  // Calcular nueva posición dado bearing y distancia
+  LatLng _calculateNewPosition(LatLng start, double bearing, double distanceMeters) {
+    const double earthRadius = 6371000; // metros
+    final double lat1 = start.latitude * math.pi / 180;
+    final double lon1 = start.longitude * math.pi / 180;
+    final double bearingRad = bearing * math.pi / 180;
+
+    final double lat2 = math.asin(
+      math.sin(lat1) * math.cos(distanceMeters / earthRadius) +
+      math.cos(lat1) * math.sin(distanceMeters / earthRadius) * math.cos(bearingRad)
     );
 
-    // TODO(dev): Implementar navegación peatonal con GPS real
-    // Debe usar Geolocator.getPositionStream() para seguimiento en tiempo real
-    
-    TtsService.instance.speak('Comenzando navegación peatonal');
-    _showSuccessNotification('Navegación peatonal iniciada - usar GPS real');
-    
-    return; // Deshabilitado hasta implementar GPS real
+    final double lon2 = lon1 + math.atan2(
+      math.sin(bearingRad) * math.sin(distanceMeters / earthRadius) * math.cos(lat1),
+      math.cos(distanceMeters / earthRadius) - math.sin(lat1) * math.sin(lat2)
+    );
+
+    return LatLng(lat2 * 180 / math.pi, lon2 * 180 / math.pi);
   }
 
   /// Crea y visualiza los paraderos del bus (sin mostrar la línea de ruta)
@@ -1204,23 +1315,23 @@ class _MapScreenState extends State<MapScreen> {
       String label = '';
 
       if (isFirst) {
-        // � PARADERO DE SUBIDA (verde brillante - punto de inicio del viaje en bus)
-        markerColor = Colors.green.shade600;
-        markerIcon = Icons.location_on_rounded; // Pin de ubicación
+        // 🟢 PARADERO DE SUBIDA (verde brillante con icono de bus)
+        markerColor = const Color(0xFF4CAF50); // Verde Material
+        markerIcon = Icons.directions_bus; // Icono de bus
         markerSize = 52;
         label = 'SUBIDA';
       } else if (isLast) {
-        // � PARADERO DE BAJADA (rojo - destino del viaje en bus)
-        markerColor = Colors.red.shade600;
-        markerIcon = Icons.flag_rounded; // Bandera de meta
+        // 🔴 PARADERO DE BAJADA (rojo con icono de bus)
+        markerColor = const Color(0xFFE30613); // Rojo RED
+        markerIcon = Icons.directions_bus; // Icono de bus
         markerSize = 52;
         label = 'BAJADA';
       } else {
-        // 🔵 PARADEROS INTERMEDIOS (azul con número de secuencia)
-        markerColor = Colors.blue.shade600;
-        markerIcon = Icons.circle;
-        markerSize = 28;
-        label = '$i'; // Número de secuencia
+        // 🔵 PARADEROS INTERMEDIOS (azul con icono de bus alert)
+        markerColor = const Color(0xFF2196F3); // Azul Material
+        markerIcon = Icons.bus_alert; // Icono de bus intermedio
+        markerSize = 36;
+        label = 'P$i'; // Parada número
       }
 
       final marker = Marker(
@@ -1252,43 +1363,55 @@ class _MapScreenState extends State<MapScreen> {
                 ],
               ),
               child: Center(
-                child: isFirst || isLast
-                    ? Icon(
-                        markerIcon,
-                        color: Colors.white,
-                        size: markerSize * 0.65,
-                      )
-                    : Text(
-                        label,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 13,
-                        ),
-                      ),
+                child: Icon(
+                  markerIcon,
+                  color: Colors.white,
+                  size: markerSize * 0.65,
+                ),
               ),
             ),
-            // Etiqueta con código de parada (más visible)
+            // Etiqueta con código de parada y descripción mejorada
             if (stop.code != null && stop.code!.isNotEmpty)
               Container(
                 margin: const EdgeInsets.only(top: 3),
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                 decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.85),
-                  borderRadius: BorderRadius.circular(6),
+                  color: Colors.black.withValues(alpha: 0.90),
+                  borderRadius: BorderRadius.circular(8),
                   border: Border.all(
-                    color: markerColor.withValues(alpha: 0.5),
-                    width: 1,
+                    color: markerColor,
+                    width: 2,
                   ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.4),
+                      blurRadius: 4,
+                      offset: const Offset(0, 2),
+                    ),
+                  ],
                 ),
-                child: Text(
-                  stop.code!,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 9,
-                    fontWeight: FontWeight.w600,
-                    letterSpacing: 0.5,
-                  ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      label,
+                      style: TextStyle(
+                        color: markerColor,
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      stop.code!,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                  ],
                 ),
               ),
           ],
@@ -1460,9 +1583,193 @@ class _MapScreenState extends State<MapScreen> {
           14.0,
         );
       }
+
+      // Configurar listener de GPS en tiempo real
+      _setupGPSListener();
     } catch (e) {
       if (!mounted) return;
       TtsService.instance.speak('Error obteniendo ubicación');
+    }
+  }
+
+  /// Configura el listener de brújula para rotación del mapa
+  void _setupCompass() {
+    _compassSubscription = FlutterCompass.events?.listen((CompassEvent event) {
+      if (!mounted) return;
+
+      final heading = event.heading;
+      if (heading == null) return;
+
+      setState(() {
+        _currentHeading = heading;
+        _deviceHeading = heading; // Guardar para guía contextual
+      });
+
+      // Rotar el mapa según la orientación del dispositivo
+      if (_isMapReady && _autoCenter && !_userManuallyMoved) {
+        _mapController.rotate(-heading); // Negativo porque norte es 0°
+        _log('🧭 [COMPASS] Heading: ${heading.toStringAsFixed(1)}°');
+      }
+    });
+
+    _log('🧭 [COMPASS] Sistema de brújula inicializado');
+  }
+
+  /// Configura el listener de GPS para navegación en tiempo real
+  void _setupGPSListener() {
+    const locationSettings = LocationSettings(
+      accuracy: LocationAccuracy.high,
+      distanceFilter: 5, // Actualizar cada 5 metros
+    );
+
+    Geolocator.getPositionStream(locationSettings: locationSettings).listen(
+      (Position position) {
+        // 🚫 Ignorar GPS real si estamos simulando
+        if (_isSimulatingWalk) {
+          _log('🚫 [GPS] Ignorando actualización GPS (simulación activa)');
+          return;
+        }
+
+        if (!mounted) return;
+
+        setState(() {
+          _currentPosition = position;
+        });
+
+        _updateCurrentLocationMarker();
+
+        // Auto-centrar si está habilitado
+        if (_autoCenter && !_userManuallyMoved) {
+          _moveMap(
+            LatLng(position.latitude, position.longitude),
+            _mapController.camera.zoom,
+          );
+        }
+
+        // Verificar llegada a waypoint si hay navegación activa
+        _checkArrivalAtWaypoint(position);
+      },
+      onError: (error) {
+        _log('❌ [GPS] Error en stream de ubicación: $error', error: error);
+      },
+    );
+  }
+
+  /// Verifica si el usuario llegó a un waypoint de la ruta
+  void _checkArrivalAtWaypoint(Position currentPos) {
+    final activeNav = IntegratedNavigationService.instance.activeNavigation;
+    if (activeNav == null || activeNav.isComplete) return;
+
+    final currentStep = activeNav.steps[activeNav.currentStepIndex];
+    
+    // Solo verificar en pasos de caminata
+    if (currentStep.type != 'walk') return;
+
+    final stepGeometry = IntegratedNavigationService.instance.currentStepGeometry;
+    if (stepGeometry.isEmpty) return;
+
+    // Obtener el waypoint destino del paso actual
+    final targetWaypoint = stepGeometry.last;
+    
+    final distanceToTarget = Geolocator.distanceBetween(
+      currentPos.latitude,
+      currentPos.longitude,
+      targetWaypoint.latitude,
+      targetWaypoint.longitude,
+    );
+
+    // Proporcionar guía contextual según distancia
+    _provideContextualGuidance(currentPos, currentStep, distanceToTarget);
+
+    // Umbral de llegada: 15 metros
+    const double arrivalThreshold = 15.0;
+
+    if (distanceToTarget <= arrivalThreshold) {
+      _log('✅ [GPS] Llegada a waypoint detectada (${distanceToTarget.toStringAsFixed(1)}m)');
+      
+      // Anunciar llegada
+      TtsService.instance.speak('Has llegado al waypoint');
+      _showSuccessNotification('Waypoint alcanzado');
+
+      // Avanzar al siguiente paso si es posible
+      if (activeNav.currentStepIndex < activeNav.steps.length - 1) {
+        Future.delayed(const Duration(seconds: 2), () {
+          IntegratedNavigationService.instance.advanceToNextStep();
+          if (mounted) {
+            setState(() {
+              _updateNavigationMapState(activeNav);
+            });
+          }
+        });
+      }
+    }
+  }
+
+  /// Proporcionar guía contextual según posición y orientación
+  /// "Camina hacia adelante", "Gira a la derecha", "Sigue recto"
+  void _provideContextualGuidance(Position position, NavigationStep step, double distance) {
+    // Solo anunciar si han pasado más de 10 segundos desde el último anuncio
+    if (_lastOrientationAnnouncement != null &&
+        DateTime.now().difference(_lastOrientationAnnouncement!) < const Duration(seconds: 10)) {
+      return;
+    }
+
+    if (step.location == null) return;
+
+    // Calcular bearing (dirección) hacia el objetivo
+    final bearingToTarget = Geolocator.bearingBetween(
+      position.latitude,
+      position.longitude,
+      step.location!.latitude,
+      step.location!.longitude,
+    );
+
+    // Calcular diferencia angular entre heading actual y dirección al objetivo
+    final headingDifference = _normalizeAngle(bearingToTarget - _deviceHeading);
+
+    // Generar instrucción contextual
+    String instruction = '';
+
+    if (distance > 100) {
+      // Lejos del objetivo
+      instruction = 'Continúa ${_getRelativeDirection(headingDifference)}. Faltan ${distance.toInt()} metros';
+    } else if (distance > 50) {
+      // Cerca del objetivo
+      instruction = 'Estás cerca. ${_getRelativeDirection(headingDifference)}. Faltan ${distance.toInt()} metros';
+    } else {
+      // Muy cerca
+      instruction = 'Casi llegas. ${_getRelativeDirection(headingDifference)}. ${distance.toInt()} metros';
+    }
+
+    TtsService.instance.speak(instruction);
+    Vibration.vibrate(duration: 50);
+    _lastOrientationAnnouncement = DateTime.now();
+    _log('🧭 [GUIDANCE] $instruction (bearing: ${bearingToTarget.toStringAsFixed(1)}°, diff: ${headingDifference.toStringAsFixed(1)}°)');
+  }
+
+  /// Normaliza ángulo a rango -180 a 180
+  double _normalizeAngle(double angle) {
+    while (angle > 180) angle -= 360;
+    while (angle < -180) angle += 360;
+    return angle;
+  }
+
+  /// Obtiene dirección relativa basada en diferencia de heading
+  String _getRelativeDirection(double headingDiff) {
+    if (headingDiff.abs() < 15) {
+      return 'recto adelante';
+    } else if (headingDiff > 15 && headingDiff < 45) {
+      return 'ligeramente a la derecha';
+    } else if (headingDiff >= 45 && headingDiff < 135) {
+      return 'a la derecha';
+    } else if (headingDiff >= 135) {
+      return 'gira completamente a la derecha';
+    } else if (headingDiff < -15 && headingDiff > -45) {
+      return 'ligeramente a la izquierda';
+    } else if (headingDiff <= -45 && headingDiff > -135) {
+      return 'a la izquierda';
+    } else {
+      return 'gira completamente a la izquierda';
     }
   }
 
@@ -3019,11 +3326,13 @@ class _MapScreenState extends State<MapScreen> {
     );
   }
   @override
+  @override
   void dispose() {
     _resultDebounce?.cancel();
     _feedbackTimer?.cancel();
     _confirmationTimer?.cancel();
     _walkSimulationTimer?.cancel(); // Cancelar simulación de caminata
+    _compassSubscription?.cancel(); // Cancelar brújula
 
     unawaited(TtsService.instance.releaseContext('map_navigation'));
 
@@ -3289,17 +3598,36 @@ class _MapScreenState extends State<MapScreen> {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
+          // Logo Red Movilidad (32x32)
           Container(
             width: 32,
             height: 32,
             decoration: BoxDecoration(
-              color: const Color(0xFF00BCD4).withValues(alpha: 0.12),
+              color: Colors.white,
               shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.1),
+                  blurRadius: 4,
+                  offset: const Offset(0, 2),
+                ),
+              ],
             ),
-            child: const Icon(
-              Icons.navigation_outlined,
-              color: Color(0xFF00BCD4),
-              size: 18,
+            child: ClipOval(
+              child: Image.asset(
+                'assets/icons.webp',
+                width: 32,
+                height: 32,
+                fit: BoxFit.cover,
+                errorBuilder: (context, error, stackTrace) {
+                  // Fallback si no existe la imagen
+                  return const Icon(
+                    Icons.directions_bus,
+                    color: Color(0xFFE30613),
+                    size: 18,
+                  );
+                },
+              ),
             ),
           ),
           const SizedBox(width: 12),
