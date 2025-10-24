@@ -831,7 +831,7 @@ class _MapScreenState extends State<MapScreen> {
     final currentStep = activeNav.steps[activeNav.currentStepIndex];
 
     // CASO ESPECIAL: Si estamos en wait_bus, significa que YA llegamos al paradero
-    // El botón "Simular" solo confirma que el usuario subió al bus (sin simular nada)
+    // El botón "Simular" confirma que el usuario subió al bus y dibuja la ruta
     if (currentStep.type == 'wait_bus') {
       _log('🚌 [SIMULAR] Usuario confirmó que subió al bus desde wait_bus');
       
@@ -839,11 +839,45 @@ class _MapScreenState extends State<MapScreen> {
       if (activeNav.currentStepIndex < activeNav.steps.length - 1) {
         final nextStep = activeNav.steps[activeNav.currentStepIndex + 1];
         if (nextStep.type == 'bus' || nextStep.type == 'ride_bus') {
+          // PRIMERO: Dibujar la geometría del bus ANTES de avanzar
+          try {
+            final busLeg = activeNav.itinerary.legs.firstWhere(
+              (leg) => leg.type == 'bus' && leg.isRedBus,
+              orElse: () => throw Exception('No bus leg found'),
+            );
+            
+            final stops = busLeg.stops;
+            if (stops != null && stops.isNotEmpty) {
+              final busRoutePoints = stops.map((stop) => stop.location).toList();
+              
+              setState(() {
+                _polylines = [
+                  Polyline(
+                    points: busRoutePoints,
+                    color: const Color(0xFF2196F3), // Azul para ruta de bus
+                    strokeWidth: 4.0,
+                  ),
+                ];
+                
+                // TAMBIÉN actualizar marcadores para mostrar los paraderos
+                _updateNavigationMarkers(nextStep, activeNav);
+              });
+              
+              _log('🚌 [BUS] Geometría dibujada: ${busRoutePoints.length} paraderos');
+            }
+          } catch (e) {
+            _log('⚠️ [BUS] Error dibujando geometría: $e');
+          }
+          
+          // SEGUNDO: Anunciar TTS y ESPERAR que termine
           await TtsService.instance.speak('Subiendo al bus ${nextStep.busRoute}', urgent: true);
+          
+          // TERCERO: Pequeña pausa para dar tiempo visual
+          await Future.delayed(const Duration(milliseconds: 800));
         }
       }
       
-      // Avanzar al siguiente paso (el bus)
+      // CUARTO: Avanzar al siguiente paso (el bus)
       IntegratedNavigationService.instance.advanceToNextStep();
       if (mounted) {
         setState(() {
@@ -941,12 +975,9 @@ class _MapScreenState extends State<MapScreen> {
     } else if (currentStep.type == 'bus' || currentStep.type == 'ride_bus') {
       // SIMULAR VIAJE EN BUS: Mover GPS por cada parada
       _log('� [SIMULAR] Viaje en bus - Moviendo GPS por paradas');
-      final busRoute = currentStep.busRoute ?? 'el bus';
-      
-      await TtsService.instance.speak(
-        'Subiendo al bus $busRoute',
-        urgent: true,
-      );
+      // NO anunciar "Subiendo al bus" aquí porque ya se anunció en wait_bus
+      // Dar un pequeño delay antes de empezar a mover el GPS
+      await Future.delayed(const Duration(milliseconds: 500));
       
       // Obtener paradas del bus
       final busLeg = activeNav.itinerary.legs.firstWhere(
@@ -977,6 +1008,9 @@ class _MapScreenState extends State<MapScreen> {
       });
       
       int currentStopIndex = 0;
+      
+      // Determinar qué paraderos anunciar (evitar spam en rutas largas)
+      final importantStopIndices = _getImportantStopIndices(allStops.length);
       
       // Anunciar primera parada
       await TtsService.instance.speak(
@@ -1017,17 +1051,16 @@ class _MapScreenState extends State<MapScreen> {
         
         final isFirstStop = currentStopIndex == 0;
         final isLastStop = currentStopIndex == allStops.length - 1;
+        final isImportantStop = importantStopIndices.contains(currentStopIndex);
         
-        // Anunciar paradero actual
-        String announcement;
+        // Anunciar SOLO paraderos importantes para evitar spam
+        String announcement = '';
         if (isLastStop) {
           announcement = 'Próxima parada: ${stop.name}. Prepárate para bajar';
-        } else if (!isFirstStop) {
-          // Solo anunciar paraderos intermedios (no el primero que ya se anunció)
+        } else if (isImportantStop && !isFirstStop) {
+          // Anunciar paraderos importantes (cada N paradas)
           final stopCode = stop.code != null ? 'código ${stop.code}' : '';
           announcement = 'Paradero ${stop.name} $stopCode';
-        } else {
-          announcement = ''; // No anunciar el primero de nuevo
         }
         
         if (announcement.isNotEmpty) {
@@ -1059,6 +1092,41 @@ class _MapScreenState extends State<MapScreen> {
         }
       }
     }
+  }
+
+  /// Determina qué paraderos son importantes para anunciar según la longitud del viaje
+  /// Evita spam en rutas largas anunciando solo paraderos clave
+  Set<int> _getImportantStopIndices(int totalStops) {
+    final Set<int> importantIndices = {};
+    
+    if (totalStops <= 5) {
+      // Ruta corta: anunciar todos los intermedios
+      for (int i = 1; i < totalStops - 1; i++) {
+        importantIndices.add(i);
+      }
+    } else if (totalStops <= 10) {
+      // Ruta mediana: anunciar cada 2 paradas
+      for (int i = 1; i < totalStops - 1; i += 2) {
+        importantIndices.add(i);
+      }
+    } else if (totalStops <= 20) {
+      // Ruta larga: anunciar cada 3 paradas
+      for (int i = 1; i < totalStops - 1; i += 3) {
+        importantIndices.add(i);
+      }
+    } else {
+      // Ruta muy larga: anunciar cada 5 paradas
+      for (int i = 1; i < totalStops - 1; i += 5) {
+        importantIndices.add(i);
+      }
+    }
+    
+    // Siempre incluir el penúltimo para dar aviso antes del final
+    if (totalStops > 2) {
+      importantIndices.add(totalStops - 2);
+    }
+    
+    return importantIndices;
   }
 
   /// Obtiene las instrucciones de caminata activas
@@ -2301,7 +2369,13 @@ class _MapScreenState extends State<MapScreen> {
           // Usar geometría cacheada en lugar de llamar al servicio
           final stepGeometry = _getCurrentStepGeometryCached();
 
-          if (step.type == 'ride_bus') {
+          if (step.type == 'wait_bus') {
+            // Para wait_bus: NO mostrar geometría del bus todavía
+            // Solo mostrar la geometría de la caminata previa (si existe)
+            // La geometría del bus se mostrará cuando el usuario confirme con "Simular"
+            _polylines = [];
+            _log('🚏 [WAIT_BUS] Sin geometría hasta confirmar subida al bus');
+          } else if (step.type == 'ride_bus') {
             // Para buses: Dibujar línea conectando SOLO los paraderos intermedios
             // Esto crea una geometría más precisa que sigue las paradas reales del bus
             final activeNav = IntegratedNavigationService.instance.activeNavigation;
@@ -2338,7 +2412,7 @@ class _MapScreenState extends State<MapScreen> {
               _polylines = [];
             }
           } else {
-            // Para walk, wait_bus, etc: dibujar polyline normal
+            // Para walk, etc: dibujar polyline normal
             _polylines = stepGeometry.isNotEmpty
                 ? [
                     Polyline(
@@ -2503,8 +2577,12 @@ class _MapScreenState extends State<MapScreen> {
     }
 
     // Actualizar polyline del paso actual
-    if (navigation.currentStep?.type == 'ride_bus') {
+    if (navigation.currentStep?.type == 'wait_bus') {
+      // NO mostrar geometría del bus hasta que confirme con "Simular"
       _polylines = [];
+    } else if (navigation.currentStep?.type == 'ride_bus') {
+      // Geometría del bus ya se dibujó cuando confirmó "Subir al bus"
+      // Mantener la geometría existente
     } else {
       _polylines = _cachedStepGeometry.isNotEmpty
           ? [
