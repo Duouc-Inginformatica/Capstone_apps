@@ -16,8 +16,8 @@ import '../backend/api_client.dart';
 import '../device/tts_service.dart';
 import '../backend/bus_arrivals_service.dart';
 
-// DEBUG MODE - Habilita logs detallados de JSON y geometrías
-const bool kDebugNavigation = bool.fromEnvironment('DEBUG_NAV', defaultValue: true);
+// DEBUG MODE - Habilita logs detallados de JSON y geometrías  
+const bool kDebugNavigation = true; // SIEMPRE ACTIVADO para ver logs completos
 
 // =============================================================================
 // MODELOS DE DATOS DEL BACKEND (de /api/red/itinerary)
@@ -86,10 +86,14 @@ class RedBusLeg {
     List<LatLng>? geometry;
     if (json['geometry'] != null) {
       geometry = (json['geometry'] as List)
-          .map((g) => LatLng(
-                (g['lat'] as num).toDouble(),
-                (g['lng'] as num).toDouble(),
-              ))
+          .map((g) {
+            final lat = g['lat'];
+            final lng = g['lng'];
+            return LatLng(
+              (lat is num) ? lat.toDouble() : (lat is String ? double.tryParse(lat) ?? 0.0 : 0.0),
+              (lng is num) ? lng.toDouble() : (lng is String ? double.tryParse(lng) ?? 0.0 : 0.0),
+            );
+          })
           .toList();
     }
 

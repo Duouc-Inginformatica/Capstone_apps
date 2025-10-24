@@ -3756,7 +3756,151 @@ class _MapScreenState extends State<MapScreen> {
   Widget _buildBottomPanel(BuildContext context) {
     final bool isListening = _isListening;
     final bool isCalculating = _isCalculatingRoute;
+    final activeNav = IntegratedNavigationService.instance.activeNavigation;
+    final bool hasActiveNav = activeNav != null && !activeNav.isComplete;
 
+    // INTERFAZ MINIMAL durante navegación activa
+    if (hasActiveNav && !isCalculating) {
+      return _buildMinimalNavigationPanel(context, isListening, activeNav);
+    }
+
+    // INTERFAZ COMPLETA cuando NO hay navegación
+    return _buildFullBottomPanel(context, isListening, isCalculating);
+  }
+
+  /// Interfaz minimal durante navegación: solo micrófono + info de ruta
+  Widget _buildMinimalNavigationPanel(BuildContext context, bool isListening, dynamic activeNav) {
+    final List<Color> micGradient = isListening
+        ? const [Color(0xFFE53935), Color(0xFFB71C1C)]
+        : const [Color(0xFF00BCD4), Color(0xFF0097A7)];
+
+    final Color micShadowColor = isListening
+        ? const Color(0xFFB71C1C)
+        : const Color(0xFF0097A7);
+
+    // Calcular tiempo y distancia
+    final int durationMin = (activeNav.totalDurationSeconds ~/ 60);
+    final int distanceM = activeNav.totalDistanceMeters;
+
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Mensajes recientes (si hay)
+            if (_messageHistory.isNotEmpty) _buildMessageHistoryPanel(),
+            if (_messageHistory.isNotEmpty) const SizedBox(height: 8),
+            
+            // Panel minimal con micrófono
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(28),
+                boxShadow: [
+                  BoxShadow(
+                    color: micShadowColor.withValues(alpha: 0.15),
+                    blurRadius: 24,
+                    offset: const Offset(0, 10),
+                  ),
+                ],
+              ),
+              child: Row(
+                children: [
+                  // Botón de micrófono
+                  GestureDetector(
+                    onTap: isListening ? _stopListening : _startListening,
+                    child: Container(
+                      width: 70,
+                      height: 70,
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          colors: micGradient,
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                        ),
+                        shape: BoxShape.circle,
+                        boxShadow: [
+                          BoxShadow(
+                            color: micShadowColor.withValues(alpha: 0.3),
+                            blurRadius: 16,
+                            offset: const Offset(0, 6),
+                          ),
+                        ],
+                      ),
+                      child: Icon(
+                        isListening ? Icons.mic : Icons.mic_none,
+                        color: Colors.white,
+                        size: 32,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 20),
+                  // Info de navegación
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            const Icon(Icons.access_time, size: 18, color: Color(0xFF64748B)),
+                            const SizedBox(width: 6),
+                            Text(
+                              '${durationMin}min',
+                              style: const TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w700,
+                                color: Color(0xFF0F172A),
+                              ),
+                            ),
+                            const SizedBox(width: 16),
+                            const Icon(Icons.straighten, size: 18, color: Color(0xFF64748B)),
+                            const SizedBox(width: 6),
+                            Text(
+                              '${distanceM}m',
+                              style: const TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w700,
+                                color: Color(0xFF0F172A),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            // Botón Simular Caminata
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: _simulateArrivalAtStop,
+                icon: const Icon(Icons.directions_walk),
+                label: Text(_getSimulationButtonLabel()),
+                style: ElevatedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  backgroundColor: const Color(0xFFFFA726),
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  elevation: 4,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Interfaz completa cuando NO hay navegación activa
+  Widget _buildFullBottomPanel(BuildContext context, bool isListening, bool isCalculating) {
     final List<Color> micGradient = isCalculating
         ? const [Color(0xFF2563EB), Color(0xFF1D4ED8)]
         : isListening
