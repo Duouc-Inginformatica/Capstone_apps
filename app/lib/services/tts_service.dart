@@ -12,7 +12,9 @@ class TtsService {
   final FlutterTts _tts = FlutterTts();
   bool _initialized = false;
   bool _isSpeaking = false;
-  final List<String> _messageQueue = [];
+  String _activeContext = 'global';
+  String? _currentContext;
+  final List<_SpeechMessage> _messageQueue = [];
 
   // Configuración de voz
   double _rate = 0.45;
@@ -90,16 +92,57 @@ class TtsService {
     _initialized = true;
   }
 
+  /// Define el contexto activo (pantalla o flujo) para reproducir mensajes.
+  Future<void> setActiveContext(
+    String context, {
+    bool stopCurrent = true,
+  }) async {
+    if (context.isEmpty) return;
+    if (_activeContext == context) return;
+
+    if (stopCurrent && _currentContext != null && _currentContext != context) {
+      await stop();
+    }
+
+    _activeContext = context;
+
+    // Limpiar mensajes que pertenecen a otros contextos
+    _messageQueue.removeWhere((msg) => msg.context != _activeContext);
+  }
+
+  /// Libera el contexto actual regresando a "global".
+  Future<void> releaseContext(String context) async {
+    if (_activeContext != context) return;
+    await stop();
+    _activeContext = 'global';
+    _currentContext = null;
+  }
+
   /// Procesa la cola de mensajes pendientes
   void _processQueue() {
     if (_messageQueue.isEmpty || _isSpeaking) return;
 
-    final nextMessage = _messageQueue.removeAt(0);
+    // Buscar el siguiente mensaje válido para el contexto activo
+    final nextIndex = _messageQueue.indexWhere(
+      (msg) => msg.context == _activeContext,
+    );
+
+    if (nextIndex == -1) {
+      // Si no hay mensajes para este contexto, limpiar la cola restante
+      _messageQueue.clear();
+      return;
+    }
+
+    final nextMessage = _messageQueue.removeAt(nextIndex);
     _speakNow(nextMessage);
   }
 
   /// Habla un texto con pausas naturales
-  Future<void> speak(String text, {bool urgent = false}) async {
+  Future<void> speak(
+    String text, {
+    bool urgent = false,
+    String? context,
+  }) async {
     if (text.trim().isEmpty) return;
 
     // Asegurar inicialización
@@ -108,6 +151,16 @@ class TtsService {
     }
 
     try {
+      final targetContext = context ?? _activeContext;
+
+      // Evitar hablar si el contexto no coincide y no es urgente
+      if (targetContext != _activeContext && !urgent) {
+        developer.log(
+          '🔇 [TTS] Mensaje descartado por contexto inactivo ($targetContext)',
+        );
+        return;
+      }
+
       // Guardar en historial
       _lastSpokenText = text;
       _speechHistory.insert(0, text);
@@ -117,19 +170,27 @@ class TtsService {
         _speechHistory.removeRange(maxHistorySize, _speechHistory.length);
       }
 
+      final message = _SpeechMessage(text: text, context: targetContext);
+
       // Si es urgente, interrumpir y limpiar cola
       if (urgent) {
         await stop();
         _messageQueue.clear();
         _isSpeaking = false;
-        await _speakNow(text);
+        await _speakNow(message);
       } else {
         // Si no está hablando, hablar inmediatamente
         if (!_isSpeaking) {
-          await _speakNow(text);
+          await _speakNow(message);
         } else {
-          // Si está hablando, agregar a la cola
-          _messageQueue.add(text);
+          if (_currentContext == targetContext) {
+            // Misma pantalla: encolar
+            _messageQueue.add(message);
+          } else {
+            // Otra pantalla: interrumpir y reproducir nuevo contexto
+            await stop();
+            await _speakNow(message);
+          }
         }
       }
     } catch (e) {
@@ -139,12 +200,14 @@ class TtsService {
   }
 
   /// Habla inmediatamente (uso interno)
-  Future<void> _speakNow(String text) async {
+  Future<void> _speakNow(_SpeechMessage message) async {
     _isSpeaking = true;
+    _currentContext = message.context;
 
     // Usar TTS nativo clásico
+    final text = message.text;
     developer.log(
-      '🔊 [TTS] Hablando: "${text.substring(0, text.length > 50 ? 50 : text.length)}..."',
+      '🔊 [TTS] (${message.context}) "${text.substring(0, text.length > 50 ? 50 : text.length)}..."',
     );
     final textWithPauses = text.replaceAll('.', '... ').replaceAll(',', ', ');
     await _tts.speak(textWithPauses);
@@ -194,12 +257,17 @@ class TtsService {
   }
 
   /// Para la reproducción y limpia la cola
-  Future<void> stop() async {
+  Future<void> stop({bool clearQueue = true}) async {
     if (!_initialized) return;
     try {
       await _tts.stop();
-      _messageQueue.clear();
+      if (clearQueue) {
+        _messageQueue.clear();
+      } else {
+        _messageQueue.removeWhere((msg) => msg.context != _activeContext);
+      }
       _isSpeaking = false;
+      _currentContext = null;
     } catch (_) {}
   }
 
@@ -224,4 +292,14 @@ class TtsService {
       await Future.delayed(const Duration(milliseconds: 100));
     }
   }
+}
+
+class _SpeechMessage {
+  const _SpeechMessage({
+    required this.text,
+    required this.context,
+  });
+
+  final String text;
+  final String context;
 }

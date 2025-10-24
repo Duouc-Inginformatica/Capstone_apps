@@ -35,6 +35,12 @@ enum ManeuverType {
   waypoint, // Punto intermedio
 }
 
+/// Modo de simulación (peatonal o bus)
+enum SimulationMode {
+  walking,
+  bus,
+}
+
 /// Instrucción de navegación enriquecida
 class NavigationInstruction {
   final ManeuverType maneuverType;
@@ -44,6 +50,7 @@ class NavigationInstruction {
   final bool isCrossing; // ¿Es un cruce de calle?
   final bool hasTraffic; // ¿Tiene precaución por tráfico?
   final String? nextStreetName; // Nombre de la siguiente calle
+  final String? customAnnouncement; // Mensaje personalizado
 
   NavigationInstruction({
     required this.maneuverType,
@@ -53,10 +60,15 @@ class NavigationInstruction {
     this.isCrossing = false,
     this.hasTraffic = false,
     this.nextStreetName,
+    this.customAnnouncement,
   });
 
   /// Genera anuncio de voz natural
   String toVoiceAnnouncement() {
+    if (customAnnouncement != null && customAnnouncement!.isNotEmpty) {
+      return customAnnouncement!;
+    }
+
     String announcement = '';
 
     // Simplificar nombres de calles (especialmente paraderos)
@@ -208,6 +220,7 @@ class NavigationSimulator {
   int _currentPointIndex = 0;
   List<LatLng>? _currentRoute;
   List<NavigationInstruction>? _instructions;
+  SimulationMode _currentMode = SimulationMode.walking;
 
   // Callbacks
   Function(Position)? onPositionUpdate;
@@ -219,10 +232,13 @@ class NavigationSimulator {
   /// Inicia simulación de navegación con instrucciones de GraphHopper
   Future<void> startSimulation({
     required List<LatLng> routeGeometry,
-    required List<Instruction> graphhopperInstructions,
+    List<Instruction>? graphhopperInstructions,
     Function(Position)? onPositionUpdate,
     Function(NavigationInstruction)? onInstructionAnnounced,
     Function()? onSimulationComplete,
+    SimulationMode mode = SimulationMode.walking,
+    List<NavigationInstruction>? customInstructions,
+    double? customSpeedMetersPerSecond,
   }) async {
     if (_isSimulating) {
       developer.log('⚠️ [Simulator] Ya hay simulación activa');
@@ -239,11 +255,22 @@ class NavigationSimulator {
     this.onPositionUpdate = onPositionUpdate;
     this.onInstructionAnnounced = onInstructionAnnounced;
     this.onSimulationComplete = onSimulationComplete;
+    _currentMode = mode;
 
     // Convertir instrucciones de GraphHopper a instrucciones enriquecidas
-    _instructions = _enrichInstructions(graphhopperInstructions, routeGeometry);
+    if (customInstructions != null) {
+      _instructions = customInstructions;
+    } else if (graphhopperInstructions != null) {
+      _instructions = _enrichInstructions(
+        graphhopperInstructions,
+        routeGeometry,
+      );
+    } else {
+      _instructions = [];
+    }
 
-    developer.log('🚶 [Simulator] Iniciando navegación realista');
+    final modeLabel = mode == SimulationMode.walking ? '🚶' : '🚌';
+    developer.log('$modeLabel [Simulator] Iniciando navegación (${mode.name})');
     developer.log('   📍 Puntos: ${routeGeometry.length}');
     developer.log('   📋 Instrucciones: ${_instructions?.length ?? 0}');
 
@@ -260,7 +287,7 @@ class NavigationSimulator {
     }
 
     // Iniciar loop de simulación
-    _runSimulationLoop();
+    _runSimulationLoop(customSpeedMetersPerSecond: customSpeedMetersPerSecond);
   }
 
   /// Convierte instrucciones de GraphHopper a instrucciones enriquecidas
@@ -388,7 +415,7 @@ class NavigationSimulator {
   }
 
   /// Ejecuta el loop de simulación
-  void _runSimulationLoop() {
+  void _runSimulationLoop({double? customSpeedMetersPerSecond}) {
     if (_currentRoute == null || !_isSimulating) return;
 
     // Calcular distancia total
@@ -400,8 +427,9 @@ class NavigationSimulator {
       );
     }
 
-    // Velocidad base: 1.2 m/s (persona no vidente)
-    const baseSpeed = 1.2;
+  // Velocidad base según modo
+  final double baseSpeed = customSpeedMetersPerSecond ??
+    (_currentMode == SimulationMode.walking ? 1.2 : 8.0);
     final totalDuration = totalDistance / baseSpeed;
     final totalPoints = _currentRoute!.length;
 
@@ -441,7 +469,7 @@ class NavigationSimulator {
         accumulatedDistance += segmentDistance;
 
         // Reducir velocidad en giros (cuando cambia el heading significativamente)
-        if (_currentPointIndex > 0) {
+        if (_currentMode == SimulationMode.walking && _currentPointIndex > 0) {
           final prevPoint = _currentRoute![_currentPointIndex - 1];
           final prevHeading = _calculateBearing(prevPoint, currentPoint);
           final headingChange = (heading - prevHeading).abs();

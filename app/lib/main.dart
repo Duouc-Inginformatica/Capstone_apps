@@ -11,7 +11,6 @@ import 'screens/bus_status_report_screen.dart';
 import 'screens/route_issue_report_screen.dart';
 import 'screens/stop_info_report_screen.dart';
 import 'screens/general_suggestion_screen.dart';
-import 'screens/tts_settings_screen.dart'; // ✅ Configuración de voz TTS
 import 'screens/debug_setup_screen.dart';
 
 Future<void> main() async {
@@ -119,8 +118,6 @@ class _WayFindCLAppState extends State<WayFindCLApp> {
             return MaterialPageRoute(builder: (_) => const MapScreen());
           case SettingsScreen.routeName:
             return MaterialPageRoute(builder: (_) => const SettingsScreen());
-          case '/tts_settings': // Nueva ruta configuración TTS
-            return MaterialPageRoute(builder: (_) => const TtsSettingsScreen());
           case ContributeScreen.routeName:
             return MaterialPageRoute(builder: (_) => const ContributeScreen());
           case BusStatusReportScreen.routeName:

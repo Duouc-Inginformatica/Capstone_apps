@@ -34,12 +34,12 @@ class NotificationData {
   final bool withSound;
   final bool withVibration;
 
-  NotificationData({
+  const NotificationData({
     required this.message,
     required this.type,
     this.icon,
     this.duration = const Duration(seconds: 3),
-    this.withSound = true,
+    this.withSound = false,
     this.withVibration = false,
   });
 }
@@ -60,84 +60,125 @@ class AccessibleNotification extends StatefulWidget {
 
 class _AccessibleNotificationState extends State<AccessibleNotification>
     with SingleTickerProviderStateMixin {
-  late AnimationController _controller;
-  late Animation<Offset> _slideAnimation;
-  late Animation<double> _fadeAnimation;
+  late final AnimationController _controller;
+  late final Animation<Offset> _slideAnimation;
+  late final Animation<double> _fadeAnimation;
+  Timer? _autoDismissTimer;
 
   @override
   void initState() {
     super.initState();
+
     _controller = AnimationController(
-      duration: const Duration(milliseconds: 300),
       vsync: this,
+      duration: const Duration(milliseconds: 220),
     );
 
     _slideAnimation = Tween<Offset>(
-      begin: const Offset(0, -1),
+      begin: const Offset(0, -0.08),
       end: Offset.zero,
-    ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeOutBack));
+    ).animate(
+      CurvedAnimation(parent: _controller, curve: Curves.easeOutCubic),
+    );
 
-    _fadeAnimation = Tween<double>(
-      begin: 0,
-      end: 1,
-    ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeOut));
+    _fadeAnimation = CurvedAnimation(
+      parent: _controller,
+      curve: Curves.easeIn,
+    );
 
     _controller.forward();
+    _scheduleAutoDismiss();
+    _maybeTriggerFeedback();
+  }
 
-    // Auto-dismiss después de la duración especificada
-    Timer(widget.notification.duration, () {
-      if (mounted) _dismiss();
+  @override
+  void didUpdateWidget(covariant AccessibleNotification oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    if (oldWidget.notification != widget.notification) {
+      _autoDismissTimer?.cancel();
+      _scheduleAutoDismiss();
+      _maybeTriggerFeedback();
+    }
+  }
+
+  @override
+  void dispose() {
+    _autoDismissTimer?.cancel();
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _scheduleAutoDismiss() {
+    if (widget.notification.duration == Duration.zero) {
+      return;
+    }
+
+    _autoDismissTimer = Timer(widget.notification.duration, () {
+      if (!mounted) return;
+      _dismiss();
     });
-
-    // Reproducir sonido y vibración si están habilitados
-    if (widget.notification.withSound) {
-      TtsService.instance.speak(widget.notification.message);
-    }
-    if (widget.notification.withVibration) {
-      Vibration.vibrate(duration: 100);
-    }
   }
 
-  void _dismiss() async {
-    await _controller.reverse();
-    widget.onDismiss();
-  }
+  Future<void> _maybeTriggerFeedback() async {
+    if (!widget.notification.withVibration) return;
 
-  Color _getBackgroundColor() {
-    switch (widget.notification.type) {
-      case NotificationType.success:
-        return Colors.green.shade700;
-      case NotificationType.error:
-        return Colors.red.shade700;
-      case NotificationType.warning:
-        return Colors.orange.shade700;
-      case NotificationType.info:
-        return Colors.blue.shade700;
-      case NotificationType.navigation:
-        return Colors.purple.shade700;
-      case NotificationType.orientation:
-        return Colors.teal.shade700;
+    try {
+      final hasVibrator = await Vibration.hasVibrator();
+      if (hasVibrator) {
+        await Vibration.vibrate(duration: 120);
+      }
+    } catch (_) {
+      // Ignorar fallas de vibración para no interrumpir la notificación.
     }
   }
 
-  IconData _getIcon() {
+  void _dismiss() {
+    if (!mounted) return;
+
+    _autoDismissTimer?.cancel();
+    _controller.reverse().then((_) {
+      if (mounted) {
+        widget.onDismiss();
+      }
+    });
+  }
+
+  IconData _resolveIcon() {
     if (widget.notification.icon != null) {
       return widget.notification.icon!;
     }
 
     switch (widget.notification.type) {
       case NotificationType.success:
-        return Icons.check_circle;
+        return Icons.check_circle_outline;
       case NotificationType.error:
-        return Icons.error;
+        return Icons.error_outline;
       case NotificationType.warning:
-        return Icons.warning;
+        return Icons.warning_amber_outlined;
       case NotificationType.info:
-        return Icons.info;
+        return Icons.info_outline;
       case NotificationType.navigation:
         return Icons.navigation;
       case NotificationType.orientation:
         return Icons.explore;
+    }
+  }
+
+  Color _resolveBackgroundColor() {
+    switch (widget.notification.type) {
+      case NotificationType.success:
+        return const Color(0xFF16A34A);
+      case NotificationType.error:
+        return const Color(0xFFDC2626);
+      case NotificationType.warning:
+        return const Color(0xFFF97316);
+      case NotificationType.info:
+        return const Color(0xFF2563EB);
+      case NotificationType.navigation:
+        return const Color(0xFF0EA5E9);
+      case NotificationType.orientation:
+        return const Color(0xFF7C3AED);
     }
   }
 
@@ -151,11 +192,11 @@ class _AccessibleNotificationState extends State<AccessibleNotification>
           margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
-            color: _getBackgroundColor(),
+            color: _resolveBackgroundColor(),
             borderRadius: BorderRadius.circular(12),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withValues(alpha: 0.3),
+                color: Colors.black.withValues(alpha: 0.25),
                 blurRadius: 8,
                 offset: const Offset(0, 4),
               ),
@@ -164,7 +205,7 @@ class _AccessibleNotificationState extends State<AccessibleNotification>
           child: Row(
             children: [
               Icon(
-                _getIcon(),
+                _resolveIcon(),
                 color: Colors.white,
                 size: 24,
                 semanticLabel: widget.notification.type.name,
@@ -176,7 +217,7 @@ class _AccessibleNotificationState extends State<AccessibleNotification>
                   style: const TextStyle(
                     color: Colors.white,
                     fontSize: 16,
-                    fontWeight: FontWeight.w500,
+                    fontWeight: FontWeight.w600,
                   ),
                   semanticsLabel: widget.notification.message,
                 ),
@@ -198,12 +239,6 @@ class _AccessibleNotificationState extends State<AccessibleNotification>
         ),
       ),
     );
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
   }
 }
 
@@ -322,6 +357,7 @@ class _MapScreenState extends State<MapScreen> {
   @override
   void initState() {
     super.initState();
+    unawaited(TtsService.instance.setActiveContext('map_navigation'));
     _initializeNpuDetection();
     // Usar post-frame callback para evitar bloquear la construcción del widget
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -771,11 +807,25 @@ class _MapScreenState extends State<MapScreen> {
         ? 'Inicia una navegación para ver instrucciones detalladas.'
         : instructions![focusIndex];
 
+    final List<Widget> actionButtons = [];
+    if (hasWalkInstructions) {
+      actionButtons.add(
+        _buildQuickActionButton(
+          icon: Icons.record_voice_over,
+          label: 'Leer paso',
+          description: 'Paso ${focusIndex + 1} de $totalInstructions',
+          onTap: _speakFocusedInstruction,
+          primary: false,
+          width: 160,
+        ),
+      );
+    }
+
     return AnimatedOpacity(
       duration: const Duration(milliseconds: 280),
       opacity: hasActiveNavigation ? 1.0 : 0.8,
       child: Container(
-        constraints: BoxConstraints(maxWidth: hasWalkInstructions ? 340 : 220),
+        constraints: BoxConstraints(maxWidth: hasWalkInstructions ? 320 : 240),
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
           color: Colors.white,
@@ -792,34 +842,14 @@ class _MapScreenState extends State<MapScreen> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                _buildQuickActionButton(
-                  icon: Icons.play_arrow_rounded,
-                  label: _getSimulationButtonLabel(),
-                  description: hasActiveNavigation
-                      ? 'Simula el paso actual'
-                      : 'Inicia una ruta para probar',
-                  onTap: hasActiveNavigation ? _simulateArrivalAtStop : null,
-                  primary: true,
-                  width: hasWalkInstructions ? 170 : 190,
-                ),
-                if (hasWalkInstructions) ...[
-                  const SizedBox(width: 10),
-                  _buildQuickActionButton(
-                    icon: Icons.record_voice_over,
-                    label: 'Leer paso',
-                    description: 'Paso ${focusIndex + 1} de $totalInstructions',
-                    onTap: _speakFocusedInstruction,
-                    primary: false,
-                    width: 150,
-                  ),
-                ],
-              ],
-            ),
+            if (actionButtons.isNotEmpty)
+              Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                children: actionButtons,
+              ),
             if (hasWalkInstructions) ...[
-              const SizedBox(height: 12),
+              if (actionButtons.isNotEmpty) const SizedBox(height: 12),
               Text(
                 'Paso ${focusIndex + 1} de $totalInstructions',
                 style: const TextStyle(
@@ -860,9 +890,73 @@ class _MapScreenState extends State<MapScreen> {
                   ),
                 ],
               ),
+            ] else ...[
+              const SizedBox(height: 4),
+              Text(
+                preview,
+                style: const TextStyle(
+                  fontSize: 13,
+                  height: 1.4,
+                  color: Color(0xFF4B5563),
+                ),
+              ),
             ],
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildSimulationFab() {
+    final String label = _getSimulationButtonLabel();
+
+    return Semantics(
+      button: true,
+      label: label,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Tooltip(
+            message: label,
+            child: GestureDetector(
+              onTap: _simulateArrivalAtStop,
+              child: Container(
+                width: 64,
+                height: 64,
+                decoration: const BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: LinearGradient(
+                    colors: [Color(0xFFFF8C42), Color(0xFFFF6B2C)],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Color(0x66FF8C42),
+                      blurRadius: 18,
+                      offset: Offset(0, 10),
+                    ),
+                  ],
+                ),
+                child: const Icon(
+                  Icons.play_arrow_rounded,
+                  color: Colors.white,
+                  size: 28,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            label,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: Color(0xFF9A3412),
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1084,66 +1178,216 @@ class _MapScreenState extends State<MapScreen> {
       _log('🚌 [BUS] Simulando viaje por ${stepGeometry.length} paradas');
 
       // Simular movimiento por cada parada
-      _simulateBusJourney(stepGeometry, activeNav);
+      unawaited(_simulateBusJourney(stepGeometry, activeNav));
     } else {
       TtsService.instance.speak('Paso actual: ${currentStep.type}');
     }
   }
 
-  /// Simula el viaje en bus pasando por cada parada
-  void _simulateBusJourney(List<LatLng> stops, ActiveNavigation activeNav) {
-    // Cancelar simulación previa si existe
+  /// Simula el viaje en bus pasando por cada parada utilizando el simulador global
+  Future<void> _simulateBusJourney(
+    List<LatLng> stops,
+    ActiveNavigation activeNav,
+  ) async {
+    // Cancelar simulaciones previas
     _walkSimulationTimer?.cancel();
+    _walkSimulationTimer = null;
+    NavigationSimulator.instance.stop();
 
-    int currentStopIndex = 0;
+    if (stops.length < 2) {
+      _log('⚠️ [BUS_SIM] Ruta insuficiente (${stops.length} puntos)');
+      TtsService.instance.speak('No hay ruta de bus disponible para simular');
+      return;
+    }
+
     final totalStops = stops.length;
-
-    _log('🚌 [BUS_SIM] Iniciando simulación de $totalStops paradas');
-
-    // Obtener información de las paradas del itinerario
     final busLegs = activeNav.itinerary.legs
         .where((leg) => leg.type == 'bus')
         .toList();
     final stopDetails = busLegs.isNotEmpty ? busLegs.first.stops : null;
 
-    // CORREGIDO: Intervalo realista entre paradas
-    // Bus urbano: ~30-45 segundos entre paradas (promedio 40 seg)
-    // Simulación realista para accesibilidad
-    final intervalMs = 40000; // 40 segundos por parada (realista)
+    final busInstructions = <NavigationInstruction>[];
+    final busStopLabels = <String>[];
 
-    _walkSimulationTimer = Timer.periodic(Duration(milliseconds: intervalMs), (
-      timer,
-    ) {
-      if (currentStopIndex >= totalStops) {
-        timer.cancel();
-        _log('🚌 [BUS_SIM] Simulación de bus completada');
+    for (int i = 0; i < totalStops; i++) {
+      final label = _formatBusStopLabel(stopDetails, i, totalStops);
+      busStopLabels.add(label);
 
-        // Limpiar estado de simulación
-        setState(() {
-          _currentBusStopIndex = -1;
-        });
-
-        // Avanzar al siguiente paso (arrival o walk final)
-        Future.delayed(const Duration(milliseconds: 500), () {
-          IntegratedNavigationService.instance.advanceToNextStep();
-          setState(() {
-            _updateNavigationMapState(activeNav);
-          });
-        });
-        return;
+      double segmentDistance = 0;
+      if (i < totalStops - 1) {
+        segmentDistance = Geolocator.distanceBetween(
+          stops[i].latitude,
+          stops[i].longitude,
+          stops[i + 1].latitude,
+          stops[i + 1].longitude,
+        );
       }
 
-      // Actualizar índice de parada actual y redibujar marcadores
+      final announcement = i == 0
+          ? 'Inicio del trayecto en $label'
+          : (i == totalStops - 1
+              ? 'Parada final: $label'
+              : 'Próxima parada: $label');
+
+      busInstructions.add(
+        NavigationInstruction(
+          maneuverType: ManeuverType.continueOn,
+          streetName: label,
+          distanceMeters: segmentDistance,
+          heading: 0,
+          customAnnouncement: announcement,
+        ),
+      );
+    }
+
+    if (mounted) {
       setState(() {
-        _currentBusStopIndex = currentStopIndex;
+        _currentBusStopIndex = 0;
         _updateBusStopMarkersWithAnimation(activeNav);
       });
+    }
 
-      // Inyectar posición en la parada actual
-      final currentStop = stops[currentStopIndex];
-      final position = Position(
-        latitude: currentStop.latitude,
-        longitude: currentStop.longitude,
+    _log('🚌 [BUS_SIM] Simulación de bus con ${stops.length} puntos');
+
+    await NavigationSimulator.instance.startSimulation(
+      routeGeometry: stops,
+      graphhopperInstructions: null,
+      customInstructions: busInstructions,
+      mode: SimulationMode.bus,
+      customSpeedMetersPerSecond: 7.5, // ~27 km/h promedio urbano
+      onPositionUpdate: (position) {
+        IntegratedNavigationService.instance.simulatePosition(position);
+
+        if (!mounted) return;
+
+        setState(() {
+          _currentPosition = position;
+        });
+
+        final closestIndex = _closestStopIndex(position, stops);
+        if (closestIndex != null && closestIndex != _currentBusStopIndex) {
+          setState(() {
+            _currentBusStopIndex = closestIndex;
+            _updateBusStopMarkersWithAnimation(activeNav);
+          });
+        }
+
+        if (_autoCenter && !_userManuallyMoved) {
+          _moveMap(
+            LatLng(position.latitude, position.longitude),
+            _mapController.camera.zoom,
+          );
+        }
+      },
+      onInstructionAnnounced: (instruction) {
+        final index = busInstructions.indexOf(instruction);
+        if (index == -1) return;
+
+        if (!mounted) return;
+
+        setState(() {
+          _currentBusStopIndex = index;
+          _updateBusStopMarkersWithAnimation(activeNav);
+        });
+
+        final label = busStopLabels[index];
+        if (index == 0) {
+          _showNavigationNotification('Inicio del trayecto en $label');
+        } else if (index == busInstructions.length - 1) {
+          _showSuccessNotification('Parada final: $label', withVibration: true);
+        } else {
+          _showNavigationNotification('Próxima parada: $label');
+        }
+      },
+      onSimulationComplete: () {
+        _onBusSimulationComplete(activeNav, stops);
+      },
+    );
+  }
+
+  /// Calcula el índice de la parada más cercana dentro de un umbral
+  int? _closestStopIndex(Position position, List<LatLng> stops) {
+    const thresholdMeters = 35.0;
+    double minDistance = double.infinity;
+    int? closestIndex;
+
+    for (int i = 0; i < stops.length; i++) {
+      final stop = stops[i];
+      final distance = Geolocator.distanceBetween(
+        position.latitude,
+        position.longitude,
+        stop.latitude,
+        stop.longitude,
+      );
+
+      if (distance < minDistance) {
+        minDistance = distance;
+        closestIndex = i;
+      }
+    }
+
+    if (minDistance <= thresholdMeters) {
+      return closestIndex;
+    }
+    return null;
+  }
+
+  String _formatBusStopLabel(
+    List<dynamic>? stopDetails,
+    int index,
+    int totalStops,
+  ) {
+    String label = 'Parada ${index + 1}/$totalStops';
+
+    if (stopDetails == null || index >= stopDetails.length) {
+      return label;
+    }
+
+    final dynamic stop = stopDetails[index];
+    String? name;
+    String? code;
+
+    try {
+      final dynamic value = stop is Map<String, dynamic> ? stop['name'] : stop.name;
+      if (value is String && value.isNotEmpty) {
+        name = value;
+      }
+    } catch (_) {}
+
+    try {
+      final dynamic value = stop is Map<String, dynamic> ? stop['code'] : stop.code;
+      if (value is String && value.isNotEmpty) {
+        code = value;
+      }
+    } catch (_) {}
+
+    if (code != null && code.isNotEmpty) {
+      label = '$label [$code]';
+    }
+    if (name != null && name.isNotEmpty) {
+      label = '$label: $name';
+    }
+
+    return label;
+  }
+
+  void _onBusSimulationComplete(
+    ActiveNavigation activeNav,
+    List<LatLng> stops,
+  ) {
+    _log('🚌 [BUS_SIM] Simulación de bus completada');
+
+    if (!mounted) return;
+
+    setState(() {
+      _currentBusStopIndex = -1;
+    });
+
+    if (stops.isNotEmpty) {
+      final lastStop = stops.last;
+      final finalPosition = Position(
+        latitude: lastStop.latitude,
+        longitude: lastStop.longitude,
         timestamp: DateTime.now(),
         accuracy: 5,
         altitude: 0,
@@ -1154,26 +1398,26 @@ class _MapScreenState extends State<MapScreen> {
         speedAccuracy: 0,
       );
 
-      // Obtener detalles de la parada si están disponibles
-      String stopInfo = 'Parada ${currentStopIndex + 1}/$totalStops';
-      if (stopDetails != null && currentStopIndex < stopDetails.length) {
-        final stop = stopDetails[currentStopIndex];
-        final code = stop.code != null && stop.code!.isNotEmpty
-            ? ' [${stop.code}]'
-            : '';
-        stopInfo = '$stopInfo$code: ${stop.name}';
-      }
+      IntegratedNavigationService.instance.simulatePosition(finalPosition);
 
-      _log('🚌 $stopInfo (${currentStop.latitude}, ${currentStop.longitude})');
+      setState(() {
+        _currentPosition = finalPosition;
+      });
 
-      IntegratedNavigationService.instance.simulatePosition(position);
-
-      // Centrar mapa en la parada actual
       if (_autoCenter && !_userManuallyMoved) {
-        _moveMap(currentStop, 16.0);
+        _moveMap(
+          LatLng(finalPosition.latitude, finalPosition.longitude),
+          16.0,
+        );
       }
+    }
 
-      currentStopIndex++;
+    Future.delayed(const Duration(milliseconds: 500), () {
+      IntegratedNavigationService.instance.advanceToNextStep();
+      if (!mounted) return;
+      setState(() {
+        _updateNavigationMapState(activeNav);
+      });
     });
   }
 
@@ -4137,110 +4381,14 @@ class _MapScreenState extends State<MapScreen> {
       ],
     );
   }
-
-  void _startMicrophoneCalibration() async {
-    if (_isListening) {
-      _showWarningNotification('Detén la grabación antes de calibrar');
-      return;
-    }
-
-    _showNotification(
-      NotificationData(
-        message: 'Iniciando calibración del micrófono...',
-        type: NotificationType.info,
-        duration: const Duration(seconds: 2),
-      ),
-    );
-
-    TtsService.instance.speak(
-      'Calibración iniciada. Di "Hola, mi nombre es" seguido de tu nombre. '
-      'Esto ayudará a mejorar el reconocimiento de tu voz.',
-    );
-
-    // Esperar un momento para que el TTS termine
-    await Future.delayed(const Duration(seconds: 4));
-
-    // Iniciar una sesión de calibración
-    try {
-      setState(() {
-        _isListening = true;
-        _currentRecognizedText = '';
-        _speechConfidence = 0.0;
-      });
-
-      await _speech.listen(
-        onResult: (result) {
-          if (!mounted) return;
-
-          setState(() {
-            _currentRecognizedText = result.recognizedWords;
-            _speechConfidence = result.confidence;
-          });
-
-          if (result.finalResult) {
-            _finishCalibration(result.recognizedWords, result.confidence);
-          }
-        },
-        listenFor: const Duration(seconds: 10),
-        pauseFor: const Duration(seconds: 2),
-        localeId: 'es_ES',
-        listenOptions: SpeechListenOptions(
-          partialResults: true,
-          cancelOnError: false,
-          listenMode: ListenMode.confirmation,
-          sampleRate: 16000,
-          enableHapticFeedback: true,
-        ),
-      );
-    } catch (e) {
-      setState(() {
-        _isListening = false;
-      });
-      _showErrorNotification('Error durante la calibración: ${e.toString()}');
-    }
-  }
-
-  void _finishCalibration(String recognizedText, double confidence) {
-    setState(() {
-      _isListening = false;
-      _currentRecognizedText = '';
-      _speechConfidence = 0.0;
-    });
-
-    if (confidence > 0.8) {
-      _showSuccessNotification(
-        'Calibración exitosa! Reconocimiento mejorado (${(confidence * 100).toInt()}%)',
-        withVibration: true,
-      );
-      TtsService.instance.speak('Calibración completada con éxito');
-    } else if (confidence > 0.6) {
-      _showWarningNotification(
-        'Calibración parcial. Intenta hablar más claro (${(confidence * 100).toInt()}%)',
-      );
-      TtsService.instance.speak(
-        'Calibración parcial. Puedes intentar de nuevo',
-      );
-    } else {
-      _showErrorNotification(
-        'Calibración fallida. Verifica el micrófono (${(confidence * 100).toInt()}%)',
-      );
-      TtsService.instance.speak(
-        'Calibración fallida. Verifica el micrófono y vuelve a intentar',
-      );
-    }
-
-    // Guardar en historial para análisis futuro
-    _recognitionHistory.add(
-      'Calibración: "$recognizedText" - ${(confidence * 100).toInt()}%',
-    );
-  }
-
   @override
   void dispose() {
     _resultDebounce?.cancel();
     _feedbackTimer?.cancel();
     _confirmationTimer?.cancel();
     _walkSimulationTimer?.cancel(); // Cancelar simulación de caminata
+
+    unawaited(TtsService.instance.releaseContext('map_navigation'));
 
     // Liberar servicios de tracking
     RouteTrackingService.instance.dispose();
@@ -4436,6 +4584,13 @@ class _MapScreenState extends State<MapScreen> {
                 bottom: floatingPrimary,
                 child: _buildNavigationQuickActions(hasActiveNavigation),
               ),
+
+              if (hasActiveNavigation)
+                Positioned(
+                  right: 96,
+                  bottom: floatingPrimary,
+                  child: _buildSimulationFab(),
+                ),
 
               // Botón de centrar ubicación
               Positioned(
@@ -4847,49 +5002,6 @@ class _MapScreenState extends State<MapScreen> {
                           _buildNavigationControlsPanel(),
                         ],
                       ),
-                    ),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        GestureDetector(
-                          onTap: _startMicrophoneCalibration,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 18,
-                              vertical: 10,
-                            ),
-                            decoration: BoxDecoration(
-                              gradient: const LinearGradient(
-                                colors: [Color(0xFFE0E7FF), Color(0xFFD0D7FF)],
-                                begin: Alignment.topLeft,
-                                end: Alignment.bottomRight,
-                              ),
-                              borderRadius: BorderRadius.circular(18),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(
-                                  Icons.tune,
-                                  size: 18,
-                                  color: const Color(
-                                    0xFF1E3A8A,
-                                  ).withValues(alpha: 0.9),
-                                ),
-                                const SizedBox(width: 6),
-                                const Text(
-                                  'Calibrar micrófono',
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w600,
-                                    color: Color(0xFF1E3A8A),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ],
                     ),
                     const SizedBox(height: 18),
                     BottomNavBar(
