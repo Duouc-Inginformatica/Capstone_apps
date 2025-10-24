@@ -458,7 +458,7 @@ func (s *Scraper) reverseGeocode(lat, lon float64) (string, error) {
 	return "", fmt.Errorf("no display_name in response")
 }
 
-// scrapeMovitWithCorrectURL usa Edge headless para obtener el HTML completo con JavaScript ejecutado
+// scrapeMovitWithCorrectURL usa Brave Browser headless para obtener el HTML completo con JavaScript ejecutado
 // RETORNA: Múltiples opciones de rutas extraídas de Moovit
 func (s *Scraper) scrapeMovitWithCorrectURL(originName, destName string, originLat, originLon, destLat, destLon float64) (*RouteOptions, error) {
 	// URL correcta de Moovit
@@ -474,34 +474,34 @@ func (s *Scraper) scrapeMovitWithCorrectURL(originName, destName string, originL
 	)
 
 	log.Printf("🔍 [MOOVIT] URL construida: %s", moovitURL)
-	log.Printf("🌐 [MOOVIT] Iniciando Edge headless...")
+	log.Printf("🌐 [MOOVIT] Iniciando Brave Browser headless...")
 
-	// Detectar Edge en Windows (prioridad a Edge)
-	edgePaths := []string{
-		"C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
-		"C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
+	// Detectar Brave Browser en Windows
+	bravePaths := []string{
+		"C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe",
+		"C:\\Program Files (x86)\\BraveSoftware\\Brave-Browser\\Application\\brave.exe",
 	}
 
-	var edgePath string
-	for _, path := range edgePaths {
+	var bravePath string
+	for _, path := range bravePaths {
 		if _, err := os.Stat(path); err == nil {
-			edgePath = path
-			log.Printf("✅ [EDGE] Encontrado en: %s", edgePath)
+			bravePath = path
+			log.Printf("✅ [BRAVE] Encontrado en: %s", bravePath)
 			break
 		}
 	}
 
-	if edgePath == "" {
-		return nil, fmt.Errorf("no se encontró Microsoft Edge instalado")
+	if bravePath == "" {
+		return nil, fmt.Errorf("no se encontró Brave Browser instalado. Por favor instala Brave desde https://brave.com")
 	}
 
-	// Crear contexto con timeout de 90 segundos (aumentado significativamente para conexiones lentas)
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	// Crear contexto con timeout de 120 segundos (aumentado para Brave)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
-	// Crear contexto de Edge con opciones optimizadas
+	// Crear contexto de Brave con opciones optimizadas para mejor rendimiento
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
-		chromedp.ExecPath(edgePath),
+		chromedp.ExecPath(bravePath),
 		chromedp.Flag("headless", true),
 		chromedp.Flag("disable-gpu", true),
 		chromedp.Flag("no-sandbox", true),
@@ -512,6 +512,11 @@ func (s *Scraper) scrapeMovitWithCorrectURL(originName, destName string, originL
 		chromedp.Flag("disable-sync", true),
 		chromedp.Flag("metrics-recording-only", true),
 		chromedp.Flag("no-first-run", true),
+		chromedp.Flag("disable-blink-features", "AutomationControlled"),
+		chromedp.Flag("disable-features", "IsolateOrigins,site-per-process"),
+		chromedp.Flag("disable-site-isolation-trials", true),
+		chromedp.Flag("disable-web-security", true),
+		chromedp.Flag("disable-brave-shields", true),
 		chromedp.WindowSize(1920, 1080),
 		chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
 	)
@@ -770,7 +775,7 @@ func (s *Scraper) scrapeMovitWithCorrectURL(originName, destName string, originL
 	}
 
 	if err != nil {
-		log.Printf("❌ [MOOVIT] Error en Chrome: %v", err)
+		log.Printf("❌ [MOOVIT] Error en Brave Browser: %v", err)
 		// Intentar determinar qué etapa falló basándose en cuánto HTML se capturó
 		if len(htmlStage1) > 0 {
 			log.Printf("   ℹ️  ETAPA 1 completada (%d chars)", len(htmlStage1))
@@ -782,13 +787,13 @@ func (s *Scraper) scrapeMovitWithCorrectURL(originName, destName string, originL
 		} else {
 			log.Printf("   ❌ ETAPA 2 falló (después de click)")
 		}
-		if len(htmlStage3) > 0 {
-			log.Printf("   ℹ️  ETAPA 3 completada (%d chars)", len(htmlStage3))
-		} else {
-			log.Printf("   ❌ ETAPA 3 falló (HTML final)")
-		}
-		return nil, fmt.Errorf("error ejecutando Chrome: %v", err)
+	if len(htmlStage3) > 0 {
+		log.Printf("   ℹ️  ETAPA 3 completada (%d chars)", len(htmlStage3))
+	} else {
+		log.Printf("   ❌ ETAPA 3 falló (HTML final)")
 	}
+	return nil, fmt.Errorf("error ejecutando Brave Browser: %v", err)
+}
 
 	log.Printf("📄 [MOOVIT] HTML con JavaScript ejecutado: %d caracteres", len(htmlContent))
 
@@ -2668,36 +2673,36 @@ func (s *Scraper) GetLightweightRouteOptions(originLat, originLon, destLat, dest
 	return s.parseLightweightOptions(htmlContent, originLat, originLon, destLat, destLon)
 }
 
-// fetchMovitHTML usa Edge headless para obtener el HTML renderizado de Moovit
+// fetchMovitHTML usa Brave Browser headless para obtener el HTML renderizado de Moovit
 func (s *Scraper) fetchMovitHTML(moovitURL string) (string, error) {
-	log.Printf("🌐 [MOOVIT] Iniciando Edge headless...")
+	log.Printf("🌐 [MOOVIT] Iniciando Brave Browser headless...")
 
-	// Detectar Edge en Windows (prioridad a Edge)
-	edgePaths := []string{
-		"C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
-		"C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
+	// Detectar Brave Browser en Windows
+	bravePaths := []string{
+		"C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe",
+		"C:\\Program Files (x86)\\BraveSoftware\\Brave-Browser\\Application\\brave.exe",
 	}
 
-	var edgePath string
-	for _, path := range edgePaths {
+	var bravePath string
+	for _, path := range bravePaths {
 		if _, err := os.Stat(path); err == nil {
-			edgePath = path
-			log.Printf("✅ [EDGE] Encontrado en: %s", edgePath)
+			bravePath = path
+			log.Printf("✅ [BRAVE] Encontrado en: %s", bravePath)
 			break
 		}
 	}
 
-	if edgePath == "" {
-		return "", fmt.Errorf("no se encontró Microsoft Edge instalado")
+	if bravePath == "" {
+		return "", fmt.Errorf("no se encontró Brave Browser instalado. Por favor instala Brave desde https://brave.com")
 	}
 
-	// Crear contexto con timeout de 90 segundos (aumentado significativamente para conexiones lentas)
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	// Crear contexto con timeout de 120 segundos (aumentado para Brave)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
-	// Crear contexto de Edge con opciones optimizadas
+	// Crear contexto de Brave con opciones optimizadas para mejor rendimiento
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
-		chromedp.ExecPath(edgePath),
+		chromedp.ExecPath(bravePath),
 		chromedp.Flag("headless", true),
 		chromedp.Flag("disable-gpu", true),
 		chromedp.Flag("no-sandbox", true),
@@ -2708,6 +2713,11 @@ func (s *Scraper) fetchMovitHTML(moovitURL string) (string, error) {
 		chromedp.Flag("disable-sync", true),
 		chromedp.Flag("metrics-recording-only", true),
 		chromedp.Flag("no-first-run", true),
+		chromedp.Flag("disable-blink-features", "AutomationControlled"),
+		chromedp.Flag("disable-features", "IsolateOrigins,site-per-process"),
+		chromedp.Flag("disable-site-isolation-trials", true),
+		chromedp.Flag("disable-web-security", true),
+		chromedp.Flag("disable-brave-shields", true),
 		chromedp.WindowSize(1920, 1080), // Tamaño de ventana consistente
 		chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
 	)
@@ -2754,7 +2764,7 @@ func (s *Scraper) fetchMovitHTML(moovitURL string) (string, error) {
 
 	if err != nil {
 		log.Printf("❌ [MOOVIT] Error detallado: %v", err)
-		return "", fmt.Errorf("error ejecutando Edge: %v", err)
+		return "", fmt.Errorf("error ejecutando Brave Browser: %v", err)
 	}
 
 	// Guardar HTML para debugging

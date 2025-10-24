@@ -2231,6 +2231,95 @@ class _MapScreenState extends State<MapScreen> {
       _log('🗺️ [MAP] Navigation tiene ${navigation.steps.length} pasos');
 
       // ══════════════════════════════════════════════════════════════
+      // DIBUJAR RUTA COMPLETA EN EL MAPA (TODAS LAS ETAPAS)
+      // ══════════════════════════════════════════════════════════════
+      
+      _log('🗺️ [MAP] Dibujando ruta completa con todos los legs...');
+      setState(() {
+        _polylines.clear();
+        _markers.clear();
+        
+        // Recorrer todos los legs del itinerario
+        for (var leg in navigation.itinerary.legs) {
+          if (leg.geometry != null && leg.geometry!.isNotEmpty) {
+            Color legColor;
+            double strokeWidth;
+            
+            // Determinar estilo según el tipo de leg
+            if (leg.type == 'walk') {
+              legColor = Colors.black;
+              strokeWidth = 3.0;
+              // Para líneas punteadas en walk, usamos borderStrokeWidth
+              _polylines.add(Polyline(
+                points: leg.geometry!,
+                color: Colors.transparent,
+                strokeWidth: strokeWidth,
+                borderColor: legColor,
+                borderStrokeWidth: 2.0,
+              ));
+            } else if (leg.isRedBus) {
+              legColor = const Color(0xFF00BCD4); // Cyan/Turquesa
+              strokeWidth = 5.0;
+              // Línea continua para bus
+              _polylines.add(Polyline(
+                points: leg.geometry!,
+                color: legColor,
+                strokeWidth: strokeWidth,
+              ));
+            } else {
+              legColor = const Color(0xFFE30613); // Rojo
+              strokeWidth = 4.0;
+              // Línea continua para otros
+              _polylines.add(Polyline(
+                points: leg.geometry!,
+                color: legColor,
+                strokeWidth: strokeWidth,
+              ));
+            }
+            
+            _log('  ✅ Leg ${leg.type}: ${leg.geometry!.length} puntos, color: ${legColor.toString()}');
+          }
+          
+          // Agregar marcadores para paradas de bus
+          if (leg.isRedBus && leg.stops != null) {
+            for (var stop in leg.stops!) {
+              _markers.add(Marker(
+                point: LatLng(stop.latitude, stop.longitude),
+                width: 12,
+                height: 12,
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF00BCD4),
+                    shape: BoxShape.circle,
+                    border: Border.all(color: Colors.white, width: 2),
+                  ),
+                ),
+              ));
+            }
+            _log('  🚏 Agregados ${leg.stops!.length} marcadores de paradas');
+          }
+        }
+        
+        // Agregar marcadores de origen y destino
+        _markers.add(Marker(
+          point: LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
+          width: 40,
+          height: 40,
+          child: const Icon(Icons.my_location, color: Colors.blue, size: 40),
+        ));
+        
+        _markers.add(Marker(
+          point: LatLng(destLat, destLon),
+          width: 40,
+          height: 40,
+          child: const Icon(Icons.location_on, color: Colors.red, size: 40),
+        ));
+        
+        _log('🗺️ Total polylines: ${_polylines.length}');
+        _log('🗺️ Total markers: ${_markers.length}');
+      });
+
+      // ══════════════════════════════════════════════════════════════
       // CONFIGURAR CALLBACKS PARA ACTUALIZAR UI CUANDO CAMBIA EL PASO
       // ══════════════════════════════════════════════════════════════
 
@@ -2242,31 +2331,12 @@ class _MapScreenState extends State<MapScreen> {
         setState(() {
           _hasActiveTrip = true;
 
-          // Actualizar polyline con geometría del paso ACTUAL únicamente
-          // NOTA: NO dibujar polyline para pasos de bus (ride_bus), solo mostrar paraderos
-          final stepGeometry =
-              IntegratedNavigationService.instance.currentStepGeometry;
+          // ⚠️ NO BORRAMOS LAS POLYLINES - LA RUTA COMPLETA YA ESTÁ DIBUJADA
+          // Solo actualizamos los marcadores para mostrar la posición actual
+          
+          _log('� Paso actual: ${step.type} - ${step.instruction}');
 
-          if (step.type == 'ride_bus') {
-            // Para buses: NO dibujar línea, solo mostrar paraderos como marcadores
-            _polylines = [];
-            _log(
-              '🚌 [BUS] No se dibuja polyline para ride_bus (solo paraderos)',
-            );
-          } else {
-            // Para walk, wait_bus, etc: dibujar polyline normal
-            _polylines = stepGeometry.isNotEmpty
-                ? [
-                    Polyline(
-                      points: stepGeometry,
-                      color: const Color(0xFFE30613), // Color Red
-                      strokeWidth: 5.0,
-                    ),
-                  ]
-                : [];
-          }
-
-          // Actualizar marcadores: solo paso actual + destino final
+          // Actualizar marcadores: mantener toda la ruta visible
           final activeNav =
               IntegratedNavigationService.instance.activeNavigation;
           if (activeNav != null) {
@@ -2454,11 +2524,19 @@ class _MapScreenState extends State<MapScreen> {
     NavigationStep? currentStep,
     ActiveNavigation navigation,
   ) {
-    final newMarkers = <Marker>[];
+    // ⚠️ NO BORRAMOS TODOS LOS MARCADORES
+    // Los marcadores de paradas de bus y la ruta completa ya fueron dibujados
+    // Solo agregamos el marcador de posición actual SIN BORRAR los existentes
+    
+    // Buscar si ya existe un marcador de posición actual y eliminarlo
+    _markers.removeWhere((m) => 
+      m.point.latitude == _currentPosition?.latitude &&
+      m.point.longitude == _currentPosition?.longitude
+    );
 
     // Marcador de la ubicación del usuario (azul, siempre visible)
     if (_currentPosition != null) {
-      newMarkers.add(
+      _markers.add(
         Marker(
           point: LatLng(
             _currentPosition!.latitude,
@@ -2483,147 +2561,13 @@ class _MapScreenState extends State<MapScreen> {
       );
     }
 
-    // Si estamos en wait_bus o ride_bus, re-crear marcadores de paradas
-    if (currentStep?.type == 'wait_bus' || currentStep?.type == 'ride_bus') {
-      try {
-        final busLeg = navigation.itinerary.legs.firstWhere(
-          (leg) => leg.type == 'bus' && leg.isRedBus,
-          orElse: () => throw Exception('No bus leg found'),
-        );
-
-        final stops = busLeg.stops;
-        if (stops != null && stops.isNotEmpty) {
-          for (int i = 0; i < stops.length; i++) {
-            final stop = stops[i];
-            final isFirst = i == 0;
-            final isLast = i == stops.length - 1;
-
-            Color markerColor;
-            IconData markerIcon;
-            if (isFirst) {
-              markerColor = Colors.green;
-              markerIcon = Icons.location_on;
-            } else if (isLast) {
-              markerColor = Colors.red;
-              markerIcon = Icons.flag;
-            } else {
-              markerColor = Colors.blue;
-              markerIcon = Icons.circle;
-            }
-
-            newMarkers.add(
-              Marker(
-                point: stop.location,
-                width: isFirst || isLast ? 40 : 24,
-                height: isFirst || isLast ? 40 : 24,
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: markerColor,
-                    shape: BoxShape.circle,
-                    border: Border.all(color: Colors.white, width: 2),
-                    boxShadow: [
-                      BoxShadow(
-                        color: markerColor.withValues(alpha: 0.5),
-                        blurRadius: 6,
-                        spreadRadius: 2,
-                      ),
-                    ],
-                  ),
-                  child: Icon(
-                    markerIcon,
-                    color: Colors.white,
-                    size: isFirst || isLast ? 24 : 12,
-                  ),
-                ),
-              ),
-            );
-          }
-          _log(
-            '🗺️ [MARKERS] Re-creados ${stops.length} marcadores de paradas de bus',
-          );
-        }
-      } catch (e) {
-        _log('⚠️ [MARKERS] Error obteniendo paradas de bus: $e');
-      }
-    }
-
-    // Marcador del paso actual (paradero o punto de acción)
-    // SOLO si NO es ride_bus (porque ya están los marcadores de paradas)
-    if (currentStep?.location != null && currentStep!.type != 'ride_bus') {
-      final Widget markerWidget;
-
-      if (currentStep.type == 'walk' || currentStep.type == 'wait_bus') {
-        // Icono de paradero de bus
-        markerWidget = Container(
-          width: 40,
-          height: 40,
-          decoration: BoxDecoration(
-            color: Colors.orange,
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: Colors.white, width: 2),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.orange.withValues(alpha: 0.5),
-                blurRadius: 8,
-                spreadRadius: 2,
-              ),
-            ],
-          ),
-          child: const Icon(
-            Icons.directions_bus,
-            color: Colors.white,
-            size: 24,
-          ),
-        );
-      } else {
-        final (icon, color) = _getStepMarkerStyle(currentStep.type);
-        markerWidget = Icon(icon, color: color, size: 30);
-      }
-
-      newMarkers.add(Marker(point: currentStep.location!, child: markerWidget));
-    }
-
-    // Marcador del destino final (siempre visible)
-    final lastStep = navigation.steps.last;
-    if (lastStep.location != null) {
-      newMarkers.add(
-        Marker(
-          point: lastStep.location!,
-          child: Container(
-            decoration: BoxDecoration(
-              color: Colors.green,
-              shape: BoxShape.circle,
-              border: Border.all(color: Colors.white, width: 3),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.green.withValues(alpha: 0.5),
-                  blurRadius: 8,
-                  spreadRadius: 2,
-                ),
-              ],
-            ),
-            child: const Icon(Icons.flag, color: Colors.white, size: 24),
-          ),
-        ),
-      );
-    }
-
-    // Actualizar marcadores
-    _markers = newMarkers;
+    // ⚠️ COMENTADO: No re-crear marcadores de paradas porque ya existen
+    // Los marcadores de paradas fueron creados al inicio junto con la ruta completa
+    
+    _log('🗺️ [MARKERS] Manteniendo ${_markers.length} marcadores existentes');
   }
 
   /// Retorna el icono y color apropiado para cada tipo de paso
-  (IconData, Color) _getStepMarkerStyle(String stepType) {
-    return switch (stepType) {
-      'walk' => (Icons.directions_walk, Colors.blue),
-      'wait_bus' => (Icons.directions_bus, Colors.orange),
-      'ride_bus' => (Icons.drive_eta, Colors.red),
-      'transfer' => (Icons.swap_horiz, Colors.purple),
-      'arrival' => (Icons.flag, Colors.green),
-      _ => (Icons.navigation, Colors.grey),
-    };
-  }
-
   /// Comando de voz para controlar navegación integrada
   void _onIntegratedNavigationVoiceCommand(String command) async {
     final normalized = command.toLowerCase();
