@@ -2235,84 +2235,199 @@ class _MapScreenState extends State<MapScreen> {
       // ══════════════════════════════════════════════════════════════
       
       _log('🗺️ [MAP] Dibujando ruta completa con todos los legs...');
+      _log('🗺️ [MAP] Número de legs en itinerario: ${navigation.itinerary.legs.length}');
+      
       setState(() {
         _polylines.clear();
         _markers.clear();
         
         // Recorrer todos los legs del itinerario
+        int legIndex = 0;
         for (var leg in navigation.itinerary.legs) {
+          legIndex++;
+          _log('🗺️ [MAP] ═══════════════════════════════════════');
+          _log('🗺️ [MAP] Procesando leg $legIndex/${navigation.itinerary.legs.length}');
+          _log('🗺️ [MAP]   type: ${leg.type}');
+          _log('🗺️ [MAP]   isRedBus: ${leg.isRedBus}');
+          _log('🗺️ [MAP]   instruction: ${leg.instruction}');
+          _log('🗺️ [MAP]   geometry points: ${leg.geometry?.length ?? 0}');
+          _log('🗺️ [MAP]   stops: ${leg.stops?.length ?? 0}');
+          
           if (leg.geometry != null && leg.geometry!.isNotEmpty) {
-            Color legColor;
-            double strokeWidth;
-            
             // Determinar estilo según el tipo de leg
             if (leg.type == 'walk') {
-              legColor = Colors.black;
-              strokeWidth = 3.0;
-              // Para líneas punteadas en walk, usamos borderStrokeWidth
-              _polylines.add(Polyline(
-                points: leg.geometry!,
-                color: Colors.transparent,
-                strokeWidth: strokeWidth,
-                borderColor: legColor,
-                borderStrokeWidth: 2.0,
-              ));
+              // ⚫⚪⚫⚪ LÍNEA PUNTEADA PARA CAMINATA
+              // Crear segmentos más largos para efecto punteado visible
+              final points = leg.geometry!;
+              if (points.length >= 2) {
+                // Crear segmentos de 3-4 puntos, luego saltar 2 puntos para el "hueco"
+                for (int i = 0; i < points.length - 1;) {
+                  final segmentEnd = (i + 3 < points.length) ? i + 3 : points.length;
+                  _polylines.add(Polyline(
+                    points: points.sublist(i, segmentEnd),
+                    color: Colors.black,
+                    strokeWidth: 5.0,
+                  ));
+                  i += 5; // Avanzar 5 puntos (3 dibujados + 2 de hueco)
+                }
+              }
+              _log('  ⚫⚪ Leg walk (punteada): ${leg.geometry!.length} puntos → Dibujados ~${(leg.geometry!.length / 5).ceil()} segmentos');
             } else if (leg.isRedBus) {
-              legColor = const Color(0xFF00BCD4); // Cyan/Turquesa
-              strokeWidth = 5.0;
-              // Línea continua para bus
+              // 🚌 LÍNEA CYAN CONTINUA PARA BUS
               _polylines.add(Polyline(
                 points: leg.geometry!,
-                color: legColor,
-                strokeWidth: strokeWidth,
+                color: const Color(0xFF00BCD4),
+                strokeWidth: 5.0,
               ));
+              _log('  🚌 Leg bus (CYAN continua): ${leg.geometry!.length} puntos');
             } else {
-              legColor = const Color(0xFFE30613); // Rojo
-              strokeWidth = 4.0;
-              // Línea continua para otros
+              // Otros tipos - línea roja continua
               _polylines.add(Polyline(
                 points: leg.geometry!,
-                color: legColor,
-                strokeWidth: strokeWidth,
+                color: const Color(0xFFE30613),
+                strokeWidth: 4.0,
               ));
+              _log('  ❓ Leg OTRO tipo (ROJA continua): ${leg.geometry!.length} puntos');
             }
-            
-            _log('  ✅ Leg ${leg.type}: ${leg.geometry!.length} puntos, color: ${legColor.toString()}');
+          } else {
+            _log('  ⚠️ Leg sin geometría - SALTADO');
           }
           
           // Agregar marcadores para paradas de bus
-          if (leg.isRedBus && leg.stops != null) {
-            for (var stop in leg.stops!) {
-              _markers.add(Marker(
-                point: LatLng(stop.latitude, stop.longitude),
-                width: 12,
-                height: 12,
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF00BCD4),
-                    shape: BoxShape.circle,
-                    border: Border.all(color: Colors.white, width: 2),
+          if (leg.isRedBus && leg.stops != null && leg.stops!.isNotEmpty) {
+            for (int i = 0; i < leg.stops!.length; i++) {
+              final stop = leg.stops![i];
+              final isFirstStop = i == 0; // Parada para SUBIR al bus
+              final isLastStop = i == leg.stops!.length - 1; // Parada para BAJAR del bus
+              
+              if (isFirstStop) {
+                // � ICONO DE BUS AZUL - PARADA PARA SUBIR (primera parada)
+                _markers.add(Marker(
+                  point: LatLng(stop.latitude, stop.longitude),
+                  width: 40,
+                  height: 40,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF2196F3), // Azul como en las imágenes
+                      shape: BoxShape.circle,
+                      border: Border.all(color: Colors.white, width: 3),
+                      boxShadow: [
+                        BoxShadow(
+                          color: const Color(0xFF2196F3).withValues(alpha: 0.4),
+                          blurRadius: 8,
+                          spreadRadius: 2,
+                        ),
+                      ],
+                    ),
+                    child: const Icon(
+                      Icons.directions_bus, // Icono de bus
+                      color: Colors.white,
+                      size: 22,
+                    ),
                   ),
-                ),
-              ));
+                ));
+                _log('  🚌 Parada SUBIR al bus: ${stop.name} → (${stop.latitude}, ${stop.longitude})');
+              } else if (isLastStop) {
+                // 🚌 ICONO DE BUS AZUL - PARADA PARA BAJAR (última parada)
+                _markers.add(Marker(
+                  point: LatLng(stop.latitude, stop.longitude),
+                  width: 40,
+                  height: 40,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF2196F3), // Azul como en las imágenes
+                      shape: BoxShape.circle,
+                      border: Border.all(color: Colors.white, width: 3),
+                      boxShadow: [
+                        BoxShadow(
+                          color: const Color(0xFF2196F3).withValues(alpha: 0.4),
+                          blurRadius: 8,
+                          spreadRadius: 2,
+                        ),
+                      ],
+                    ),
+                    child: const Icon(
+                      Icons.directions_bus, // Icono de bus
+                      color: Colors.white,
+                      size: 22,
+                    ),
+                  ),
+                ));
+                _log('  🚌 Parada BAJAR del bus: ${stop.name} → (${stop.latitude}, ${stop.longitude})');
+              } else {
+                // ⚪ Paradas intermedias - Círculos BLANCOS con borde (como en las imágenes)
+                _markers.add(Marker(
+                  point: LatLng(stop.latitude, stop.longitude),
+                  width: 14,
+                  height: 14,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                        color: const Color(0xFF00BCD4), // Borde cyan
+                        width: 2.5,
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.2),
+                          blurRadius: 3,
+                        ),
+                      ],
+                    ),
+                  ),
+                ));
+              }
             }
-            _log('  🚏 Agregados ${leg.stops!.length} marcadores de paradas');
+            _log('  🚏 Agregados ${leg.stops!.length} marcadores: 1 subir + ${leg.stops!.length - 2} intermedias + 1 bajar');
           }
         }
         
         // Agregar marcadores de origen y destino
+        // 📍 MARCADOR DE ORIGEN (donde estás ahora)
+        _log('📍 Marcador ORIGEN: lat=${_currentPosition!.latitude}, lon=${_currentPosition!.longitude}');
         _markers.add(Marker(
           point: LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
-          width: 40,
-          height: 40,
-          child: const Icon(Icons.my_location, color: Colors.blue, size: 40),
+          width: 48,
+          height: 48,
+          child: Container(
+            decoration: BoxDecoration(
+              color: Colors.blue,
+              shape: BoxShape.circle,
+              border: Border.all(color: Colors.white, width: 4),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.blue.withValues(alpha: 0.5),
+                  blurRadius: 10,
+                  spreadRadius: 3,
+                ),
+              ],
+            ),
+            child: const Icon(Icons.my_location, color: Colors.white, size: 24),
+          ),
         ));
         
+        // 🎯 MARCADOR DE DESTINO (donde quieres llegar)
+        _log('🎯 Marcador DESTINO: lat=$destLat, lon=$destLon');
         _markers.add(Marker(
           point: LatLng(destLat, destLon),
-          width: 40,
-          height: 40,
-          child: const Icon(Icons.location_on, color: Colors.red, size: 40),
+          width: 48,
+          height: 48,
+          child: Container(
+            decoration: BoxDecoration(
+              color: Colors.red,
+              shape: BoxShape.circle,
+              border: Border.all(color: Colors.white, width: 4),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.red.withValues(alpha: 0.5),
+                  blurRadius: 10,
+                  spreadRadius: 3,
+                ),
+              ],
+            ),
+            child: const Icon(Icons.place, color: Colors.white, size: 28),
+          ),
         ));
         
         _log('🗺️ Total polylines: ${_polylines.length}');
