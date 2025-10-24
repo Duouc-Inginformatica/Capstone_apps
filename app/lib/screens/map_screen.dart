@@ -81,21 +81,13 @@ class _MapScreenState extends State<MapScreen> {
   // Accessibility features
   Timer? _feedbackTimer;
 
-  // Auto-center durante navegación con delay
-  bool _autoCenter = true; // Siempre activado para seguir al usuario
-  Timer? _autoCenterDelayTimer; // Timer para delay del autocentrado
-  static const Duration _autoCenterDelay = Duration(milliseconds: 500); // Delay antes de centrar
-
   // Cache de geometría para optimización
   List<LatLng> _cachedStepGeometry = [];
   int _cachedStepIndex = -1;
 
-  // Optimización de rendimiento - Throttling de actualizaciones
-  DateTime? _lastMapUpdate;
-  static const Duration _mapUpdateThrottle = Duration(milliseconds: 300); // Aumentado de 100ms a 300ms
-
   // Control de simulación GPS
   bool _isSimulating = false; // Evita auto-centrado durante simulación
+  int _currentSimulatedBusStopIndex = -1; // Índice del paradero actual durante simulación de bus
 
   // Control de visualización de ruta de bus
   bool _busRouteShown =
@@ -798,10 +790,18 @@ class _MapScreenState extends State<MapScreen> {
 
     switch (currentStep.type) {
       case 'walk':
-        return 'Simular sistema';
+        // Verificar si el siguiente paso es bus o es la caminata final
+        if (activeNav.currentStepIndex < activeNav.steps.length - 1) {
+          final nextStep = activeNav.steps[activeNav.currentStepIndex + 1];
+          if (nextStep.type == 'wait_bus' || nextStep.type == 'bus' || nextStep.type == 'ride_bus') {
+            return 'Simular → Paradero';
+          }
+        }
+        return 'Simular → Destino';
       case 'wait_bus':
-        return _busRouteShown ? 'Subir al bus' : 'Ver ruta del bus';
+        return 'Subir al bus';
       case 'ride_bus':
+      case 'bus':
         return 'Simular viaje';
       default:
         return 'Simular';
@@ -830,28 +830,31 @@ class _MapScreenState extends State<MapScreen> {
     
     final currentStep = activeNav.steps[activeNav.currentStepIndex];
 
-    // Si estamos en un paso de caminata y el siguiente es bus, significa que estamos
-    // en el paradero esperando. El botón "Simular" confirma que el usuario subió al bus.
-    if (currentStep.type == 'walk' && 
-        activeNav.currentStepIndex < activeNav.steps.length - 1) {
-      final nextStep = activeNav.steps[activeNav.currentStepIndex + 1];
-      if (nextStep.type == 'bus') {
-        _log('🚌 [SIMULAR] Usuario confirmó que subió al bus');
-        await TtsService.instance.speak('Subiendo al bus ${nextStep.busRoute}', urgent: true);
-        
-        // Avanzar directamente al paso de bus
-        IntegratedNavigationService.instance.advanceToNextStep();
-        if (mounted) {
-          setState(() {
-            _updateNavigationMapState(IntegratedNavigationService.instance.activeNavigation!);
-          });
+    // CASO ESPECIAL: Si estamos en wait_bus, significa que YA llegamos al paradero
+    // El botón "Simular" solo confirma que el usuario subió al bus (sin simular nada)
+    if (currentStep.type == 'wait_bus') {
+      _log('🚌 [SIMULAR] Usuario confirmó que subió al bus desde wait_bus');
+      
+      // Verificar si hay un siguiente paso de tipo bus
+      if (activeNav.currentStepIndex < activeNav.steps.length - 1) {
+        final nextStep = activeNav.steps[activeNav.currentStepIndex + 1];
+        if (nextStep.type == 'bus' || nextStep.type == 'ride_bus') {
+          await TtsService.instance.speak('Subiendo al bus ${nextStep.busRoute}', urgent: true);
         }
-        return;
       }
+      
+      // Avanzar al siguiente paso (el bus)
+      IntegratedNavigationService.instance.advanceToNextStep();
+      if (mounted) {
+        setState(() {
+          _updateNavigationMapState(IntegratedNavigationService.instance.activeNavigation!);
+        });
+      }
+      return;
     }
 
-    // SIMULAR MOVIMIENTO GPS REALISTA - Para otros tipos de pasos
-    _log('🔧 [SIMULAR] Iniciando simulación GPS a lo largo de la ruta');
+    // SIMULAR MOVIMIENTO GPS REALISTA SEGÚN EL TIPO DE PASO
+    _log('🔧 [SIMULAR] Iniciando simulación GPS para: ${currentStep.type}');
     _showSuccessNotification('Simulando: ${currentStep.type}');
 
     if (currentStep.type == 'walk') {
@@ -892,14 +895,15 @@ class _MapScreenState extends State<MapScreen> {
             _isSimulating = false;
           });
           
-          await TtsService.instance.speak('Caminata completada');
+          await TtsService.instance.speak('Llegaste al paradero');
           
-          // Avanzar al siguiente paso si existe
+          // Avanzar al siguiente paso (wait_bus) pero NO continuar simulación
+          // El desarrollador debe presionar "Simular" de nuevo para subir al bus
           if (activeNav.currentStepIndex < activeNav.steps.length - 1) {
             IntegratedNavigationService.instance.advanceToNextStep();
             if (mounted) {
               setState(() {
-                _updateNavigationMapState(activeNav);
+                _updateNavigationMapState(IntegratedNavigationService.instance.activeNavigation!);
               });
             }
           }
@@ -934,7 +938,7 @@ class _MapScreenState extends State<MapScreen> {
         }
       });
       
-    } else if (currentStep.type == 'bus') {
+    } else if (currentStep.type == 'bus' || currentStep.type == 'ride_bus') {
       // SIMULAR VIAJE EN BUS: Mover GPS por cada parada
       _log('� [SIMULAR] Viaje en bus - Moviendo GPS por paradas');
       final busRoute = currentStep.busRoute ?? 'el bus';
@@ -969,6 +973,7 @@ class _MapScreenState extends State<MapScreen> {
       // Activar modo simulación
       setState(() {
         _isSimulating = true;
+        _currentSimulatedBusStopIndex = 0; // Empezar desde el primer paradero
       });
       
       int currentStopIndex = 0;
@@ -988,16 +993,18 @@ class _MapScreenState extends State<MapScreen> {
           // Desactivar modo simulación
           setState(() {
             _isSimulating = false;
+            _currentSimulatedBusStopIndex = -1; // Resetear índice
           });
           
-          await TtsService.instance.speak('Bajando del bus');
+          await TtsService.instance.speak('Bajaste del bus');
           
-          // Avanzar al siguiente paso
+          // Avanzar al siguiente paso (probablemente walk final) pero NO continuar simulación
+          // El desarrollador debe presionar "Simular" de nuevo para la caminata final
           if (activeNav.currentStepIndex < activeNav.steps.length - 1) {
             IntegratedNavigationService.instance.advanceToNextStep();
             if (mounted) {
               setState(() {
-                _updateNavigationMapState(activeNav);
+                _updateNavigationMapState(IntegratedNavigationService.instance.activeNavigation!);
               });
             }
           }
@@ -1032,7 +1039,9 @@ class _MapScreenState extends State<MapScreen> {
         currentStopIndex++;
         
         if (mounted) {
-          setState(() {});
+          setState(() {
+            _currentSimulatedBusStopIndex = currentStopIndex; // Actualizar índice
+          });
         }
       });
       
@@ -1393,40 +1402,13 @@ class _MapScreenState extends State<MapScreen> {
     _moveMap(center, zoom);
   }
 
-  void _moveMap(LatLng target, double zoom, {bool useDelay = false}) {
-    // Optimización: Throttle de actualizaciones del mapa
-    final now = DateTime.now();
-    if (_lastMapUpdate != null &&
-        now.difference(_lastMapUpdate!) < _mapUpdateThrottle) {
-      // Actualizar pendiente para la próxima oportunidad
+  void _moveMap(LatLng target, double zoom) {
+    // Movimiento inmediato (solo se usa para carga inicial del mapa)
+    if (_isMapReady) {
+      _mapController.move(target, zoom);
+    } else {
       _pendingCenter = target;
       _pendingZoom = zoom;
-      return;
-    }
-    _lastMapUpdate = now;
-
-    // Cancelar timer anterior si existe
-    _autoCenterDelayTimer?.cancel();
-
-    if (useDelay) {
-      // Usar delay para autocentrado suave
-      _autoCenterDelayTimer = Timer(_autoCenterDelay, () {
-        if (_isMapReady && mounted) {
-          _mapController.move(target, zoom);
-          DebugLogger.debug('🗺️ Mapa centrado con delay en: $target');
-        } else {
-          _pendingCenter = target;
-          _pendingZoom = zoom;
-        }
-      });
-    } else {
-      // Movimiento inmediato
-      if (_isMapReady) {
-        _mapController.move(target, zoom);
-      } else {
-        _pendingCenter = target;
-        _pendingZoom = zoom;
-      }
     }
   }
 
@@ -1504,14 +1486,7 @@ class _MapScreenState extends State<MapScreen> {
 
         _updateCurrentLocationMarker();
 
-        // Auto-centrar con delay suave (siempre activo para seguir al usuario)
-        if (_autoCenter) {
-          _moveMap(
-            LatLng(position.latitude, position.longitude),
-            _mapController.camera.zoom,
-            useDelay: true,
-          );
-        }
+        // NO AUTO-CENTRAR - el usuario tiene control total del mapa
 
         // Verificar llegada a waypoint si hay navegación activa
         _checkArrivalAtWaypoint(position);
@@ -2049,11 +2024,7 @@ class _MapScreenState extends State<MapScreen> {
       });
     }
     
-    // Centrar mapa SOLO si se solicita explícitamente
-    if (moveMap && _autoCenter && _isMapReady) {
-      _moveMap(targetLocation, _mapController.camera.zoom, useDelay: false);
-      _log('🗺️ [AUTO-CENTER] Centrando en posición simulada');
-    }
+    // NO AUTO-CENTRAR - moveMap siempre es false, el usuario tiene control total
   }
 
   void _showWarningNotification(String message) {
@@ -2487,12 +2458,7 @@ class _MapScreenState extends State<MapScreen> {
               _updateNavigationMarkers(activeNav.currentStep!, activeNav);
             }
 
-            // AUTO-CENTRAR el mapa con delay suave (siempre activo para seguir al usuario)
-            if (_autoCenter) {
-              final target = LatLng(position.latitude, position.longitude);
-              _moveMap(target, _mapController.camera.zoom, useDelay: true);
-              DebugLogger.debug('🗺️ [AUTO-CENTER] Centrando en posición simulada');
-            }
+            // NO AUTO-CENTRAR - el usuario tiene control total del mapa
           }
         });
       };
@@ -2554,17 +2520,8 @@ class _MapScreenState extends State<MapScreen> {
     // Actualizar marcadores
     _updateNavigationMarkers(navigation.currentStep, navigation);
     
-    // Centrar mapa SOLO si:
-    // 1. Cambió el paso
-    // 2. Hay geometría disponible
-    // 3. NO estamos en modo simulación (para permitir interacción manual)
-    if (previousStepIndex != currentStepIndex && 
-        _cachedStepGeometry.isNotEmpty && 
-        !_isSimulating) {
-      final center = _cachedStepGeometry.first;
-      _moveMap(center, 16.0, useDelay: false);
-      _log('🗺️ [MAP] Mapa centrado en inicio del paso $currentStepIndex (ÚNICA VEZ)');
-    }
+    // NO AUTO-CENTRAR - el usuario tiene control total del mapa en todo momento
+    // El centrado solo ocurre al cargar el mapa inicialmente
   }
 
   /// Obtiene la geometría del paso actual usando caché para optimización
@@ -2636,12 +2593,18 @@ class _MapScreenState extends State<MapScreen> {
             final stop = stops[i];
             final isFirst = i == 0;
             final isLast = i == stops.length - 1;
+            final isCurrent = _isSimulating && i == _currentSimulatedBusStopIndex;
 
             Color markerColor;
             IconData markerIcon;
             double markerSize;
             
-            if (isFirst) {
+            if (isCurrent) {
+              // Paradero actual durante simulación: amarillo brillante
+              markerColor = const Color(0xFFFFC107); // Amarillo
+              markerIcon = Icons.directions_bus;
+              markerSize = 45;
+            } else if (isFirst) {
               markerColor = Colors.green;
               markerIcon = Icons.location_on;
               markerSize = 40;
@@ -2659,8 +2622,8 @@ class _MapScreenState extends State<MapScreen> {
             newMarkers.add(
               Marker(
                 point: stop.location,
-                width: isFirst || isLast ? markerSize : 50,
-                height: isFirst || isLast ? markerSize : 35,
+                width: isCurrent ? markerSize + 10 : (isFirst || isLast ? markerSize : 50),
+                height: isCurrent ? markerSize + 10 : (isFirst || isLast ? markerSize : 35),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
@@ -2671,19 +2634,22 @@ class _MapScreenState extends State<MapScreen> {
                       decoration: BoxDecoration(
                         color: markerColor,
                         shape: BoxShape.circle,
-                        border: Border.all(color: Colors.white, width: 2),
+                        border: Border.all(
+                          color: isCurrent ? Colors.orange : Colors.white, 
+                          width: isCurrent ? 3 : 2
+                        ),
                         boxShadow: [
                           BoxShadow(
-                            color: markerColor.withValues(alpha: 0.5),
-                            blurRadius: 6,
-                            spreadRadius: 2,
+                            color: markerColor.withValues(alpha: isCurrent ? 0.8 : 0.5),
+                            blurRadius: isCurrent ? 12 : 6,
+                            spreadRadius: isCurrent ? 4 : 2,
                           ),
                         ],
                       ),
                       child: Icon(
                         markerIcon,
                         color: Colors.white,
-                        size: isFirst || isLast ? 24 : 10,
+                        size: isCurrent ? 30 : (isFirst || isLast ? 24 : 10),
                       ),
                     ),
                     // Código del paradero (solo para intermedios)
@@ -2692,16 +2658,19 @@ class _MapScreenState extends State<MapScreen> {
                         margin: const EdgeInsets.only(top: 2),
                         padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
                         decoration: BoxDecoration(
-                          color: Colors.white,
+                          color: isCurrent ? const Color(0xFFFFC107) : Colors.white,
                           borderRadius: BorderRadius.circular(3),
-                          border: Border.all(color: const Color(0xFF2196F3), width: 1),
+                          border: Border.all(
+                            color: isCurrent ? Colors.orange : const Color(0xFF2196F3), 
+                            width: isCurrent ? 2 : 1
+                          ),
                         ),
                         child: Text(
                           stop.code!,
-                          style: const TextStyle(
-                            fontSize: 8,
+                          style: TextStyle(
+                            fontSize: isCurrent ? 10 : 8,
                             fontWeight: FontWeight.bold,
-                            color: Color(0xFF2196F3),
+                            color: isCurrent ? Colors.orange.shade900 : const Color(0xFF2196F3),
                           ),
                         ),
                       ),
@@ -3233,7 +3202,6 @@ class _MapScreenState extends State<MapScreen> {
     _feedbackTimer?.cancel();
     _confirmationTimer?.cancel();
     _walkSimulationTimer?.cancel();
-    _autoCenterDelayTimer?.cancel();
 
     unawaited(TtsService.instance.releaseContext('map_navigation'));
 
