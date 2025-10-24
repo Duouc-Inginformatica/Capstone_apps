@@ -87,12 +87,9 @@ class BiometricAuthService {
     try {
       developer.log('🔐 [BIOMETRIC] Iniciando autenticación biométrica...');
 
+      // local_auth 3.0.0: API simplificada
       final authenticated = await _localAuth.authenticate(
         localizedReason: localizedReason,
-        options: const AuthenticationOptions(
-          stickyAuth: true, // Mantener autenticación activa
-          biometricOnly: true, // Solo biometría, no PIN/patrón
-        ),
       );
 
       if (!authenticated) {
@@ -136,13 +133,9 @@ class BiometricAuthService {
     try {
       developer.log('📝 [BIOMETRIC] Registrando nuevo usuario: $username');
 
-      // Primero autenticar con biometría
+      // Primero autenticar con biometría (local_auth 3.0.0)
       final authenticated = await _localAuth.authenticate(
         localizedReason: localizedReason,
-        options: const AuthenticationOptions(
-          stickyAuth: true,
-          biometricOnly: true,
-        ),
       );
 
       if (!authenticated) {

@@ -7,12 +7,154 @@ import 'dart:developer' as developer;
 // ============================================================================
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math' as math;
+import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
-import 'red_bus_service.dart';
+import 'api_client.dart';
 import 'tts_service.dart';
 import 'bus_arrivals_service.dart';
+
+// =============================================================================
+// MODELOS DE DATOS DEL BACKEND (de /api/red/itinerary)
+// =============================================================================
+
+class RedBusStop {
+  final String name;
+  final double latitude;
+  final double longitude;
+  final String? code;
+
+  RedBusStop({
+    required this.name,
+    required this.latitude,
+    required this.longitude,
+    this.code,
+  });
+
+  factory RedBusStop.fromJson(Map<String, dynamic> json) {
+    return RedBusStop(
+      name: json['name'] as String? ?? '',
+      latitude: (json['latitude'] as num?)?.toDouble() ?? 0.0,
+      longitude: (json['longitude'] as num?)?.toDouble() ?? 0.0,
+      code: json['code'] as String?,
+    );
+  }
+
+  LatLng get location => LatLng(latitude, longitude);
+}
+
+class RedBusLeg {
+  final String type; // 'walk', 'bus'
+  final String instruction;
+  final bool isRedBus;
+  final String? routeNumber;
+  final RedBusStop? departStop;
+  final RedBusStop? arriveStop;
+  final List<RedBusStop>? stops;
+  final double distanceKm;
+  final int durationMinutes;
+  final List<String>? streetInstructions;
+  final List<LatLng>? geometry;
+
+  RedBusLeg({
+    required this.type,
+    required this.instruction,
+    required this.isRedBus,
+    this.routeNumber,
+    this.departStop,
+    this.arriveStop,
+    this.stops,
+    required this.distanceKm,
+    required this.durationMinutes,
+    this.streetInstructions,
+    this.geometry,
+  });
+
+  factory RedBusLeg.fromJson(Map<String, dynamic> json) {
+    List<RedBusStop>? stops;
+    if (json['stops'] != null) {
+      stops = (json['stops'] as List)
+          .map((s) => RedBusStop.fromJson(s as Map<String, dynamic>))
+          .toList();
+    }
+
+    List<LatLng>? geometry;
+    if (json['geometry'] != null) {
+      geometry = (json['geometry'] as List)
+          .map((g) => LatLng(
+                (g['lat'] as num).toDouble(),
+                (g['lng'] as num).toDouble(),
+              ))
+          .toList();
+    }
+
+    return RedBusLeg(
+      type: json['type'] as String? ?? 'walk',
+      instruction: json['instruction'] as String? ?? '',
+      isRedBus: json['is_red_bus'] as bool? ?? false,
+      routeNumber: json['route_number'] as String?,
+      departStop: json['depart_stop'] != null
+          ? RedBusStop.fromJson(json['depart_stop'] as Map<String, dynamic>)
+          : null,
+      arriveStop: json['arrive_stop'] != null
+          ? RedBusStop.fromJson(json['arrive_stop'] as Map<String, dynamic>)
+          : null,
+      stops: stops,
+      distanceKm: (json['distance_km'] as num?)?.toDouble() ?? 0.0,
+      durationMinutes: json['duration_minutes'] as int? ?? 0,
+      streetInstructions: json['street_instructions'] != null
+          ? List<String>.from(json['street_instructions'] as List)
+          : null,
+      geometry: geometry,
+    );
+  }
+}
+
+class RedBusItinerary {
+  final String summary;
+  final int totalDuration;
+  final List<String> redBusRoutes;
+  final List<RedBusLeg> legs;
+  final LatLng origin;
+  final LatLng destination;
+
+  RedBusItinerary({
+    required this.summary,
+    required this.totalDuration,
+    required this.redBusRoutes,
+    required this.legs,
+    required this.origin,
+    required this.destination,
+  });
+
+  factory RedBusItinerary.fromJson(Map<String, dynamic> json) {
+    return RedBusItinerary(
+      summary: json['summary'] as String? ?? '',
+      totalDuration: json['total_duration'] as int? ?? 0,
+      redBusRoutes: json['red_bus_routes'] != null
+          ? List<String>.from(json['red_bus_routes'] as List)
+          : [],
+      legs: (json['legs'] as List?)
+              ?.map((l) => RedBusLeg.fromJson(l as Map<String, dynamic>))
+              .toList() ??
+          [],
+      origin: LatLng(
+        (json['origin']['lat'] as num).toDouble(),
+        (json['origin']['lng'] as num).toDouble(),
+      ),
+      destination: LatLng(
+        (json['destination']['lat'] as num).toDouble(),
+        (json['destination']['lng'] as num).toDouble(),
+      ),
+    );
+  }
+}
+
+// =============================================================================
+// MODELOS INTERNOS DEL SERVICIO DE NAVEGACIÓN
+// =============================================================================
 
 class NavigationStep {
   final String type; // 'walk', 'bus', 'transfer', 'arrival'
@@ -275,7 +417,6 @@ class IntegratedNavigationService {
       IntegratedNavigationService._();
   IntegratedNavigationService._();
 
-  final RedBusService _redBusService = RedBusService.instance;
   final Distance _distance = const Distance();
 
   ActiveNavigation? _activeNavigation;
@@ -355,18 +496,29 @@ class IntegratedNavigationService {
       itinerary = existingItinerary;
     } else {
       developer.log('🔄 Solicitando nuevo itinerario al backend...');
-      final routeOptions = await _redBusService.getRouteOptions(
-        originLat: originLat,
-        originLon: originLon,
-        destLat: destLat,
-        destLon: destLon,
+      
+      // Llamada directa al backend sin servicio intermedio
+      final apiClient = ApiClient();
+      final uri = Uri.parse('${apiClient.baseUrl}/api/red/itinerary');
+      final body = {
+        'origin_lat': originLat,
+        'origin_lon': originLon,
+        'dest_lat': destLat,
+        'dest_lon': destLon,
+      };
+
+      final response = await http.post(
+        uri,
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode(body),
       );
 
-      if (routeOptions.firstOption == null) {
-        throw Exception('No se encontraron rutas disponibles');
+      if (response.statusCode != 200) {
+        throw Exception('Error al obtener itinerario: ${response.statusCode}');
       }
 
-      itinerary = routeOptions.firstOption!;
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      itinerary = RedBusItinerary.fromJson(data);
     }
 
     developer.log('📋 Itinerario obtenido: ${itinerary.summary}');
@@ -509,7 +661,7 @@ class IntegratedNavigationService {
             busRoute: leg.routeNumber,
             busOptions: const [], // Sin consultar para optimizar
             estimatedDuration: leg.durationMinutes + 5, // Incluye espera
-            totalStops: leg.stopCount,
+            totalStops: leg.stops?.length,
             realDistanceMeters: leg.distanceKm * 1000,
             realDurationSeconds: leg.durationMinutes * 60,
             busStops: busStops, // Paradas del backend
@@ -707,7 +859,7 @@ class IntegratedNavigationService {
           '''
 Ruta calculada hacia $destination. 
 $busInfo$arrivalInfo
-Duración total estimada: ${itinerary.totalDurationMinutes} minutos. 
+Duración total estimada: ${itinerary.totalDuration} minutos. 
 Te iré guiando paso a paso.
 ''';
     }

@@ -21,39 +21,40 @@ version: 1.0.0+1
 environment:
   sdk: ^3.8.1
 
-# Dependencies specify other packages that your package needs in order to work.
-# To automatically upgrade your package dependencies to the latest versions
-# consider running `flutter pub upgrade --major-versions`. Alternatively,
-# dependencies can be manually updated by changing the version numbers below to
-# the latest version available on pub.dev. To see which dependencies have newer
-# versions available, run `flutter pub outdated`.
+# ============================================================================
+# PLATAFORMA: Solo Android
+# Las dependencias multiplataforma (flutter_secure_storage, etc.) traen 
+# paquetes de otras plataformas como dependencias transitivas, pero NO se 
+# compilan ni empaquetan en el APK final de Android.
+# ============================================================================
+
 dependencies:
   flutter:
     sdk: flutter
   
   # ============================================================================
-  # DEPENDENCIAS OPTIMIZADAS PARA ANDROID
+  # DEPENDENCIAS OPTIMIZADAS PARA ANDROID - VERSIONES ACTUALIZADAS 2025
   # ============================================================================
   
   # Accesibilidad (reconocimiento de voz y TTS)
   speech_to_text: ^7.3.0
-  flutter_tts: ^3.8.3
+  flutter_tts: ^4.2.3  # Actualizado de 3.8.5
   
   # Detección de hardware (para NPU/NNAPI)
-  device_info_plus: ^10.1.0
+  device_info_plus: ^12.2.0  # Actualizado de 10.1.2
   
   # Seguridad y Autenticación
-  permission_handler: ^11.3.1
-  flutter_secure_storage: ^9.2.2
-  local_auth: ^2.2.0
-  crypto: ^3.0.6  # Para hash de identificadores biométricos
+  permission_handler: ^12.0.1  # Actualizado de 11.4.0
+  encrypted_shared_preferences: ^3.0.1  # Solo Android, reemplaza flutter_secure_storage
+  local_auth: ^3.0.0  # Actualizado de 2.3.0
+  crypto: ^3.0.6
   
   # Comunicación y Backend
   http: ^1.2.2
   
   # Mapas y Geolocalización
-  geolocator: ^13.0.1
-  flutter_map: ^7.0.2
+  geolocator: ^14.0.2  # Actualizado de 13.0.4
+  flutter_map: ^8.2.2  # Actualizado de 7.0.2
   latlong2: ^0.9.1
   
   # Almacenamiento Local
@@ -61,17 +62,16 @@ dependencies:
   
   # UX y Feedback
   vibration: ^3.1.4
+  
+  # Utilidades
+  logger: ^2.6.2  # Actualizado de 2.6.1
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
 
-  # The "flutter_lints" package below contains a set of recommended lints to
-  # encourage good coding practices. The lint set provided by the package is
-  # activated in the `analysis_options.yaml` file located at the root of your
-  # package. See that file for information about deactivating specific lint
-  # rules and activating additional ones.
-  flutter_lints: ^5.0.0
+  # Linting actualizado
+  flutter_lints: ^6.0.0  # Actualizado de 5.0.0
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec

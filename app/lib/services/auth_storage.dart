@@ -1,32 +1,46 @@
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:encrypted_shared_preferences/encrypted_shared_preferences.dart';
 
+/// Almacenamiento seguro de credenciales usando EncryptedSharedPreferences
+/// Solo para Android - usa Android Keystore para encriptación
 class AuthStorage {
   AuthStorage._();
   static const _tokenKey = 'auth_token';
   static const _usernameKey = 'auth_username';
   static const _passwordKey = 'auth_password';
-  static final FlutterSecureStorage _storage = const FlutterSecureStorage();
+  
+  // Instancia singleton de EncryptedSharedPreferences
+  static final EncryptedSharedPreferences _storage = EncryptedSharedPreferences();
 
   static Future<void> saveToken(String token) =>
-      _storage.write(key: _tokenKey, value: token);
-  static Future<String?> readToken() => _storage.read(key: _tokenKey);
-  static Future<void> clearToken() => _storage.delete(key: _tokenKey);
+      _storage.setString(_tokenKey, token);
+      
+  static Future<String?> readToken() async {
+    final token = await _storage.getString(_tokenKey);
+    // EncryptedSharedPreferences retorna string vacío si no existe
+    return token.isEmpty ? null : token;
+  }
+      
+  static Future<void> clearToken() =>
+      _storage.remove(_tokenKey);
 
   static Future<void> saveCredentials(String username, String password) async {
-    await _storage.write(key: _usernameKey, value: username);
-    await _storage.write(key: _passwordKey, value: password);
+    await _storage.setString(_usernameKey, username);
+    await _storage.setString(_passwordKey, password);
   }
 
   static Future<StoredCredentials?> readCredentials() async {
-    final username = await _storage.read(key: _usernameKey);
-    final password = await _storage.read(key: _passwordKey);
-    if (username == null || password == null) return null;
+    final username = await _storage.getString(_usernameKey);
+    final password = await _storage.getString(_passwordKey);
+    
+    // EncryptedSharedPreferences retorna string vacío en lugar de null
+    if (username.isEmpty || password.isEmpty) return null;
+    
     return StoredCredentials(username: username, password: password);
   }
 
   static Future<void> clearCredentials() async {
-    await _storage.delete(key: _usernameKey);
-    await _storage.delete(key: _passwordKey);
+    await _storage.remove(_usernameKey);
+    await _storage.remove(_passwordKey);
   }
 }
 

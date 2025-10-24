@@ -3,14 +3,8 @@ import 'package:flutter/material.dart';
 import 'services/server_config.dart';
 import 'screens/login_screen_v2.dart'; // ✅ Login UI clásica Figma con badge IA
 import 'screens/biometric_login_screen.dart';
-import 'screens/register_screen.dart';
 import 'screens/map_screen.dart';
 import 'screens/settings_screen.dart';
-import 'screens/contribute_screen.dart';
-import 'screens/bus_status_report_screen.dart';
-import 'screens/route_issue_report_screen.dart';
-import 'screens/stop_info_report_screen.dart';
-import 'screens/general_suggestion_screen.dart';
 import 'screens/debug_setup_screen.dart';
 
 Future<void> main() async {
@@ -112,30 +106,12 @@ class _WayFindCLAppState extends State<WayFindCLApp> {
             return MaterialPageRoute(
               builder: (_) => const BiometricLoginScreen(),
             );
-          case RegisterScreen.routeName:
-            return MaterialPageRoute(builder: (_) => const RegisterScreen());
+          // Eliminado RegisterScreen - usar BiometricRegisterScreen directamente desde login
           case MapScreen.routeName:
             return MaterialPageRoute(builder: (_) => const MapScreen());
           case SettingsScreen.routeName:
             return MaterialPageRoute(builder: (_) => const SettingsScreen());
-          case ContributeScreen.routeName:
-            return MaterialPageRoute(builder: (_) => const ContributeScreen());
-          case BusStatusReportScreen.routeName:
-            return MaterialPageRoute(
-              builder: (_) => const BusStatusReportScreen(),
-            );
-          case RouteIssueReportScreen.routeName:
-            return MaterialPageRoute(
-              builder: (_) => const RouteIssueReportScreen(),
-            );
-          case StopInfoReportScreen.routeName:
-            return MaterialPageRoute(
-              builder: (_) => const StopInfoReportScreen(),
-            );
-          case GeneralSuggestionScreen.routeName:
-            return MaterialPageRoute(
-              builder: (_) => const GeneralSuggestionScreen(),
-            );
+          // Eliminados: ContributeScreen, BusStatusReportScreen, RouteIssueReportScreen, StopInfoReportScreen
           default:
             return MaterialPageRoute(
               builder: (_) =>

@@ -1,3 +1,4 @@
+import 'dart:developer' as developer;
 import 'package:flutter/material.dart';
 import 'package:local_auth/local_auth.dart';
 import '../services/biometric_auth_service.dart';
@@ -112,7 +113,7 @@ class _LoginScreenV2State extends State<LoginScreenV2>
         _isLoading = false;
         _statusMessage = 'Error inicializando aplicación';
       });
-      debugPrint('❌ Error inicializando app: $e');
+      developer.log('❌ Error inicializando app: $e', name: 'LoginScreen');
     }
   }
 
@@ -124,7 +125,10 @@ class _LoginScreenV2State extends State<LoginScreenV2>
         _npuLoading = true;
       });
 
-      debugPrint('🧠 [LOGIN] Iniciando detección de capacidades NPU/NNAPI...');
+      developer.log(
+        '🧠 Iniciando detección de capacidades NPU/NNAPI...',
+        name: 'LoginScreen',
+      );
 
       // Intentar detectar capacidades NPU
       final capabilities = await NpuDetectorService.instance
@@ -142,10 +146,15 @@ class _LoginScreenV2State extends State<LoginScreenV2>
       }
 
       if (hasAcceleration) {
-        debugPrint('✅ [LOGIN] NPU/NNAPI detectado - Badge IA activado');
-        debugPrint('   Dispositivo preparado para aceleración de modelos IA');
+        developer.log(
+          '✅ NPU/NNAPI detectado - Badge IA activado. Dispositivo preparado para aceleración de modelos IA',
+          name: 'LoginScreen',
+        );
       } else {
-        debugPrint('⚠️ [LOGIN] NPU no disponible - usando modo estándar');
+        developer.log(
+          '⚠️ NPU no disponible - usando modo estándar',
+          name: 'LoginScreen',
+        );
       }
 
       await _announceNpuStatus(hasAcceleration);
@@ -153,7 +162,7 @@ class _LoginScreenV2State extends State<LoginScreenV2>
       setState(() {
         _npuLoading = false;
       });
-      debugPrint('❌ [LOGIN] Error detectando NPU: $e');
+      developer.log('❌ Error detectando NPU: $e', name: 'LoginScreen');
       // No es crítico, la app funciona normalmente
     }
   }
@@ -181,7 +190,10 @@ class _LoginScreenV2State extends State<LoginScreenV2>
         .trim();
 
     if (resolvedUsername.isEmpty) {
-      debugPrint('⚠️ [LOGIN] Usuario local sin nombre, omitiendo sync backend');
+      developer.log(
+        '⚠️ Usuario local sin nombre, omitiendo sync backend',
+        name: 'LoginScreen',
+      );
       return;
     }
 
@@ -197,10 +209,14 @@ class _LoginScreenV2State extends State<LoginScreenV2>
             biometricToken: biometricToken,
             email: resolvedEmail.isEmpty ? null : resolvedEmail,
           );
-          debugPrint('✅ [LOGIN] Cuenta creada en backend tras fallback');
+          developer.log(
+            '✅ Cuenta creada en backend tras fallback',
+            name: 'LoginScreen',
+          );
         } catch (registerError) {
-          debugPrint(
-            '❌ [LOGIN] No se pudo registrar en backend: $registerError',
+          developer.log(
+            '❌ No se pudo registrar en backend: $registerError',
+            name: 'LoginScreen',
           );
           await _ttsService.speak(
             'Advertencia: no se pudo sincronizar con el servidor. '
@@ -208,13 +224,16 @@ class _LoginScreenV2State extends State<LoginScreenV2>
           );
         }
       } else {
-        debugPrint('❌ [LOGIN] Error al renovar sesión backend: $e');
+        developer.log('❌ Error al renovar sesión backend: $e', name: 'LoginScreen');
         await _ttsService.speak(
           'No se pudo establecer conexión con el servidor.',
         );
       }
     } catch (e) {
-      debugPrint('❌ [LOGIN] Error inesperado al sincronizar backend: $e');
+      developer.log(
+        '❌ Error inesperado al sincronizar backend: $e',
+        name: 'LoginScreen',
+      );
     }
   }
 
@@ -233,13 +252,9 @@ class _LoginScreenV2State extends State<LoginScreenV2>
     try {
       final LocalAuthentication auth = LocalAuthentication();
 
-      // Pedir huella PRIMERO
+      // Pedir huella PRIMERO (local_auth 3.0.0 API simplificada)
       final bool didAuthenticate = await auth.authenticate(
         localizedReason: 'Autenticación requerida para acceder a WayFind CL',
-        options: const AuthenticationOptions(
-          stickyAuth: true,
-          biometricOnly: true,
-        ),
       );
 
       if (!didAuthenticate) {
@@ -359,9 +374,9 @@ class _LoginScreenV2State extends State<LoginScreenV2>
         _statusMessage = 'Error en autenticación biométrica';
       });
       await _ttsService.speak(
-        'Error en la autenticación. Por favor, intenta de nuevo',
+        'Ocurrió un error durante la autenticación. Por favor intenta nuevamente.',
       );
-      debugPrint('❌ Error biométrico: $e');
+      developer.log('❌ Error biométrico: $e', name: 'LoginScreen');
     }
   }
 
