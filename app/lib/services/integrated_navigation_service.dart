@@ -16,6 +16,9 @@ import 'api_client.dart';
 import 'tts_service.dart';
 import 'bus_arrivals_service.dart';
 
+// DEBUG MODE - Habilita logs detallados de JSON y geometrías
+const bool kDebugNavigation = bool.fromEnvironment('DEBUG_NAV', defaultValue: true);
+
 // =============================================================================
 // MODELOS DE DATOS DEL BACKEND (de /api/red/itinerary)
 // =============================================================================
@@ -517,8 +520,77 @@ class IntegratedNavigationService {
         throw Exception('Error al obtener itinerario: ${response.statusCode}');
       }
 
+      // 🔍 DEBUG: Mostrar JSON completo del backend si está habilitado
+      if (kDebugNavigation) {
+        developer.log('═' * 80, name: 'Navigation');
+        developer.log('📥 [DEBUG] RESPUESTA COMPLETA DEL BACKEND', name: 'Navigation');
+        developer.log('═' * 80, name: 'Navigation');
+        developer.log('🔗 URL: ${uri.toString()}', name: 'Navigation');
+        developer.log('📤 Request Body:', name: 'Navigation');
+        developer.log(const JsonEncoder.withIndent('  ').convert(body), name: 'Navigation');
+        developer.log('─' * 80, name: 'Navigation');
+        developer.log('📥 Response Status: ${response.statusCode}', name: 'Navigation');
+        developer.log('📥 Response Body (Pretty JSON):', name: 'Navigation');
+        
+        try {
+          final prettyJson = const JsonEncoder.withIndent('  ').convert(
+            jsonDecode(response.body),
+          );
+          developer.log(prettyJson, name: 'Navigation');
+        } catch (e) {
+          developer.log('⚠️ No se pudo formatear JSON: $e', name: 'Navigation');
+          developer.log(response.body, name: 'Navigation');
+        }
+        developer.log('═' * 80, name: 'Navigation');
+      }
+
       final data = jsonDecode(response.body) as Map<String, dynamic>;
       itinerary = RedBusItinerary.fromJson(data);
+      
+      // 🔍 DEBUG: Mostrar estructura del itinerario parseado
+      if (kDebugNavigation) {
+        developer.log('', name: 'Navigation');
+        developer.log('📊 [DEBUG] ITINERARIO PARSEADO', name: 'Navigation');
+        developer.log('═' * 80, name: 'Navigation');
+        developer.log('📍 Origen: (${itinerary.origin.latitude}, ${itinerary.origin.longitude})', name: 'Navigation');
+        developer.log('📍 Destino: (${itinerary.destination.latitude}, ${itinerary.destination.longitude})', name: 'Navigation');
+        developer.log('🚌 Buses Red: ${itinerary.redBusRoutes.join(", ")}', name: 'Navigation');
+        developer.log('⏱️  Duración total: ${itinerary.totalDuration} min', name: 'Navigation');
+        developer.log('📏 Distancia total: ${itinerary.totalDistance.toStringAsFixed(2)} km', name: 'Navigation');
+        developer.log('🛣️  Legs: ${itinerary.legs.length}', name: 'Navigation');
+        developer.log('─' * 80, name: 'Navigation');
+        
+        for (int i = 0; i < itinerary.legs.length; i++) {
+          final leg = itinerary.legs[i];
+          developer.log('  Leg ${i + 1}/${itinerary.legs.length}:', name: 'Navigation');
+          developer.log('    Tipo: ${leg.type}', name: 'Navigation');
+          developer.log('    Modo: ${leg.isRedBus ? "Red Bus" : "Normal"}', name: 'Navigation');
+          if (leg.routeNumber != null) {
+            developer.log('    Ruta: ${leg.routeNumber}', name: 'Navigation');
+          }
+          developer.log('    Desde: ${leg.departStop?.name ?? "N/A"}', name: 'Navigation');
+          developer.log('    Hasta: ${leg.arriveStop?.name ?? "N/A"}', name: 'Navigation');
+          developer.log('    Duración: ${leg.durationMinutes} min', name: 'Navigation');
+          developer.log('    Distancia: ${leg.distanceKm.toStringAsFixed(2)} km', name: 'Navigation');
+          developer.log('    Geometría: ${leg.geometry?.length ?? 0} puntos', name: 'Navigation');
+          
+          if (leg.stops != null && leg.stops!.isNotEmpty) {
+            developer.log('    Paradas: ${leg.stops!.length}', name: 'Navigation');
+            developer.log('      Primera: ${leg.stops!.first.name} [${leg.stops!.first.code ?? "sin código"}]', name: 'Navigation');
+            developer.log('      Última: ${leg.stops!.last.name} [${leg.stops!.last.code ?? "sin código"}]', name: 'Navigation');
+            
+            if (kDebugNavigation && leg.stops!.length > 2) {
+              developer.log('      Intermedias: ${leg.stops!.length - 2} paradas', name: 'Navigation');
+            }
+          }
+          
+          if (leg.streetInstructions != null && leg.streetInstructions!.isNotEmpty) {
+            developer.log('    Instrucciones: ${leg.streetInstructions!.length}', name: 'Navigation');
+          }
+          developer.log('', name: 'Navigation');
+        }
+        developer.log('═' * 80, name: 'Navigation');
+      }
     }
 
     developer.log('📋 Itinerario obtenido: ${itinerary.summary}');

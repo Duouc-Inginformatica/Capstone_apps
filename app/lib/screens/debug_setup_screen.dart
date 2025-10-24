@@ -5,6 +5,8 @@ import '../services/server_config.dart';
 import 'login_screen_v2.dart';
 import 'map_screen.dart';
 
+bool debug = true;
+
 /// Pantalla de utilidades para desarrolladores
 /// Permite ajustar la URL del backend y probar accesos rápidos antes del login.
 class DebugSetupScreen extends StatefulWidget {
