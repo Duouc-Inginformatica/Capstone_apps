@@ -901,11 +901,6 @@ class IntegratedNavigationService {
 
   /// Anuncia el inicio de navegación por voz
   void _announceNavigationStart(String destination, RedBusItinerary itinerary) {
-    _navLog('🔊 [TTS] _announceNavigationStart llamado');
-    _navLog(
-      '🔊 [TTS] _activeNavigation != null? ${_activeNavigation != null}',
-    );
-
     // Construir mensaje detallado del viaje
     final busLegs = itinerary.legs.where((leg) => leg.type == 'bus').toList();
 
@@ -938,9 +933,6 @@ class IntegratedNavigationService {
     String firstStepInstruction = '';
     if (_activeNavigation?.currentStep != null) {
       final step = _activeNavigation!.currentStep!;
-      _navLog('🔊 [TTS] currentStep.type = ${step.type}');
-      _navLog('🔊 [TTS] currentStep.stopName = ${step.stopName}');
-      _navLog('🔊 [TTS] currentStep.instruction = ${step.instruction}');
 
       // SOLO anunciar el primer paso si es 'walk'
       if (step.type == 'walk' && step.stopName != null) {
@@ -961,17 +953,7 @@ class IntegratedNavigationService {
           final firstStreetInstruction = step.streetInstructions!.first;
           firstStepInstruction += 'Comienza así: $firstStreetInstruction. ';
         }
-
-        _navLog(
-          '🔊 [TTS] firstStepInstruction creado: $firstStepInstruction',
-        );
-      } else {
-        _navLog(
-          '🔊 [TTS] NO se creó firstStepInstruction (type=${step.type}, stopName=${step.stopName})',
-        );
       }
-    } else {
-      _navLog('🔊 [TTS] currentStep es NULL');
     }
 
     // Mensaje inicial completo y directo
@@ -989,10 +971,7 @@ Te iré guiando paso a paso.
 ''';
     }
 
-    _navLog('🔊 [TTS] Mensaje completo a anunciar:');
-    _navLog('🔊 [TTS] ===========================');
     _navLog(message);
-    _navLog('🔊 [TTS] ===========================');
 
     // Una sola llamada TTS para todo el anuncio inicial
     TtsService.instance.speak(message, urgent: true);
@@ -1314,6 +1293,7 @@ Te iré guiando paso a paso.
     }
 
     String announcement = '';
+    bool shouldAutoAdvance = true;
 
     switch (step.type) {
       case 'walk':
@@ -1326,6 +1306,19 @@ Te iré guiando paso a paso.
           announcement += 'Buses disponibles: ${step.busOptions!.join(", ")}';
         }
         onArrivalAtStop?.call(step.stopId ?? '');
+        
+        // Verificar si el siguiente paso es un bus
+        final currentIndex = _activeNavigation!.currentStepIndex;
+        final allSteps = _activeNavigation!.steps;
+        if (currentIndex < allSteps.length - 1) {
+          final nextStep = allSteps[currentIndex + 1];
+          if (nextStep.type == 'bus') {
+            // NO avanzar automáticamente cuando el siguiente paso es bus
+            // El usuario debe confirmar que subió usando el botón "Simular"
+            shouldAutoAdvance = false;
+            _navLog('⏸️ Esperando confirmación del usuario para subir al bus');
+          }
+        }
         break;
 
       case 'bus':
@@ -1350,26 +1343,34 @@ Te iré guiando paso a paso.
     // Marcar que se anunció este paso
     _lastArrivalAnnouncedStepIndex = _activeNavigation?.currentStepIndex;
 
-    // Avanzar al siguiente paso
-    _activeNavigation!.advanceToNextStep();
+    // Solo avanzar automáticamente si corresponde
+    if (shouldAutoAdvance) {
+      // Avanzar al siguiente paso
+      _activeNavigation!.advanceToNextStep();
 
-    // Resetear control de anuncios de progreso para el nuevo paso
-    _lastProgressAnnouncement = null;
-    _lastAnnouncedDistance = null;
+      // Resetear control de anuncios de progreso para el nuevo paso
+      _lastProgressAnnouncement = null;
+      _lastAnnouncedDistance = null;
 
-    final nextStep = _activeNavigation!.currentStep;
-    onStepChanged?.call(nextStep ?? step);
+      final nextStep = _activeNavigation!.currentStep;
+      onStepChanged?.call(nextStep ?? step);
 
-    // Combinar anuncio actual con el siguiente paso
-    String fullAnnouncement = announcement;
+      // Combinar anuncio actual con el siguiente paso
+      String fullAnnouncement = announcement;
 
-    if (!_activeNavigation!.isComplete && fullAnnouncement.isNotEmpty) {
-      final nextStep = _activeNavigation!.currentStep!;
-      fullAnnouncement += ' Ahora, ${nextStep.instruction}';
-    }
+      if (!_activeNavigation!.isComplete && fullAnnouncement.isNotEmpty) {
+        final nextStep = _activeNavigation!.currentStep!;
+        fullAnnouncement += ' Ahora, ${nextStep.instruction}';
+      }
 
-    if (fullAnnouncement.isNotEmpty) {
-      TtsService.instance.speak(fullAnnouncement);
+      if (fullAnnouncement.isNotEmpty) {
+        TtsService.instance.speak(fullAnnouncement);
+      }
+    } else {
+      // Solo anunciar la llegada, sin avanzar al siguiente paso
+      if (announcement.isNotEmpty) {
+        TtsService.instance.speak(announcement);
+      }
     }
   }
 
