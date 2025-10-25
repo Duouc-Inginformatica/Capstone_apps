@@ -1,2 +1,5 @@
 /app_backend/data/santiago.osm.pbfapp_backend/data/santiago.osm.pbf
 /app_dashboard/node_modules
+
+
+.env

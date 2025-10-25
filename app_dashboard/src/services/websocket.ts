@@ -78,15 +78,16 @@ function handleWebSocketMessage(data: any) {
       break;
 
     case 'metrics':
-      metricsStore.set(data.metrics);
+      metricsStore.length = 0;
+      metricsStore.push(...data.metrics);
       break;
 
     case 'api_status':
-      apiStatusStore.set(data.status);
+      Object.assign(apiStatusStore, data.status);
       break;
 
     case 'scraping_status':
-      scrapingStatusStore.set(data.status);
+      Object.assign(scrapingStatusStore, data.status);
       break;
 
     default:

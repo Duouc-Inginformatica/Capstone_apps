@@ -2,15 +2,14 @@
   import { logsStore, clearLogs, type LogEntry } from '../stores';
   import Icon from '@iconify/svelte';
   import { Popover } from 'bits-ui';
-  import { afterUpdate } from 'svelte';
   
-  let searchTerm = '';
-  let selectedSources: string[] = [];
-  let selectedLevels: string[] = [];
-  let autoScroll = true;
+  let searchTerm = $state('');
+  let selectedSources = $state<string[]>([]);
+  let selectedLevels = $state<string[]>([]);
+  let autoScroll = $state(true);
   let logsContainer: HTMLDivElement;
   
-  $: filteredLogs = $logsStore.filter(log => {
+  let filteredLogs = $derived.by(() => logsStore.filter(log => {
     if (searchTerm && !log.message.toLowerCase().includes(searchTerm.toLowerCase())) {
       return false;
     }
@@ -21,7 +20,7 @@
       return false;
     }
     return true;
-  });
+  }));
   
   function getLevelColor(level: string) {
     switch (level) {
@@ -79,7 +78,7 @@
     }
   }
   
-  afterUpdate(() => {
+  $effect(() => {
     if (autoScroll && logsContainer) {
       logsContainer.scrollTop = logsContainer.scrollHeight;
     }
@@ -93,7 +92,7 @@
       <Icon icon="lucide:terminal" class="w-5 h-5 text-primary" />
       <h2 class="text-lg font-semibold text-white">Logs en Tiempo Real</h2>
       <span class="text-xs text-gray-500">
-        ({filteredLogs.length} de {$logsStore.length})
+        ({filteredLogs.length} de {logsStore.length})
       </span>
     </div>
     
@@ -125,7 +124,7 @@
               <div class="flex flex-wrap gap-2">
                 {#each ['backend', 'frontend', 'graphhopper', 'scraping'] as source}
                   <button
-                    on:click={() => toggleSource(source)}
+                    onclick={() => toggleSource(source)}
                     class="px-3 py-1 text-xs rounded-md border transition-colors {selectedSources.includes(source) ? getSourceColor(source) : 'bg-secondary/50 text-muted-foreground border-border hover:bg-secondary'}"
                   >
                     {source}
@@ -139,7 +138,7 @@
               <div class="flex flex-wrap gap-2">
                 {#each ['debug', 'info', 'warn', 'error'] as level}
                   <button
-                    on:click={() => toggleLevel(level)}
+                    onclick={() => toggleLevel(level)}
                     class="px-3 py-1 text-xs rounded-md border transition-colors {selectedLevels.includes(level) ? getLevelBadgeColor(level) : 'bg-secondary/50 text-muted-foreground border-border hover:bg-secondary'}"
                   >
                     {level}
@@ -153,7 +152,7 @@
       
       <!-- Auto-scroll -->
       <button
-        on:click={() => autoScroll = !autoScroll}
+        onclick={() => autoScroll = !autoScroll}
         class="px-3 py-1.5 text-xs rounded-md border border-border transition-colors {autoScroll ? 'bg-primary text-primary-foreground' : 'bg-secondary text-muted-foreground hover:bg-secondary/80'}"
       >
         Auto-scroll
@@ -161,7 +160,7 @@
       
       <!-- Limpiar -->
       <button
-        on:click={clearLogs}
+        onclick={clearLogs}
         class="p-2 rounded-md hover:bg-destructive/20 border border-border transition-colors group"
         title="Limpiar logs"
       >
