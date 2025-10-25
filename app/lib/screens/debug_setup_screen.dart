@@ -305,7 +305,7 @@ class _DebugSetupScreenState extends State<DebugSetupScreen> {
                       }
                     });
                   },
-                  activeColor: const Color(0xFF4CAF50),
+                  activeThumbColor: const Color(0xFF4CAF50),
                 ),
               ],
             ),

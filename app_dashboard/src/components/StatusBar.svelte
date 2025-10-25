@@ -1,11 +1,7 @@
 <script lang="ts">
   import { apiStatusStore } from '../stores';
   import Icon from '@iconify/svelte';
-  
-  $: backend = $apiStatusStore.backend;
-  $: graphhopper = $apiStatusStore.graphhopper;
-  $: database = $apiStatusStore.database;
-  
+
   function getStatusColor(status: string) {
     switch (status) {
       case 'online': return 'bg-green-500';
@@ -20,41 +16,41 @@
   <div class="flex items-center gap-6 text-sm">
     <!-- Backend Status -->
     <div class="flex items-center gap-2">
-      <Icon 
+      <Icon
         icon="lucide:circle"
-        class="{getStatusColor(backend.status)} w-2 h-2 fill-current pulse-dot" 
+        class="{getStatusColor(apiStatusStore.backend.status)} w-2 h-2 fill-current pulse-dot"
       />
       <span class="text-gray-400">Backend:</span>
-      <span class="text-white font-medium">{backend.status}</span>
-      {#if backend.status === 'online'}
-        <span class="text-gray-500 text-xs">({backend.responseTime}ms)</span>
+      <span class="text-white font-medium">{apiStatusStore.backend.status}</span>
+      {#if apiStatusStore.backend.status === 'online'}
+        <span class="text-gray-500 text-xs">({apiStatusStore.backend.responseTime}ms)</span>
       {/if}
     </div>
-    
+
     <!-- GraphHopper Status -->
     <div class="flex items-center gap-2">
-      <Icon 
+      <Icon
         icon="lucide:circle"
-        class="{getStatusColor(graphhopper.status)} w-2 h-2 fill-current pulse-dot" 
+        class="{getStatusColor(apiStatusStore.graphhopper.status)} w-2 h-2 fill-current pulse-dot"
       />
       <span class="text-gray-400">GraphHopper:</span>
-      <span class="text-white font-medium">{graphhopper.status}</span>
-      {#if graphhopper.status === 'online'}
-        <span class="text-gray-500 text-xs">({graphhopper.responseTime}ms)</span>
+      <span class="text-white font-medium">{apiStatusStore.graphhopper.status}</span>
+      {#if apiStatusStore.graphhopper.status === 'online'}
+        <span class="text-gray-500 text-xs">({apiStatusStore.graphhopper.responseTime}ms)</span>
       {/if}
     </div>
-    
+
     <!-- Database Status -->
     <div class="flex items-center gap-2">
-      <Icon 
+      <Icon
         icon="lucide:circle"
-        class="{getStatusColor(database.status)} w-2 h-2 fill-current pulse-dot" 
+        class="{getStatusColor(apiStatusStore.database.status)} w-2 h-2 fill-current pulse-dot"
       />
       <span class="text-gray-400">Database:</span>
-      <span class="text-white font-medium">{database.status}</span>
-      {#if database.status === 'online'}
+      <span class="text-white font-medium">{apiStatusStore.database.status}</span>
+      {#if apiStatusStore.database.status === 'online'}
         <span class="text-gray-500 text-xs">
-          ({database.connections}/{database.maxConnections} connections)
+          ({apiStatusStore.database.connections}/{apiStatusStore.database.maxConnections} connections)
         </span>
       {/if}
     </div>

@@ -2,9 +2,7 @@
   import { apiStatusStore } from '../stores';
   import Icon from '@iconify/svelte';
   
-  $: backend = $apiStatusStore.backend;
-  $: graphhopper = $apiStatusStore.graphhopper;
-  $: database = $apiStatusStore.database;
+
   
   function getStatusColor(status: string) {
     switch (status) {
@@ -38,25 +36,25 @@
           <Icon icon="lucide:server" class="w-4 h-4 text-primary" />
           <span class="text-sm font-medium text-foreground">Backend</span>
         </div>
-        <Icon icon="lucide:circle" class="w-3 h-3 {getStatusColor(backend.status)} pulse-dot" />
+        <Icon icon="lucide:circle" class="w-3 h-3 {getStatusColor(apiStatusStore.backend.status)} pulse-dot" />
       </div>
       <div class="space-y-1 text-xs text-muted-foreground">
         <div class="flex justify-between">
           <span>Estado:</span>
-          <span class="text-foreground font-medium">{backend.status}</span>
+          <span class="text-foreground font-medium">{apiStatusStore.backend.status}</span>
         </div>
-        {#if backend.status === 'online'}
+        {#if apiStatusStore.backend.status === 'online'}
           <div class="flex justify-between">
             <span>Respuesta:</span>
-            <span class="text-foreground">{backend.responseTime}ms</span>
+            <span class="text-foreground">{apiStatusStore.backend.responseTime}ms</span>
           </div>
           <div class="flex justify-between">
             <span>Uptime:</span>
-            <span class="text-foreground">{formatUptime(backend.uptime)}</span>
+            <span class="text-foreground">{formatUptime(apiStatusStore.backend.uptime)}</span>
           </div>
           <div class="flex justify-between">
             <span>Version:</span>
-            <span class="text-foreground">{backend.version}</span>
+            <span class="text-foreground">{apiStatusStore.backend.version}</span>
           </div>
         {/if}
       </div>
@@ -69,17 +67,17 @@
           <Icon icon="lucide:map-pin" class="w-4 h-4 text-cyan-400" />
           <span class="text-sm font-medium text-foreground">GraphHopper</span>
         </div>
-        <Icon icon="lucide:circle" class="w-3 h-3 {getStatusColor(graphhopper.status)} pulse-dot" />
+        <Icon icon="lucide:circle" class="w-3 h-3 {getStatusColor(apiStatusStore.graphhopper.status)} pulse-dot" />
       </div>
       <div class="space-y-1 text-xs text-muted-foreground">
         <div class="flex justify-between">
           <span>Estado:</span>
-          <span class="text-foreground font-medium">{graphhopper.status}</span>
+          <span class="text-foreground font-medium">{apiStatusStore.graphhopper.status}</span>
         </div>
-        {#if graphhopper.status === 'online'}
+        {#if apiStatusStore.graphhopper.status === 'online'}
           <div class="flex justify-between">
             <span>Respuesta:</span>
-            <span class="text-foreground">{graphhopper.responseTime}ms</span>
+            <span class="text-foreground">{apiStatusStore.graphhopper.responseTime}ms</span>
           </div>
         {/if}
       </div>
@@ -92,25 +90,25 @@
           <Icon icon="lucide:database" class="w-4 h-4 text-purple-400" />
           <span class="text-sm font-medium text-foreground">Database</span>
         </div>
-        <Icon icon="lucide:circle" class="w-3 h-3 {getStatusColor(database.status)} pulse-dot" />
+        <Icon icon="lucide:circle" class="w-3 h-3 {getStatusColor(apiStatusStore.database.status)} pulse-dot" />
       </div>
       <div class="space-y-1 text-xs text-muted-foreground">
         <div class="flex justify-between">
           <span>Estado:</span>
-          <span class="text-foreground font-medium">{database.status}</span>
+          <span class="text-foreground font-medium">{apiStatusStore.database.status}</span>
         </div>
-        {#if database.status === 'online'}
+        {#if apiStatusStore.database.status === 'online'}
           <div class="flex justify-between">
             <span>Conexiones:</span>
             <span class="text-foreground">
-              {database.connections}/{database.maxConnections}
+              {apiStatusStore.database.connections}/{apiStatusStore.database.maxConnections}
             </span>
           </div>
           <div class="mt-2">
             <div class="w-full bg-secondary rounded-full h-1.5">
               <div 
                 class="bg-primary h-1.5 rounded-full transition-all" 
-                style="width: {(database.connections / database.maxConnections) * 100}%"
+                style="width: {(apiStatusStore.database.connections / apiStatusStore.database.maxConnections) * 100}%"
               ></div>
             </div>
           </div>

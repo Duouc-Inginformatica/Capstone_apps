@@ -1,10 +1,7 @@
 <script lang="ts">
   import Icon from '@iconify/svelte';
   import { scrapingStatusStore } from '../stores';
-  
-  $: moovit = $scrapingStatusStore.moovit;
-  $: redCL = $scrapingStatusStore.redCL;
-  
+
   function getStatusIcon(status: string) {
     switch (status) {
       case 'idle': return 'lucide:check-circle';
@@ -13,7 +10,7 @@
       default: return 'lucide:check-circle';
     }
   }
-  
+
   function getStatusColor(status: string) {
     switch (status) {
       case 'idle': return 'text-green-400';
@@ -22,7 +19,7 @@
       default: return 'text-gray-400';
     }
   }
-  
+
   function formatLastRun(timestamp: number) {
     if (timestamp === 0) return 'Nunca';
     const now = Date.now();
@@ -42,69 +39,69 @@
       <h2 class="text-lg font-semibold text-white">Scraping</h2>
     </div>
   </div>
-  
+
   <div class="p-4 space-y-3">
     <!-- Moovit -->
     <div class="p-3 bg-secondary/30 rounded-lg border border-border">
       <div class="flex items-center justify-between mb-2">
         <span class="text-sm font-medium text-foreground">Moovit</span>
-        <Icon 
-          icon={getStatusIcon(moovit.status)} 
-          class="w-4 h-4 {getStatusColor(moovit.status)}"
+        <Icon
+          icon={getStatusIcon(scrapingStatusStore.moovit.status)}
+          class="w-4 h-4 {getStatusColor(scrapingStatusStore.moovit.status)}"
         />
       </div>
       <div class="space-y-1 text-xs text-muted-foreground">
         <div class="flex justify-between">
           <span>Estado:</span>
-          <span class="text-foreground font-medium capitalize">{moovit.status}</span>
+          <span class="text-foreground font-medium capitalize">{scrapingStatusStore.moovit.status}</span>
         </div>
         <div class="flex justify-between">
           <span>Última ejecución:</span>
-          <span class="text-foreground">{formatLastRun(moovit.lastRun)}</span>
+          <span class="text-foreground">{formatLastRun(scrapingStatusStore.moovit.lastRun)}</span>
         </div>
-        {#if moovit.itemsProcessed > 0}
+        {#if scrapingStatusStore.moovit.itemsProcessed > 0}
           <div class="flex justify-between">
             <span>Procesados:</span>
-            <span class="text-foreground">{moovit.itemsProcessed}</span>
+            <span class="text-foreground">{scrapingStatusStore.moovit.itemsProcessed}</span>
           </div>
         {/if}
-        {#if moovit.errors > 0}
+        {#if scrapingStatusStore.moovit.errors > 0}
           <div class="flex justify-between">
             <span>Errores:</span>
-            <span class="text-red-400">{moovit.errors}</span>
+            <span class="text-red-400">{scrapingStatusStore.moovit.errors}</span>
           </div>
         {/if}
       </div>
     </div>
-    
+
     <!-- Red CL -->
     <div class="p-3 bg-secondary/30 rounded-lg border border-border">
       <div class="flex items-center justify-between mb-2">
         <span class="text-sm font-medium text-foreground">Red CL</span>
-        <Icon 
-          icon={getStatusIcon(redCL.status)} 
-          class="w-4 h-4 {getStatusColor(redCL.status)}"
+        <Icon
+          icon={getStatusIcon(scrapingStatusStore.redCL.status)}
+          class="w-4 h-4 {getStatusColor(scrapingStatusStore.redCL.status)}"
         />
       </div>
       <div class="space-y-1 text-xs text-muted-foreground">
         <div class="flex justify-between">
           <span>Estado:</span>
-          <span class="text-foreground font-medium capitalize">{redCL.status}</span>
+          <span class="text-foreground font-medium capitalize">{scrapingStatusStore.redCL.status}</span>
         </div>
         <div class="flex justify-between">
           <span>Última ejecución:</span>
-          <span class="text-foreground">{formatLastRun(redCL.lastRun)}</span>
+          <span class="text-foreground">{formatLastRun(scrapingStatusStore.redCL.lastRun)}</span>
         </div>
-        {#if redCL.itemsProcessed > 0}
+        {#if scrapingStatusStore.redCL.itemsProcessed > 0}
           <div class="flex justify-between">
             <span>Procesados:</span>
-            <span class="text-foreground">{redCL.itemsProcessed}</span>
+            <span class="text-foreground">{scrapingStatusStore.redCL.itemsProcessed}</span>
           </div>
         {/if}
-        {#if redCL.errors > 0}
+        {#if scrapingStatusStore.redCL.errors > 0}
           <div class="flex justify-between">
             <span>Errores:</span>
-            <span class="text-red-400">{redCL.errors}</span>
+            <span class="text-red-400">{scrapingStatusStore.redCL.errors}</span>
           </div>
         {/if}
       </div>

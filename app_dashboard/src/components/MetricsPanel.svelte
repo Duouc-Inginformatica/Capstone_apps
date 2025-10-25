@@ -28,7 +28,7 @@
   </div>
   
   <div class="p-4 space-y-3">
-    {#each $metricsStore as metric}
+    {#each metricsStore as metric}
       <div class="flex items-center justify-between p-3 bg-white/5 backdrop-blur-sm rounded-lg border border-white/10">
         <div class="flex-1">
           <p class="text-xs text-gray-500 mb-1">{metric.name}</p>

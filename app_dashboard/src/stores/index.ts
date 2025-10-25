@@ -1,4 +1,4 @@
-import { writable } from 'svelte/store';
+
 
 // Types
 export interface LogEntry {
@@ -51,14 +51,14 @@ export interface ScrapingStatus {
 }
 
 // Stores using Svelte 5 compatible syntax
-export const logsStore = writable<LogEntry[]>([]);
-export const metricsStore = writable<Metric[]>([
+export const logsStore = $state<LogEntry[]>([]);
+export const metricsStore = $state<Metric[]>([
   { name: 'CPU Usage', value: 0, unit: '%', trend: 'stable' },
   { name: 'Memory', value: 0, unit: 'MB', trend: 'stable' },
   { name: 'Active Users', value: 0, trend: 'stable' },
   { name: 'API Requests/min', value: 0, trend: 'stable' },
 ]);
-export const apiStatusStore = writable<ApiStatusData>({
+export const apiStatusStore = $state<ApiStatusData>({
   backend: {
     status: 'offline',
     responseTime: 0,
@@ -75,7 +75,7 @@ export const apiStatusStore = writable<ApiStatusData>({
     maxConnections: 100,
   },
 });
-export const scrapingStatusStore = writable<ScrapingStatus>({
+export const scrapingStatusStore = $state<ScrapingStatus>({
   moovit: {
     lastRun: 0,
     status: 'idle',
@@ -99,14 +99,13 @@ export function addLog(log: Omit<LogEntry, 'id' | 'timestamp'>) {
     timestamp: Date.now(),
   };
   
-  logsStore.update(logs => {
-    const updated = [newLog, ...logs];
-    // Mantener solo los últimos 1000 logs
-    return updated.slice(0, 1000);
-  });
+  logsStore.unshift(newLog);
+  if (logsStore.length > 1000) {
+    logsStore.length = 1000;
+  }
 }
 
 // Helper para limpiar logs
 export function clearLogs() {
-  logsStore.set([]);
+  logsStore.length = 0;
 }

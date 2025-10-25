@@ -90,7 +90,7 @@ class _MapScreenState extends State<MapScreen> {
   int _currentSimulatedBusStopIndex = -1; // Índice del paradero actual durante simulación de bus
 
   // Control de visualización de ruta de bus
-  bool _busRouteShown =
+  final bool _busRouteShown =
       false; // Rastrea si ya se mostró la ruta del bus en wait_bus
 
   // Notification system
