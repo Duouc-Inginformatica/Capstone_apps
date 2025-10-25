@@ -2628,13 +2628,17 @@ class _MapScreenState extends State<MapScreen> {
     }
 
     // ══════════════════════════════════════════════════════════════
-    // MOSTRAR RUTA COMPLETA COMO MOOVIT
+    // MOSTRAR RUTA COMPLETA COMO EN LA FOTO
     // ══════════════════════════════════════════════════════════════
     // Mostrar TODAS las geometrías de TODOS los pasos:
-    // 1. Ruta de caminata (roja)
-    // 2. Ruta del bus completa (azul)
-    // 3. Todos los paraderos (círculos blancos + naranja)
+    // 1. Ruta de caminata (ROJA)
+    // 2. Ruta del bus completa (CELESTE/CYAN)
+    // 3. Todos los paraderos (círculos blancos)
     // ══════════════════════════════════════════════════════════════
+    
+    _log('🗺️ [MAP] ════════════════════════════════════════════════');
+    _log('🗺️ [MAP] Construyendo polylines para ${navigation.steps.length} pasos');
+    _log('🗺️ [MAP] stepGeometries disponibles: ${navigation.stepGeometries.keys.toList()}');
     
     final allPolylines = <Polyline>[];
     
@@ -2643,7 +2647,12 @@ class _MapScreenState extends State<MapScreen> {
       final step = navigation.steps[i];
       final geometry = navigation.stepGeometries[i] ?? [];
       
-      if (geometry.isEmpty) continue;
+      _log('🗺️ [MAP] Paso $i: tipo=${step.type}, geometría=${geometry.length} puntos');
+      
+      if (geometry.isEmpty) {
+        _log('⚠️ [MAP] Paso $i (${step.type}) SIN GEOMETRÍA - SALTANDO');
+        continue;
+      }
       
       // Color según tipo de paso
       Color lineColor;
@@ -2653,12 +2662,16 @@ class _MapScreenState extends State<MapScreen> {
         // Ruta de caminata: ROJA
         lineColor = const Color(0xFFE30613);
         strokeWidth = 5.0;
-      } else if (step.type == 'ride_bus') {
-        // Ruta del bus: AZUL (como en Moovit)
-        lineColor = const Color(0xFF2196F3);
+        _log('✅ [MAP] Paso $i: CAMINATA en ROJO con ${geometry.length} puntos');
+      } else if (step.type == 'ride_bus' || step.type == 'bus') {
+        // Ruta del bus: CELESTE/CYAN (como en la foto)
+        // Acepta tanto 'ride_bus' como 'bus' del backend
+        lineColor = const Color(0xFF00BCD4); // Cyan brillante
         strokeWidth = 6.0;
+        _log('✅ [MAP] Paso $i: BUS en CELESTE con ${geometry.length} puntos');
       } else {
         // Otros pasos (wait_bus, etc.): no mostrar línea
+        _log('⚠️ [MAP] Paso $i (${step.type}) no requiere línea - SALTANDO');
         continue;
       }
       
@@ -2670,11 +2683,13 @@ class _MapScreenState extends State<MapScreen> {
         ),
       );
       
-      _log('🗺️ [MAP] Agregada geometría paso $i (${step.type}): ${geometry.length} puntos, color: $lineColor');
+      _log('🗺️ [MAP] ✅ Polyline agregada: ${step.type}, ${geometry.length} puntos');
     }
     
     _polylines = allPolylines;
-    _log('🗺️ [MAP] Total polylines mostradas: ${_polylines.length}');
+    _log('🗺️ [MAP] ════════════════════════════════════════════════');
+    _log('🗺️ [MAP] TOTAL POLYLINES EN MAPA: ${_polylines.length}');
+    _log('🗺️ [MAP] ════════════════════════════════════════════════');
 
     // Actualizar marcadores (mostrará TODOS los paraderos)
     _updateNavigationMarkers(navigation.currentStep, navigation);
