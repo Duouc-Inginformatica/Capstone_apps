@@ -2601,40 +2601,82 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   /// Actualiza el estado del mapa (polylines y marcadores) para la navegación activa
+  /// MUESTRA LA RUTA COMPLETA: caminata + bus + todos los paraderos
   void _updateNavigationMapState(ActiveNavigation navigation) {
     final currentStepIndex = navigation.currentStepIndex;
     final previousStepIndex = _cachedStepIndex;
     
     // Solo actualizar caché si cambió el paso
     if (_cachedStepIndex != currentStepIndex) {
-      _cachedStepGeometry = IntegratedNavigationService.instance.currentStepGeometry;
+      // Obtener geometría directamente de stepGeometries (pre-calculada)
+      if (navigation.stepGeometries.containsKey(currentStepIndex)) {
+        _cachedStepGeometry = navigation.stepGeometries[currentStepIndex]!;
+      } else {
+        _cachedStepGeometry = IntegratedNavigationService.instance.currentStepGeometry;
+      }
       _cachedStepIndex = currentStepIndex;
       
       _log(
         '🗺️ [MAP] Cambio de paso: $previousStepIndex → $currentStepIndex (Geometría: ${_cachedStepGeometry.length} puntos)',
       );
+    } else if (_cachedStepGeometry.isEmpty) {
+      // Si es el mismo paso pero no tenemos geometría, intentar obtenerla
+      if (navigation.stepGeometries.containsKey(currentStepIndex)) {
+        _cachedStepGeometry = navigation.stepGeometries[currentStepIndex]!;
+        _log('🗺️ [MAP] Geometría obtenida para paso $currentStepIndex: ${_cachedStepGeometry.length} puntos');
+      }
     }
 
-    // Actualizar polyline del paso actual
-    if (navigation.currentStep?.type == 'wait_bus') {
-      // NO mostrar geometría del bus hasta que confirme con "Simular"
-      _polylines = [];
-    } else if (navigation.currentStep?.type == 'ride_bus') {
-      // Geometría del bus ya se dibujó cuando confirmó "Subir al bus"
-      // Mantener la geometría existente
-    } else {
-      _polylines = _cachedStepGeometry.isNotEmpty
-          ? [
-              Polyline(
-                points: _cachedStepGeometry,
-                color: const Color(0xFFE30613),
-                strokeWidth: 5.0,
-              ),
-            ]
-          : [];
+    // ══════════════════════════════════════════════════════════════
+    // MOSTRAR RUTA COMPLETA COMO MOOVIT
+    // ══════════════════════════════════════════════════════════════
+    // Mostrar TODAS las geometrías de TODOS los pasos:
+    // 1. Ruta de caminata (roja)
+    // 2. Ruta del bus completa (azul)
+    // 3. Todos los paraderos (círculos blancos + naranja)
+    // ══════════════════════════════════════════════════════════════
+    
+    final allPolylines = <Polyline>[];
+    
+    // Recorrer TODOS los pasos de la navegación
+    for (int i = 0; i < navigation.steps.length; i++) {
+      final step = navigation.steps[i];
+      final geometry = navigation.stepGeometries[i] ?? [];
+      
+      if (geometry.isEmpty) continue;
+      
+      // Color según tipo de paso
+      Color lineColor;
+      double strokeWidth;
+      
+      if (step.type == 'walk') {
+        // Ruta de caminata: ROJA
+        lineColor = const Color(0xFFE30613);
+        strokeWidth = 5.0;
+      } else if (step.type == 'ride_bus') {
+        // Ruta del bus: AZUL (como en Moovit)
+        lineColor = const Color(0xFF2196F3);
+        strokeWidth = 6.0;
+      } else {
+        // Otros pasos (wait_bus, etc.): no mostrar línea
+        continue;
+      }
+      
+      allPolylines.add(
+        Polyline(
+          points: geometry,
+          color: lineColor,
+          strokeWidth: strokeWidth,
+        ),
+      );
+      
+      _log('🗺️ [MAP] Agregada geometría paso $i (${step.type}): ${geometry.length} puntos, color: $lineColor');
     }
+    
+    _polylines = allPolylines;
+    _log('🗺️ [MAP] Total polylines mostradas: ${_polylines.length}');
 
-    // Actualizar marcadores
+    // Actualizar marcadores (mostrará TODOS los paraderos)
     _updateNavigationMarkers(navigation.currentStep, navigation);
     
     // NO AUTO-CENTRAR - el usuario tiene control total del mapa en todo momento
@@ -2696,9 +2738,13 @@ class _MapScreenState extends State<MapScreen> {
       );
     }
 
-    // Mostrar paraderos de bus:
-    // - SIEMPRE: paradero de origen (subida) y destino (bajada)
-    // - SOLO durante ride_bus: paradas intermedias
+    // ══════════════════════════════════════════════════════════════
+    // MOSTRAR TODOS LOS PARADEROS COMO MOOVIT
+    // ══════════════════════════════════════════════════════════════
+    // Siempre mostrar TODOS los paraderos del bus, en cualquier fase
+    // (walk, wait_bus, ride_bus)
+    // ══════════════════════════════════════════════════════════════
+    
     print('🔍 [MARKERS] Buscando leg de bus en itinerario...');
     _log('🔍 [MARKERS] Buscando leg de bus en itinerario...');
     try {
@@ -2728,11 +2774,7 @@ class _MapScreenState extends State<MapScreen> {
                             isRidingBus && 
                             i == _currentSimulatedBusStopIndex;
 
-          // FILTRO: Mostrar origen y destino SIEMPRE, y paradas intermedias solo durante ride_bus
-          if (!isFirst && !isLast && !isRidingBus) {
-            print('🚏 [MARKERS] Saltando parada intermedia $i (${stop.name})');
-            continue; // Saltar paradas intermedias si no estamos en el bus
-          }
+          // MOSTRAR TODOS LOS PARADEROS SIEMPRE (como Moovit)
 
           print('🚏 [MARKERS] Creando marcador $i: ${stop.name} (isFirst=$isFirst, isLast=$isLast, isCurrent=$isCurrent)');
 
@@ -2822,10 +2864,9 @@ class _MapScreenState extends State<MapScreen> {
             ),
           );
         }
-        final visibleCount = isRidingBus ? stops.length : 2; // Solo origen y destino antes de subir
-        print('🗺️ [MARKERS] Creados $visibleCount marcadores de paraderos (${stops.length} paradas totales)');
+        print('🗺️ [MARKERS] Creados ${stops.length} marcadores de paraderos (TODOS visibles como Moovit)');
         print('🗺️ [MARKERS] Total markers hasta ahora: ${newMarkers.length}');
-        _log('🗺️ [MARKERS] Creados $visibleCount marcadores de paraderos (${stops.length} paradas totales)');
+        _log('🗺️ [MARKERS] Creados ${stops.length} marcadores de paraderos');
         _log('🗺️ [MARKERS] Total markers hasta ahora: ${newMarkers.length}');
       }
     } catch (e) {

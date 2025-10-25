@@ -2950,12 +2950,12 @@ func (s *Scraper) getStopByCode(stopCode string) (*BusStop, error) {
 }
 
 // generateBusRouteGeometry genera la geometría del recorrido del bus
-// NOTA: Solo usa coordenadas de paradas porque en frontend se visualizan con GraphHopper
-// como marcadores individuales, no como una línea de ruta
+// ✅ MISMA LÓGICA QUE LA CAMINATA: Conecta paradas usando GraphHopper
+// Genera geometría COMPLETA siguiendo las calles, NO solo puntos de paradas
 func (s *Scraper) generateBusRouteGeometry(origin, dest BusStop, allStops []BusStop) [][]float64 {
 	geometry := [][]float64{}
 
-	log.Printf("🗺️  [GEOMETRY] Generando geometría entre parada %d y %d", origin.Sequence, dest.Sequence)
+	log.Printf("🗺️  [GEOMETRY] Generando geometría COMPLETA DEL BUS entre parada %d y %d", origin.Sequence, dest.Sequence)
 	log.Printf("🗺️  [GEOMETRY] Total de paradas disponibles: %d", len(allStops))
 
 	// Encontrar índices de origen y destino
@@ -2973,16 +2973,63 @@ func (s *Scraper) generateBusRouteGeometry(origin, dest BusStop, allStops []BusS
 		}
 	}
 
-	// Si encontramos ambos, usar las paradas intermedias (solo coordenadas de paradas)
+	// Si encontramos ambos, generar geometría REAL del bus (igual que caminata)
 	if startIdx >= 0 && endIdx >= 0 {
 		if startIdx > endIdx {
 			startIdx, endIdx = endIdx, startIdx
 		}
 
-		log.Printf("🗺️  [GEOMETRY] Agregando %d paradas entre origen y destino", endIdx-startIdx+1)
-		// SOLO agregar coordenadas de paradas (routing de calles lo hace GraphHopper en frontend)
-		for i := startIdx; i <= endIdx; i++ {
-			geometry = append(geometry, []float64{allStops[i].Longitude, allStops[i].Latitude})
+		log.Printf("🗺️  [GEOMETRY] Generando ruta REAL del bus entre %d paradas", endIdx-startIdx+1)
+		
+		// Obtener paradas entre origen y destino
+		stopsInRoute := allStops[startIdx : endIdx+1]
+		
+		// ✅ MISMA LÓGICA QUE CAMINATA: Usar GraphHopper para ruta real
+		if s.geometryService != nil && len(stopsInRoute) > 1 {
+			log.Printf("🚗 [GEOMETRY] Usando GraphHopper para geometría real del BUS (como caminata)")
+			
+			// Conectar cada parada con la siguiente usando rutas de vehículo
+			for i := 0; i < len(stopsInRoute)-1; i++ {
+				currentStop := stopsInRoute[i]
+				nextStop := stopsInRoute[i+1]
+				
+				// ✅ GetVehicleRoute = MISMA LÓGICA que GetWalkingRoute pero para vehículos
+				segmentGeometry, err := s.geometryService.GetVehicleRoute(
+					currentStop.Latitude,
+					currentStop.Longitude,
+					nextStop.Latitude,
+					nextStop.Longitude,
+				)
+				
+				if err == nil && len(segmentGeometry.MainGeometry) > 0 {
+					// Agregar geometría del segmento (evitando duplicados)
+					for _, point := range segmentGeometry.MainGeometry {
+						// Evitar duplicados: el último punto del segmento anterior = primero del siguiente
+						if len(geometry) == 0 || 
+						   geometry[len(geometry)-1][0] != point[0] || 
+						   geometry[len(geometry)-1][1] != point[1] {
+							geometry = append(geometry, point)
+						}
+					}
+					log.Printf("   ✅ Segmento BUS %d→%d: %d puntos de geometría REAL", 
+						i, i+1, len(segmentGeometry.MainGeometry))
+				} else {
+					// Fallback: línea recta entre paradas
+					if len(geometry) == 0 || 
+					   geometry[len(geometry)-1][0] != currentStop.Longitude || 
+					   geometry[len(geometry)-1][1] != currentStop.Latitude {
+						geometry = append(geometry, []float64{currentStop.Longitude, currentStop.Latitude})
+					}
+					geometry = append(geometry, []float64{nextStop.Longitude, nextStop.Latitude})
+					log.Printf("   ⚠️  Segmento BUS %d→%d: línea recta (error: %v)", i, i+1, err)
+				}
+			}
+		} else {
+			// Fallback: usar solo coordenadas de paradas si no hay servicio
+			log.Printf("⚠️  [GEOMETRY] Sin servicio GraphHopper, usando solo coordenadas de paradas")
+			for i := startIdx; i <= endIdx; i++ {
+				geometry = append(geometry, []float64{allStops[i].Longitude, allStops[i].Latitude})
+			}
 		}
 	} else {
 		// Si no encontramos índices, crear línea directa entre origen y destino
@@ -2991,7 +3038,7 @@ func (s *Scraper) generateBusRouteGeometry(origin, dest BusStop, allStops []BusS
 		geometry = append(geometry, []float64{dest.Longitude, dest.Latitude})
 	}
 
-	log.Printf("✅ [GEOMETRY] Geometría de bus generada con %d puntos (solo paradas)", len(geometry))
+	log.Printf("✅ [GEOMETRY] Geometría de BUS generada con %d puntos REALES (siguiendo calles)", len(geometry))
 	return geometry
 }
 
