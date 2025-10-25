@@ -17,8 +17,51 @@ import (
 	"strings"
 	"time"
 
+	"os/exec"
+	"path/filepath"
+
 	"github.com/chromedp/chromedp"
 )
+
+// detectBrowserExec busca un ejecutable de navegador compatible.
+// Orden de preferencia: SCRAPER_BROWSER_PATH env, Brave, Chrome, Edge, nombres en PATH.
+func detectBrowserExec() (string, string, error) {
+	// 1) Forzar por variable de entorno
+	if p := os.Getenv("SCRAPER_BROWSER_PATH"); p != "" {
+		if _, err := os.Stat(p); err == nil {
+			return p, filepath.Base(p), nil
+		}
+	}
+
+	// 2) Rutas comunes en Windows (priorizar Brave, luego Chrome, luego Edge)
+	candidates := []struct{ path, name string }{
+		{"C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe", "brave"},
+		{"C:\\Program Files (x86)\\BraveSoftware\\Brave-Browser\\Application\\brave.exe", "brave"},
+		{"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe", "chrome"},
+		{"C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe", "chrome"},
+		{"C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe", "edge"},
+		{"C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe", "edge"},
+	}
+
+	for _, c := range candidates {
+		if _, err := os.Stat(c.path); err == nil {
+			return c.path, c.name, nil
+		}
+	}
+
+	// 3) Buscar en PATH por nombres comunes
+	if p, err := exec.LookPath("brave"); err == nil {
+		return p, "brave", nil
+	}
+	if p, err := exec.LookPath("chrome"); err == nil {
+		return p, "chrome", nil
+	}
+	if p, err := exec.LookPath("msedge"); err == nil {
+		return p, "edge", nil
+	}
+
+	return "", "", fmt.Errorf("no se encontró navegador compatible (Brave/Chrome/Edge). Establece SCRAPER_BROWSER_PATH o instala un navegador compatible")
+}
 
 // RedBusRoute representa una ruta de bus Red
 type RedBusRoute struct {
@@ -474,34 +517,20 @@ func (s *Scraper) scrapeMovitWithCorrectURL(originName, destName string, originL
 	)
 
 	log.Printf("🔍 [MOOVIT] URL construida: %s", moovitURL)
-	log.Printf("🌐 [MOOVIT] Iniciando Edge headless...")
-
-	// Detectar Edge en Windows (prioridad a Edge)
-	edgePaths := []string{
-		"C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
-		"C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
+	// Detectar un navegador disponible (Brave/Chrome/Edge o ruta personalizada)
+	browserPath, browserName, err := detectBrowserExec()
+	if err != nil {
+		return nil, err
 	}
-
-	var edgePath string
-	for _, path := range edgePaths {
-		if _, err := os.Stat(path); err == nil {
-			edgePath = path
-			log.Printf("✅ [EDGE] Encontrado en: %s", edgePath)
-			break
-		}
-	}
-
-	if edgePath == "" {
-		return nil, fmt.Errorf("no se encontró Microsoft Edge instalado")
-	}
+	log.Printf("🌐 [MOOVIT] Iniciando %s headless...", strings.ToUpper(browserName))
 
 	// Crear contexto con timeout de 90 segundos (aumentado significativamente para conexiones lentas)
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
-	// Crear contexto de Edge con opciones optimizadas
+	// Crear contexto del navegador con opciones optimizadas
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
-		chromedp.ExecPath(edgePath),
+		chromedp.ExecPath(browserPath),
 		chromedp.Flag("headless", true),
 		chromedp.Flag("disable-gpu", true),
 		chromedp.Flag("no-sandbox", true),
@@ -531,7 +560,7 @@ func (s *Scraper) scrapeMovitWithCorrectURL(originName, destName string, originL
 
 	var htmlStage1, htmlStage2, htmlStage3 string
 
-	err := chromedp.Run(browserCtx,
+	err = chromedp.Run(browserCtx,
 		// ETAPA 1: Cargar página inicial
 		chromedp.Navigate(moovitURL),
 		chromedp.WaitVisible(`mv-suggested-route`, chromedp.ByQuery),
@@ -3118,36 +3147,22 @@ func (s *Scraper) GetLightweightRouteOptions(originLat, originLon, destLat, dest
 	return s.parseLightweightOptions(htmlContent, originLat, originLon, destLat, destLon)
 }
 
-// fetchMovitHTML usa Edge headless para obtener el HTML renderizado de Moovit
+// fetchMovitHTML usa un navegador headless (Brave/Chrome/Edge) para obtener el HTML renderizado de Moovit
 func (s *Scraper) fetchMovitHTML(moovitURL string) (string, error) {
-	log.Printf("🌐 [MOOVIT] Iniciando Edge headless...")
-
-	// Detectar Edge en Windows (prioridad a Edge)
-	edgePaths := []string{
-		"C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
-		"C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
+	// Detectar navegador disponible (prioriza SCRAPER_BROWSER_PATH, Brave, Chrome, Edge, PATH)
+	browserPath, browserName, err := detectBrowserExec()
+	if err != nil {
+		return "", err
 	}
-
-	var edgePath string
-	for _, path := range edgePaths {
-		if _, err := os.Stat(path); err == nil {
-			edgePath = path
-			log.Printf("✅ [EDGE] Encontrado en: %s", edgePath)
-			break
-		}
-	}
-
-	if edgePath == "" {
-		return "", fmt.Errorf("no se encontró Microsoft Edge instalado")
-	}
+	log.Printf("🌐 [MOOVIT] Iniciando %s headless...", strings.ToUpper(browserName))
 
 	// Crear contexto con timeout de 90 segundos (aumentado significativamente para conexiones lentas)
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
-	// Crear contexto de Edge con opciones optimizadas
+	// Crear contexto del navegador con opciones optimizadas
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
-		chromedp.ExecPath(edgePath),
+		chromedp.ExecPath(browserPath),
 		chromedp.Flag("headless", true),
 		chromedp.Flag("disable-gpu", true),
 		chromedp.Flag("no-sandbox", true),
@@ -3172,7 +3187,7 @@ func (s *Scraper) fetchMovitHTML(moovitURL string) (string, error) {
 	log.Printf("🌐 [MOOVIT] Navegando a URL: %s", moovitURL)
 
 	// Intentar estrategia más robusta con timeout individual por paso
-	err := chromedp.Run(browserCtx,
+	err = chromedp.Run(browserCtx,
 		chromedp.ActionFunc(func(ctx context.Context) error {
 			log.Printf("   📍 Paso 1: Navegando a Moovit...")
 			return nil
