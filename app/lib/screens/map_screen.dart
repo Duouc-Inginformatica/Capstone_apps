@@ -501,6 +501,12 @@ class _MapScreenState extends State<MapScreen> {
     if (!hasActiveNavigation && !hasWalkInstructions) {
       return const SizedBox.shrink();
     }
+    
+    // NO mostrar en modo viaje de bus (ride_bus)
+    final activeNav = IntegratedNavigationService.instance.activeNavigation;
+    if (activeNav?.currentStep?.type == 'ride_bus' || activeNav?.currentStep?.type == 'bus') {
+      return const SizedBox.shrink();
+    }
 
     final int totalInstructions = instructions?.length ?? 0;
     final int focusIndex = totalInstructions == 0
@@ -616,6 +622,12 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   Widget _buildSimulationFab() {
+    // NO mostrar en modo viaje de bus (ride_bus)
+    final activeNav = IntegratedNavigationService.instance.activeNavigation;
+    if (activeNav?.currentStep?.type == 'ride_bus' || activeNav?.currentStep?.type == 'bus') {
+      return const SizedBox.shrink();
+    }
+    
     final String label = _getSimulationButtonLabel();
 
     return Semantics(
@@ -846,9 +858,32 @@ class _MapScreenState extends State<MapScreen> {
               orElse: () => throw Exception('No bus leg found'),
             );
             
+            // Usar la geometría COMPLETA de la ruta (no solo las paradas)
+            final busGeometry = busLeg.geometry;
             final stops = busLeg.stops;
-            if (stops != null && stops.isNotEmpty) {
+            
+            if (busGeometry != null && busGeometry.isNotEmpty) {
+              // Usar geometría real del backend (ruta completa)
+              _log('🚌 [BUS] Usando geometría completa: ${busGeometry.length} puntos');
+              
+              setState(() {
+                _polylines = [
+                  Polyline(
+                    points: busGeometry,
+                    color: const Color(0xFF2196F3), // Azul para ruta de bus
+                    strokeWidth: 4.0,
+                  ),
+                ];
+                
+                // TAMBIÉN actualizar marcadores para mostrar los paraderos
+                _updateNavigationMarkers(nextStep, activeNav);
+              });
+              
+              _log('🚌 [BUS] Geometría dibujada: ${busGeometry.length} puntos de ruta, ${stops?.length ?? 0} paraderos');
+            } else if (stops != null && stops.isNotEmpty) {
+              // Fallback: usar solo puntos de paradas si no hay geometría
               final busRoutePoints = stops.map((stop) => stop.location).toList();
+              _log('⚠️ [BUS] Sin geometría completa, usando ${busRoutePoints.length} puntos de paraderos');
               
               setState(() {
                 _polylines = [
@@ -862,17 +897,21 @@ class _MapScreenState extends State<MapScreen> {
                 // TAMBIÉN actualizar marcadores para mostrar los paraderos
                 _updateNavigationMarkers(nextStep, activeNav);
               });
-              
-              _log('🚌 [BUS] Geometría dibujada: ${busRoutePoints.length} paraderos');
             }
           } catch (e) {
             _log('⚠️ [BUS] Error dibujando geometría: $e');
           }
           
-          // SEGUNDO: Anunciar TTS y ESPERAR que termine
+          // SEGUNDO: Vibración de confirmación (patrón corto)
+          final hasVibrator = await Vibration.hasVibrator();
+          if (hasVibrator == true) {
+            Vibration.vibrate(duration: 200);
+          }
+          
+          // TERCERO: Anunciar TTS y ESPERAR que termine
           await TtsService.instance.speak('Subiendo al bus ${nextStep.busRoute}', urgent: true);
           
-          // TERCERO: Pequeña pausa para dar tiempo visual
+          // CUARTO: Pequeña pausa para dar tiempo visual
           await Future.delayed(const Duration(milliseconds: 800));
         }
       }
@@ -929,17 +968,28 @@ class _MapScreenState extends State<MapScreen> {
             _isSimulating = false;
           });
           
-          await TtsService.instance.speak('Llegaste al paradero');
+          // Vibración de llegada (doble vibración)
+          final hasVibrator = await Vibration.hasVibrator();
+          if (hasVibrator == true) {
+            Vibration.vibrate(duration: 150);
+            await Future.delayed(const Duration(milliseconds: 200));
+            Vibration.vibrate(duration: 150);
+          }
           
-          // Avanzar al siguiente paso (wait_bus) pero NO continuar simulación
-          // El desarrollador debe presionar "Simular" de nuevo para subir al bus
-          if (activeNav.currentStepIndex < activeNav.steps.length - 1) {
-            IntegratedNavigationService.instance.advanceToNextStep();
-            if (mounted) {
-              setState(() {
-                _updateNavigationMapState(IntegratedNavigationService.instance.activeNavigation!);
-              });
-            }
+          // Detectar si es el destino final o un paradero intermedio
+          final isLastStep = activeNav.currentStepIndex >= activeNav.steps.length - 1;
+          if (isLastStep) {
+            await TtsService.instance.speak('Has llegado a tu destino, ${currentStep.stopName}');
+            // Finalizar navegación
+            IntegratedNavigationService.instance.stopNavigation();
+          } else {
+            // NO avanzar automáticamente - el usuario debe presionar "Simular subida al bus"
+            await TtsService.instance.speak('Llegaste al paradero. Espera el bus ${currentStep.busRoute ?? ""}');
+            _log('🚏 [SIMULAR] Llegaste al paradero. NO se avanza automáticamente.');
+            _log('🚏 [SIMULAR] El usuario debe presionar "Simular subida al bus" cuando esté listo.');
+            
+            // DETENER la simulación aquí - NO avanzar al siguiente paso
+            // La simulación se detendrá y el usuario debe presionar el botón de nuevo
           }
           return;
         }
@@ -1030,6 +1080,16 @@ class _MapScreenState extends State<MapScreen> {
             _currentSimulatedBusStopIndex = -1; // Resetear índice
           });
           
+          // Vibración al bajar del bus (triple vibración)
+          final hasVibrator = await Vibration.hasVibrator();
+          if (hasVibrator == true) {
+            Vibration.vibrate(duration: 100);
+            await Future.delayed(const Duration(milliseconds: 150));
+            Vibration.vibrate(duration: 100);
+            await Future.delayed(const Duration(milliseconds: 150));
+            Vibration.vibrate(duration: 100);
+          }
+          
           await TtsService.instance.speak('Bajaste del bus');
           
           // Avanzar al siguiente paso (probablemente walk final) pero NO continuar simulación
@@ -1057,10 +1117,20 @@ class _MapScreenState extends State<MapScreen> {
         String announcement = '';
         if (isLastStop) {
           announcement = 'Próxima parada: ${stop.name}. Prepárate para bajar';
+          // Vibración más fuerte para última parada
+          final hasVibrator = await Vibration.hasVibrator();
+          if (hasVibrator == true) {
+            Vibration.vibrate(duration: 300);
+          }
         } else if (isImportantStop && !isFirstStop) {
           // Anunciar paraderos importantes (cada N paradas)
           final stopCode = stop.code != null ? 'código ${stop.code}' : '';
           announcement = 'Paradero ${stop.name} $stopCode';
+          // Vibración sutil para paraderos importantes
+          final hasVibrator = await Vibration.hasVibrator();
+          if (hasVibrator == true) {
+            Vibration.vibrate(duration: 100);
+          }
         }
         
         if (announcement.isNotEmpty) {
@@ -2376,41 +2446,10 @@ class _MapScreenState extends State<MapScreen> {
             _polylines = [];
             _log('🚏 [WAIT_BUS] Sin geometría hasta confirmar subida al bus');
           } else if (step.type == 'ride_bus') {
-            // Para buses: Dibujar línea conectando SOLO los paraderos intermedios
-            // Esto crea una geometría más precisa que sigue las paradas reales del bus
-            final activeNav = IntegratedNavigationService.instance.activeNavigation;
-            if (activeNav != null) {
-              try {
-                final busLeg = activeNav.itinerary.legs.firstWhere(
-                  (leg) => leg.type == 'bus' && leg.isRedBus,
-                  orElse: () => throw Exception('No bus leg found'),
-                );
-                
-                final stops = busLeg.stops;
-                if (stops != null && stops.isNotEmpty) {
-                  // Crear geometría conectando los paraderos en orden
-                  final busRoutePoints = stops.map((stop) => stop.location).toList();
-                  
-                  _polylines = [
-                    Polyline(
-                      points: busRoutePoints,
-                      color: const Color(0xFF2196F3), // Azul para ruta de bus
-                      strokeWidth: 4.0,
-                    ),
-                  ];
-                  
-                  _log('🚌 [BUS] Geometría creada con ${busRoutePoints.length} paraderos');
-                } else {
-                  _polylines = [];
-                  _log('🚌 [BUS] No hay paraderos para crear geometría');
-                }
-              } catch (e) {
-                _polylines = [];
-                _log('⚠️ [BUS] Error creando geometría de bus: $e');
-              }
-            } else {
-              _polylines = [];
-            }
+            // Para ride_bus: NO dibujar automáticamente aquí
+            // La geometría ya se dibujó en _simulateBoardingBus() cuando el usuario confirmó
+            // Mantener la geometría existente (no modificar _polylines)
+            _log('🚌 [RIDE_BUS] Manteniendo geometría dibujada en simulación');
           } else {
             // Para walk, etc: dibujar polyline normal
             _polylines = stepGeometry.isNotEmpty
@@ -2657,121 +2696,151 @@ class _MapScreenState extends State<MapScreen> {
       );
     }
 
-    // Si estamos en wait_bus o ride_bus, re-crear marcadores de paradas
-    if (currentStep?.type == 'wait_bus' || currentStep?.type == 'ride_bus') {
-      try {
-        final busLeg = navigation.itinerary.legs.firstWhere(
-          (leg) => leg.type == 'bus' && leg.isRedBus,
-          orElse: () => throw Exception('No bus leg found'),
-        );
+    // Mostrar paraderos de bus:
+    // - SIEMPRE: paradero de origen (subida) y destino (bajada)
+    // - SOLO durante ride_bus: paradas intermedias
+    print('🔍 [MARKERS] Buscando leg de bus en itinerario...');
+    _log('🔍 [MARKERS] Buscando leg de bus en itinerario...');
+    try {
+      final busLeg = navigation.itinerary.legs.firstWhere(
+        (leg) => leg.type == 'bus' && leg.isRedBus,
+        orElse: () => throw Exception('No bus leg found'),
+      );
 
-        final stops = busLeg.stops;
-        if (stops != null && stops.isNotEmpty) {
-          for (int i = 0; i < stops.length; i++) {
-            final stop = stops[i];
-            final isFirst = i == 0;
-            final isLast = i == stops.length - 1;
-            final isCurrent = _isSimulating && i == _currentSimulatedBusStopIndex;
+      print('✅ [MARKERS] Leg de bus encontrado');
+      _log('✅ [MARKERS] Leg de bus encontrado');
 
-            Color markerColor;
-            IconData markerIcon;
-            double markerSize;
-            
-            if (isCurrent) {
-              // Paradero actual durante simulación: amarillo brillante
-              markerColor = const Color(0xFFFFC107); // Amarillo
-              markerIcon = Icons.directions_bus;
-              markerSize = 45;
-            } else if (isFirst) {
-              markerColor = Colors.green;
-              markerIcon = Icons.location_on;
-              markerSize = 40;
-            } else if (isLast) {
-              markerColor = Colors.red;
-              markerIcon = Icons.flag;
-              markerSize = 40;
-            } else {
-              // Paraderos intermedios: icono pequeño con código
-              markerColor = const Color(0xFF2196F3); // Azul
-              markerIcon = Icons.circle;
-              markerSize = 20;
-            }
+      final stops = busLeg.stops;
+      print('🔍 [MARKERS] Stops: ${stops?.length ?? 0}');
+      _log('🔍 [MARKERS] Stops: ${stops?.length ?? 0}');
+      
+      if (stops != null && stops.isNotEmpty) {
+        final isRidingBus = currentStep?.type == 'ride_bus';
+        final isWaitingBus = currentStep?.type == 'wait_bus';
+        print('🚏 [MARKERS] Creando marcadores de paraderos (isRidingBus=$isRidingBus, isWaitingBus=$isWaitingBus, currentStep=${currentStep?.type})');
+        _log('🚏 [MARKERS] Creando marcadores de paraderos (isRidingBus=$isRidingBus, isWaitingBus=$isWaitingBus, currentStep=${currentStep?.type})');
+        
+        for (int i = 0; i < stops.length; i++) {
+          final stop = stops[i];
+          final isFirst = i == 0;
+          final isLast = i == stops.length - 1;
+          final isCurrent = _isSimulating && 
+                            isRidingBus && 
+                            i == _currentSimulatedBusStopIndex;
 
-            newMarkers.add(
-              Marker(
-                point: stop.location,
-                width: isCurrent ? markerSize + 10 : (isFirst || isLast ? markerSize : 50),
-                height: isCurrent ? markerSize + 10 : (isFirst || isLast ? markerSize : 35),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    // Icono del paradero
-                    Container(
-                      width: markerSize,
-                      height: markerSize,
-                      decoration: BoxDecoration(
-                        color: markerColor,
-                        shape: BoxShape.circle,
-                        border: Border.all(
-                          color: isCurrent ? Colors.orange : Colors.white, 
-                          width: isCurrent ? 3 : 2
-                        ),
-                        boxShadow: [
-                          BoxShadow(
-                            color: markerColor.withValues(alpha: isCurrent ? 0.8 : 0.5),
-                            blurRadius: isCurrent ? 12 : 6,
-                            spreadRadius: isCurrent ? 4 : 2,
-                          ),
-                        ],
+          // FILTRO: Mostrar origen y destino SIEMPRE, y paradas intermedias solo durante ride_bus
+          if (!isFirst && !isLast && !isRidingBus) {
+            print('🚏 [MARKERS] Saltando parada intermedia $i (${stop.name})');
+            continue; // Saltar paradas intermedias si no estamos en el bus
+          }
+
+          print('🚏 [MARKERS] Creando marcador $i: ${stop.name} (isFirst=$isFirst, isLast=$isLast, isCurrent=$isCurrent)');
+
+          Color markerColor;
+          IconData markerIcon;
+          double markerSize;
+          
+          if (isCurrent) {
+            // Paradero actual durante simulación: amarillo brillante
+            markerColor = const Color(0xFFFFC107); // Amarillo
+            markerIcon = Icons.directions_bus;
+            markerSize = 45;
+          } else if (isFirst) {
+            // Paradero de ORIGEN del bus (donde se sube): Naranja
+            markerColor = Colors.orange;
+            markerIcon = Icons.arrow_upward; // Flecha hacia arriba = subida
+            markerSize = 40;
+          } else if (isLast) {
+            // Paradero de DESTINO del bus (donde se baja): Morado
+            markerColor = Colors.purple;
+            markerIcon = Icons.arrow_downward; // Flecha hacia abajo = bajada
+            markerSize = 40;
+          } else {
+            // Paraderos intermedios: icono pequeño con código
+            markerColor = const Color(0xFF2196F3); // Azul
+            markerIcon = Icons.circle;
+            markerSize = 18; // Reducido de 20 a 18
+          }
+
+          newMarkers.add(
+            Marker(
+              point: stop.location,
+              width: isCurrent ? markerSize + 10 : (isFirst || isLast ? markerSize + 4 : 50),
+              height: isCurrent ? markerSize + 10 : (isFirst || isLast ? markerSize + 4 : 32), // Reducido de 35 a 32
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Icono del paradero
+                  Container(
+                    width: markerSize,
+                    height: markerSize,
+                    decoration: BoxDecoration(
+                      color: markerColor,
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                        color: isCurrent ? Colors.orange : Colors.white, 
+                        width: isCurrent ? 3 : 2
                       ),
-                      child: Icon(
-                        markerIcon,
-                        color: Colors.white,
-                        size: isCurrent ? 30 : (isFirst || isLast ? 24 : 10),
+                      boxShadow: [
+                        BoxShadow(
+                          color: markerColor.withValues(alpha: isCurrent ? 0.8 : 0.5),
+                          blurRadius: isCurrent ? 12 : 6,
+                          spreadRadius: isCurrent ? 4 : 2,
+                        ),
+                      ],
+                    ),
+                    child: Icon(
+                      markerIcon,
+                      color: Colors.white,
+                      size: isCurrent ? 30 : (isFirst || isLast ? 24 : 9), // Reducido de 10 a 9
+                    ),
+                  ),
+                  // Código del paradero (solo para intermedios, con tamaño reducido)
+                  if (!isFirst && !isLast && stop.code != null)
+                    Container(
+                      margin: const EdgeInsets.only(top: 1), // Reducido de 2 a 1
+                      padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 1), // Reducido padding
+                      decoration: BoxDecoration(
+                        color: isCurrent ? const Color(0xFFFFC107) : Colors.white,
+                        borderRadius: BorderRadius.circular(2), // Reducido de 3 a 2
+                        border: Border.all(
+                          color: isCurrent ? Colors.orange : const Color(0xFF2196F3), 
+                          width: isCurrent ? 2 : 1
+                        ),
+                      ),
+                      child: Text(
+                        stop.code!,
+                        style: TextStyle(
+                          fontSize: isCurrent ? 9 : 7, // Reducido de 10:8 a 9:7
+                          fontWeight: FontWeight.bold,
+                          color: isCurrent ? Colors.orange.shade900 : const Color(0xFF2196F3),
+                        ),
                       ),
                     ),
-                    // Código del paradero (solo para intermedios)
-                    if (!isFirst && !isLast && stop.code != null)
-                      Container(
-                        margin: const EdgeInsets.only(top: 2),
-                        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-                        decoration: BoxDecoration(
-                          color: isCurrent ? const Color(0xFFFFC107) : Colors.white,
-                          borderRadius: BorderRadius.circular(3),
-                          border: Border.all(
-                            color: isCurrent ? Colors.orange : const Color(0xFF2196F3), 
-                            width: isCurrent ? 2 : 1
-                          ),
-                        ),
-                        child: Text(
-                          stop.code!,
-                          style: TextStyle(
-                            fontSize: isCurrent ? 10 : 8,
-                            fontWeight: FontWeight.bold,
-                            color: isCurrent ? Colors.orange.shade900 : const Color(0xFF2196F3),
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
+                ],
               ),
-            );
-          }
-          _log(
-            '🗺️ [MARKERS] Re-creados ${stops.length} marcadores de paradas de bus',
+            ),
           );
         }
-      } catch (e) {
-        _log('⚠️ [MARKERS] Error obteniendo paradas de bus: $e');
+        final visibleCount = isRidingBus ? stops.length : 2; // Solo origen y destino antes de subir
+        print('🗺️ [MARKERS] Creados $visibleCount marcadores de paraderos (${stops.length} paradas totales)');
+        print('🗺️ [MARKERS] Total markers hasta ahora: ${newMarkers.length}');
+        _log('🗺️ [MARKERS] Creados $visibleCount marcadores de paraderos (${stops.length} paradas totales)');
+        _log('🗺️ [MARKERS] Total markers hasta ahora: ${newMarkers.length}');
       }
+    } catch (e) {
+      print('⚠️ [MARKERS] No hay leg de bus en este itinerario: $e');
+      _log('⚠️ [MARKERS] No hay leg de bus en este itinerario: $e');
     }
 
     // Marcador del paso actual (paradero o punto de acción)
     // SOLO si NO es ride_bus (porque ya están los marcadores de paradas)
     if (currentStep?.location != null && currentStep!.type != 'ride_bus') {
+      print('🎯 [MARKERS] Creando marcador del paso actual: ${currentStep.type} en ${currentStep.location}');
       final Widget markerWidget;
 
       if (currentStep.type == 'walk' || currentStep.type == 'wait_bus') {
+        print('🚏 [MARKERS] Creando marcador de paradero (tipo: ${currentStep.type})');
         // Icono de paradero de bus
         markerWidget = Container(
           width: 40,
@@ -2805,6 +2874,7 @@ class _MapScreenState extends State<MapScreen> {
     // Marcador del destino final (siempre visible)
     final lastStep = navigation.steps.last;
     if (lastStep.location != null) {
+      print('🏁 [MARKERS] Creando marcador del destino final en ${lastStep.location}');
       newMarkers.add(
         Marker(
           point: lastStep.location!,
@@ -2828,6 +2898,11 @@ class _MapScreenState extends State<MapScreen> {
     }
 
     // Actualizar marcadores
+    print('🗺️ [MARKERS] ═══════════════════════════════════════════════════════');
+    print('🗺️ [MARKERS] TOTAL DE MARCADORES CREADOS: ${newMarkers.length}');
+    print('🗺️ [MARKERS] Paso actual: ${currentStep?.type}');
+    print('🗺️ [MARKERS] ═══════════════════════════════════════════════════════');
+    _log('🗺️ [MARKERS] TOTAL DE MARCADORES CREADOS: ${newMarkers.length}');
     _markers = newMarkers;
   }
 
@@ -2991,6 +3066,12 @@ class _MapScreenState extends State<MapScreen> {
 
       TtsService.instance.speak(message);
       _announce('Ruta calculada exitosamente');
+      
+      // Vibración de confirmación al calcular ruta
+      final hasVibrator = await Vibration.hasVibrator();
+      if (hasVibrator == true) {
+        Vibration.vibrate(duration: 200);
+      }
     } catch (e) {
       if (e is ApiException && e.isNetworkError) {
         _showWarningNotification(
@@ -3008,6 +3089,16 @@ class _MapScreenState extends State<MapScreen> {
         'Error calculando ruta. Verifique la conexión con el servidor',
       );
       _showErrorNotification('No se pudo calcular la ruta: ${e.toString()}');
+      
+      // Vibración de error (patrón largo-corto-largo)
+      final hasVibrator = await Vibration.hasVibrator();
+      if (hasVibrator == true) {
+        Vibration.vibrate(duration: 300);
+        await Future.delayed(const Duration(milliseconds: 200));
+        Vibration.vibrate(duration: 100);
+        await Future.delayed(const Duration(milliseconds: 200));
+        Vibration.vibrate(duration: 300);
+      }
     }
   }
 
@@ -3741,6 +3832,248 @@ class _MapScreenState extends State<MapScreen> {
                 ),
               ],
             ),
+          ),
+        ),
+      );
+    }
+    
+    // PANEL ESPECIAL para ride_bus: Muestra progreso del viaje en bus
+    if (currentStep?.type == 'ride_bus' || currentStep?.type == 'bus') {
+      final busRoute = currentStep.busRoute ?? '';
+      final stopName = currentStep.stopName ?? 'Destino';
+      final totalStops = currentStep.totalStops ?? 0;
+      final currentStopIndex = _currentSimulatedBusStopIndex >= 0 ? _currentSimulatedBusStopIndex : 0;
+      final remainingStops = totalStops > currentStopIndex ? totalStops - currentStopIndex : 0;
+      
+      return SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Panel principal del bus con información
+              Container(
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [Color(0xFFE30613), Color(0xFFB71C1C)],
+                  ),
+                  borderRadius: BorderRadius.circular(28),
+                  boxShadow: [
+                    BoxShadow(
+                      color: const Color(0xFFE30613).withValues(alpha: 0.3),
+                      blurRadius: 20,
+                      offset: const Offset(0, 8),
+                    ),
+                  ],
+                ),
+                child: Column(
+                  children: [
+                    // Fila superior: Número del bus y destino
+                    Row(
+                      children: [
+                        // Icono y número del bus
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          child: Row(
+                            children: [
+                              const Icon(
+                                Icons.directions_bus,
+                                color: Color(0xFFE30613),
+                                size: 24,
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                busRoute,
+                                style: const TextStyle(
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.w900,
+                                  color: Color(0xFF0F172A),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        // Destino
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                'Hacia',
+                                style: TextStyle(
+                                  color: Colors.white70,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                              Text(
+                                stopName,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    // Fila inferior: Progreso de paradas
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.2),
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceAround,
+                        children: [
+                          // Parada actual
+                          Column(
+                            children: [
+                              const Text(
+                                'Parada',
+                                style: TextStyle(
+                                  color: Colors.white70,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                '${currentStopIndex + 1}',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 22,
+                                  fontWeight: FontWeight.w900,
+                                ),
+                              ),
+                            ],
+                          ),
+                          // Separador
+                          Container(
+                            width: 1,
+                            height: 30,
+                            color: Colors.white30,
+                          ),
+                          // Total de paradas
+                          Column(
+                            children: [
+                              const Text(
+                                'Total',
+                                style: TextStyle(
+                                  color: Colors.white70,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                '$totalStops',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 22,
+                                  fontWeight: FontWeight.w900,
+                                ),
+                              ),
+                            ],
+                          ),
+                          // Separador
+                          Container(
+                            width: 1,
+                            height: 30,
+                            color: Colors.white30,
+                          ),
+                          // Paradas restantes
+                          Column(
+                            children: [
+                              const Text(
+                                'Faltan',
+                                style: TextStyle(
+                                  color: Colors.white70,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                '$remainingStops',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 22,
+                                  fontWeight: FontWeight.w900,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+              // Botón de micrófono flotante
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  GestureDetector(
+                    onTap: isListening ? _stopListening : _startListening,
+                    child: Container(
+                      width: 70,
+                      height: 70,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF0F172A),
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: isListening ? const Color(0xFFEF4444) : const Color(0xFF0F172A),
+                          width: 3,
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.3),
+                            blurRadius: 15,
+                            offset: const Offset(0, 5),
+                          ),
+                        ],
+                      ),
+                      child: Icon(
+                        isListening ? Icons.mic : Icons.mic_none,
+                        color: Colors.white,
+                        size: 32,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+                  // Botón de simulación (discreto)
+                  TextButton.icon(
+                    onPressed: _simulateArrivalAtStop,
+                    icon: const Icon(Icons.bug_report, size: 16),
+                    label: Text(
+                      _getSimulationButtonLabel(),
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                    style: TextButton.styleFrom(
+                      foregroundColor: const Color(0xFF64748B),
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                    ),
+                  ),
+                ],
+              ),
+            ],
           ),
         ),
       );

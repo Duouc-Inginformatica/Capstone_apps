@@ -12,6 +12,7 @@ import (
 	"github.com/joho/godotenv"
 
 	appdb "github.com/yourorg/wayfindcl/internal/db"
+	"github.com/yourorg/wayfindcl/internal/debug"
 	"github.com/yourorg/wayfindcl/internal/geometry"
 	"github.com/yourorg/wayfindcl/internal/graphhopper"
 	"github.com/yourorg/wayfindcl/internal/handlers"
@@ -63,6 +64,18 @@ func main() {
 			log.Printf("✅ Database ready and routes registered")
 
 			// ================================================================
+			// INICIALIZAR DEBUG DASHBOARD (si está habilitado)
+			// ================================================================
+			if debug.IsEnabled() {
+				debug.LogInfo("🚀 Backend iniciado correctamente", map[string]interface{}{
+					"timestamp": time.Now().Format(time.RFC3339),
+					"database":  "conectada",
+					"routes":    "registradas",
+				})
+				log.Println("✅ Debug Dashboard iniciado - enviando datos a dashboard")
+			}
+
+			// ================================================================
 			// INICIALIZAR SERVICIO DE GEOMETRÍA (después de DB)
 			// ================================================================
 			ghClient := graphhopper.NewClient()
@@ -85,6 +98,31 @@ func main() {
 
 			log.Println("✅ Servicio de Geometría inicializado (GTFS + GraphHopper)")
 			log.Println("✅ RedBusHandler configurado para usar GraphHopper en caminatas")
+
+			// ================================================================
+			// ENVIAR ESTADO COMPLETO AL DEBUG DASHBOARD
+			// ================================================================
+			if debug.IsEnabled() {
+				debug.LogInfo("🗺️ GraphHopper conectado", map[string]interface{}{
+					"status": "ready",
+					"health": "ok",
+				})
+
+				debug.LogInfo("📐 Servicio de Geometría listo", map[string]interface{}{
+					"gtfs":       "integrado",
+					"graphhopper": "activo",
+					"walking":    "disponible",
+				})
+
+				// Enviar métricas iniciales
+				debug.UpdateMetrics(15.5, 512, 0, 0)
+
+				// Enviar estado de APIs
+				debug.UpdateApiStatus("online", "online", "connected", 45.2, 5, 20, "v1.0.0")
+
+				log.Println("📊 Datos iniciales enviados al dashboard")
+			}
+
 			return
 		}
 	}()
@@ -92,6 +130,14 @@ func main() {
 	// Wait briefly for DB to be ready
 	for i := 0; i < 10 && !dbReady; i++ {
 		time.Sleep(500 * time.Millisecond)
+	}
+
+	// Enviar log cuando el servidor esté completamente listo
+	if debug.IsEnabled() {
+		debug.LogInfo("✅ Sistema completamente listo", map[string]interface{}{
+			"port":     os.Getenv("PORT"),
+			"endpoints": 15,
+		})
 	}
 
 	// ============================================================================

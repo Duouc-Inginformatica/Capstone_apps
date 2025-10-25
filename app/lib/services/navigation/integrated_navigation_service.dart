@@ -1360,7 +1360,27 @@ Te iré guiando paso a paso.
 
       if (!_activeNavigation!.isComplete && fullAnnouncement.isNotEmpty) {
         final nextStep = _activeNavigation!.currentStep!;
-        fullAnnouncement += ' Ahora, ${nextStep.instruction}';
+        
+        // Generar instrucción apropiada según el tipo y posición del paso
+        String nextInstruction = '';
+        if (nextStep.type == 'walk') {
+          // Detectar si es el último paso antes del destino final
+          final currentIndex = _activeNavigation!.currentStepIndex;
+          final isLastStep = currentIndex >= _activeNavigation!.steps.length - 1;
+          
+          if (isLastStep) {
+            // Último paso - hacia el destino
+            nextInstruction = 'Dirígete caminando hacia tu destino, ${nextStep.stopName}';
+          } else {
+            // Paso intermedio - hacia el paradero
+            nextInstruction = 'Dirígete caminando hacia el paradero ${nextStep.stopName}';
+          }
+        } else {
+          // Para otros tipos, usar la instrucción original
+          nextInstruction = nextStep.instruction;
+        }
+        
+        fullAnnouncement += ' Ahora, $nextInstruction';
       }
 
       if (fullAnnouncement.isNotEmpty) {

@@ -1150,15 +1150,19 @@ func (s *Scraper) parseItineraryPageWithStops(html string, stopCodes []string, o
 	log.Printf("🔍 [DEBUG-ITINERARIO] Destino request: (%.6f, %.6f)", destLat, destLon)
 
 	// 🔍 DEBUG: Mostrar geometría de cada pierna
+	log.Printf("🔍 [DEBUG] Total de legs en itinerario: %d", len(itinerary.Legs))
 	for i, leg := range itinerary.Legs {
-		log.Printf("🔍 [DEBUG-LEG-%d] Tipo:%s Mode:%s Puntos:%d From:%s To:%s",
-			i+1, leg.Type, leg.Mode, len(leg.Geometry), leg.From, leg.To)
+		log.Printf("🔍 [DEBUG-LEG-%d] Tipo:%s Mode:%s RouteNumber:%s Puntos:%d From:%s To:%s",
+			i+1, leg.Type, leg.Mode, leg.RouteNumber, len(leg.Geometry), leg.From, leg.To)
 		if len(leg.Geometry) > 0 {
 			log.Printf("   Primer punto: [%.6f, %.6f]", leg.Geometry[0][1], leg.Geometry[0][0])
 			log.Printf("   Último punto: [%.6f, %.6f]",
 				leg.Geometry[len(leg.Geometry)-1][1], leg.Geometry[len(leg.Geometry)-1][0])
 		} else {
 			log.Printf("   ⚠️  SIN GEOMETRÍA")
+		}
+		if leg.Type == "bus" && leg.Stops != nil {
+			log.Printf("   🚏 Paradas en este leg: %d", len(leg.Stops))
 		}
 	}
 
@@ -1369,6 +1373,8 @@ func (s *Scraper) buildItineraryFromStops(routeNumber string, duration int, stop
 			if len(instructions) == 0 {
 				instructions = []string{walkInstruction}
 			}
+			// Filtrar "¡Fin del recorrido!" porque NO es el destino final, solo el paradero
+			instructions = filterEndOfRouteInstruction(instructions)
 
 			walkLeg = TripLeg{
 				Type:        "walk",
@@ -2651,6 +2657,26 @@ func (s *Scraper) generateFallbackOptions(originLat, originLon, destLat, destLon
 		Destination: Coordinate{Latitude: destLat, Longitude: destLon},
 		Options:     []RouteItinerary{*itinerary},
 	}
+}
+
+// filterEndOfRouteInstruction elimina la última instrucción si es "¡Fin del recorrido!"
+// Esto se usa para caminatas hacia el paradero, no hacia el destino final
+func filterEndOfRouteInstruction(instructions []string) []string {
+	if len(instructions) == 0 {
+		return instructions
+	}
+	
+	lastInstruction := instructions[len(instructions)-1]
+	// Detectar variaciones de "fin del recorrido"
+	if strings.Contains(lastInstruction, "Fin del recorrido") ||
+		strings.Contains(lastInstruction, "fin del recorrido") ||
+		strings.Contains(lastInstruction, "arrive") ||
+		strings.Contains(lastInstruction, "Arrive") {
+		// Eliminar la última instrucción
+		return instructions[:len(instructions)-1]
+	}
+	
+	return instructions
 }
 
 // calculateDistance calcula la distancia en metros entre dos coordenadas usando Haversine

@@ -546,7 +546,7 @@ class _DebugSetupScreenState extends State<DebugSetupScreen> {
                   child: OutlinedButton.icon(
                     onPressed: _goToLogin,
                     icon: const Icon(Icons.login),
-                    label: const Text('Volver al login'),
+                    label: const Text('iniciar aplicacion'),
                     style: OutlinedButton.styleFrom(
                       foregroundColor: const Color(0xFF0F172A),
                       side: const BorderSide(color: Color(0xFFCBD5F5)),

@@ -4,6 +4,8 @@ import (
 	"database/sql"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/websocket/v2"
+	"github.com/yourorg/wayfindcl/internal/debug"
 	"github.com/yourorg/wayfindcl/internal/geometry"
 	"github.com/yourorg/wayfindcl/internal/handlers"
 )
@@ -223,6 +225,31 @@ func Register(app *fiber.App, db *sql.DB) {
 	// ============================================================================
 	// NOTA: gtfs/sync se maneja automáticamente en la inicialización del servidor
 	// No es necesario exponerlo como endpoint público
+	
+	// ============================================================================
+	// DEBUG DASHBOARD WEBSOCKET (Solo si LUNCH_WEB_DEBUG_DASHBOARD=true)
+	// ============================================================================
+	if debug.IsEnabled() {
+		// Endpoints para recibir logs y eventos desde la app Flutter
+		debugApi := api.Group("/debug")
+		debugApi.Post("/log", handlers.ReceiveFlutterLog)
+		debugApi.Post("/event", handlers.ReceiveFlutterEvent)
+		debugApi.Post("/error", handlers.ReceiveFlutterError)
+		debugApi.Post("/metrics", handlers.ReceiveFlutterMetrics)
+		debugApi.Post("/navigation", handlers.ReceiveNavigationEvent)
+		
+		// WebSocket para el dashboard web
+		app.Use("/ws/debug", func(c *fiber.Ctx) error {
+			if websocket.IsWebSocketUpgrade(c) {
+				return c.Next()
+			}
+			return fiber.ErrUpgradeRequired
+		})
+		
+		app.Get("/ws/debug", websocket.New(func(c *websocket.Conn) {
+			debug.HandleWebSocketFiber(c)
+		}))
+	}
 }
 
 // ConfigureRedBusGeometry configura el servicio de geometría para RedBusHandler
