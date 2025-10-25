@@ -25,42 +25,26 @@ func IsEnabled() bool {
 
 // LogDebug envía un log de nivel debug al dashboard
 func LogDebug(message string, metadata map[string]interface{}) {
-	if !enabled {
-		return
-	}
 	SendLog("backend", "debug", message, metadata)
 }
 
 // LogInfo envía un log de nivel info al dashboard
 func LogInfo(message string, metadata map[string]interface{}) {
-	if !enabled {
-		return
-	}
 	SendLog("backend", "info", message, metadata)
 }
 
 // LogWarn envía un log de nivel warn al dashboard
 func LogWarn(message string, metadata map[string]interface{}) {
-	if !enabled {
-		return
-	}
 	SendLog("backend", "warn", message, metadata)
 }
 
 // LogError envía un log de nivel error al dashboard
 func LogError(message string, metadata map[string]interface{}) {
-	if !enabled {
-		return
-	}
 	SendLog("backend", "error", message, metadata)
 }
 
 // UpdateMetrics envía métricas actualizadas al dashboard
 func UpdateMetrics(cpuUsage, memoryUsage float64, activeUsers, apiRequests int) {
-	if !enabled {
-		return
-	}
-
 	metrics := []Metric{
 		{Name: "CPU Usage", Value: cpuUsage, Unit: "%", Trend: getTrend(cpuUsage, 70)},
 		{Name: "Memory", Value: memoryUsage, Unit: "MB", Trend: getTrend(memoryUsage, 1024)},

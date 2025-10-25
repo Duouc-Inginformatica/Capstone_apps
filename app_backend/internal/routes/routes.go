@@ -43,9 +43,17 @@ func Register(app *fiber.App, db *sql.DB) {
 	notificationPrefsHandler := handlers.NewNotificationPreferencesHandler(db)
 	redBusHandler := handlers.NewRedBusHandler(db)
 	busArrivalsHandler := handlers.NewBusArrivalsHandler(db)
+	statsHandler := handlers.NewStatsHandler(db)
+	gtfsStatsHandler := handlers.NewGTFSStatsHandler(db)
+	dbStatsHandler := handlers.NewDatabaseStatsHandler(db)
+	statusHandler := handlers.NewStatusHandler(db)
+	metricsHandler := handlers.NewMetricsHandler(db)
 	
 	// Guardar referencia global para configuración posterior
 	redBusHandlerInstance = redBusHandler
+
+	// Status endpoint para el dashboard
+	api.Get("/status", statusHandler.GetStatus)
 
 	// ============================================================================
 	// GEOMETRY ENDPOINTS (CENTRALIZADOS - Reemplazan routing antiguo)
@@ -221,35 +229,67 @@ func Register(app *fiber.App, db *sql.DB) {
 	prefs.Put("/notifications", notificationPrefsHandler.UpdateNotificationPreferences)
 
 	// ============================================================================
+	// STATISTICS (Estadísticas y métricas del sistema)
+	// ============================================================================
+	stats := api.Group("/stats")
+	stats.Get("/system", statsHandler.GetSystemStats)
+	// GET /api/stats/system - Estadísticas generales del sistema (CPU, memoria, DB, etc.)
+	
+	stats.Get("/routes", statsHandler.GetRouteStats)
+	// GET /api/stats/routes?days=7 - Estadísticas de rutas solicitadas
+	
+	stats.Get("/users", statsHandler.GetUserStats)
+	// GET /api/stats/users - Estadísticas de usuarios (totales, activos, crecimiento)
+	
+	stats.Get("/buses", statsHandler.GetBusStats)
+	// GET /api/stats/buses?days=7 - Estadísticas de transporte público
+	
+	stats.Get("/gtfs", gtfsStatsHandler.GetGTFSStats)
+	// GET /api/stats/gtfs - Estadísticas completas del sistema GTFS
+	
+	stats.Get("/gtfs/routes", gtfsStatsHandler.GetTopRoutes)
+	// GET /api/stats/gtfs/routes?limit=10 - Top rutas del GTFS
+	
+	stats.Get("/database", dbStatsHandler.GetDatabaseReport)
+	// GET /api/stats/database - Reporte completo de la base de datos
+	
+	stats.Get("/scraper", dbStatsHandler.GetScraperMetrics)
+	// GET /api/stats/scraper - Métricas de scraping de Moovit
+	
+	stats.Get("/graphhopper", dbStatsHandler.GetGraphHopperMetrics)
+	// GET /api/stats/graphhopper - Métricas del motor de routing GraphHopper
+	
+	stats.Get("/metrics", metricsHandler.GetMetrics)
+	// GET /api/stats/metrics - Métricas en tiempo real del sistema (CPU, memoria, usuarios, requests)
+
+	// ============================================================================
 	// INTERNAL/ADMIN ENDPOINTS (No expuestos al frontend)
 	// ============================================================================
 	// NOTA: gtfs/sync se maneja automáticamente en la inicialización del servidor
 	// No es necesario exponerlo como endpoint público
 	
 	// ============================================================================
-	// DEBUG DASHBOARD WEBSOCKET (Solo si LUNCH_WEB_DEBUG_DASHBOARD=true)
+	// DEBUG DASHBOARD WEBSOCKET
 	// ============================================================================
-	if debug.IsEnabled() {
-		// Endpoints para recibir logs y eventos desde la app Flutter
-		debugApi := api.Group("/debug")
-		debugApi.Post("/log", handlers.ReceiveFlutterLog)
-		debugApi.Post("/event", handlers.ReceiveFlutterEvent)
-		debugApi.Post("/error", handlers.ReceiveFlutterError)
-		debugApi.Post("/metrics", handlers.ReceiveFlutterMetrics)
-		debugApi.Post("/navigation", handlers.ReceiveNavigationEvent)
-		
-		// WebSocket para el dashboard web
-		app.Use("/ws/debug", func(c *fiber.Ctx) error {
-			if websocket.IsWebSocketUpgrade(c) {
-				return c.Next()
-			}
-			return fiber.ErrUpgradeRequired
-		})
-		
-		app.Get("/ws/debug", websocket.New(func(c *websocket.Conn) {
-			debug.HandleWebSocketFiber(c)
-		}))
-	}
+	// Endpoints para recibir logs y eventos desde la app Flutter
+	debugApi := api.Group("/debug")
+	debugApi.Post("/log", handlers.ReceiveFlutterLog)
+	debugApi.Post("/event", handlers.ReceiveFlutterEvent)
+	debugApi.Post("/error", handlers.ReceiveFlutterError)
+	debugApi.Post("/metrics", handlers.ReceiveFlutterMetrics)
+	debugApi.Post("/navigation", handlers.ReceiveNavigationEvent)
+	
+	// WebSocket para el dashboard web (siempre disponible)
+	app.Use("/ws/debug", func(c *fiber.Ctx) error {
+		if websocket.IsWebSocketUpgrade(c) {
+			return c.Next()
+		}
+		return fiber.ErrUpgradeRequired
+	})
+	
+	app.Get("/ws/debug", websocket.New(func(c *websocket.Conn) {
+		debug.HandleWebSocketFiber(c)
+	}))
 }
 
 // ConfigureRedBusGeometry configura el servicio de geometría para RedBusHandler

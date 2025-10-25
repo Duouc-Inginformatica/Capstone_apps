@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/joho/godotenv"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/yourorg/wayfindcl/internal/geometry"
 	"github.com/yourorg/wayfindcl/internal/graphhopper"
 	"github.com/yourorg/wayfindcl/internal/handlers"
+	"github.com/yourorg/wayfindcl/internal/middleware"
 	"github.com/yourorg/wayfindcl/internal/routes"
 )
 
@@ -27,7 +29,18 @@ func main() {
 		WriteTimeout: 180 * time.Second, // 3 minutos para respuestas grandes
 		IdleTimeout:  240 * time.Second, // 4 minutos de timeout idle
 	})
+	
+	// CORS para permitir dashboard
+	app.Use(cors.New(cors.Config{
+		AllowOrigins: "http://localhost:3000,http://localhost:5173",
+		AllowHeaders: "Origin, Content-Type, Accept, Authorization",
+		AllowMethods: "GET, POST, PUT, DELETE, OPTIONS",
+	}))
+	
 	app.Use(logger.New())
+	
+	// Dashboard logger middleware para enviar logs en tiempo real
+	app.Use(middleware.DashboardLogger())
 
 	// ============================================================================
 	// INICIAR GRAPHHOPPER COMO SUBPROCESO
