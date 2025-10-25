@@ -652,14 +652,6 @@ class IntegratedNavigationService {
       _log('🏗️ [PARSE] Construyendo RedBusItinerary...');
       itinerary = RedBusItinerary.fromJson(routeData);
       _log('✅ [PARSE] Itinerario construido exitosamente');
-      // El backend retorna RouteOptions con un array "options"
-      // Tomamos la primera opción
-      if (data['options'] == null || (data['options'] as List).isEmpty) {
-        throw Exception('No se encontraron opciones de ruta');
-      }
-      
-      final firstOption = (data['options'] as List)[0] as Map<String, dynamic>;
-      itinerary = RedBusItinerary.fromJson(firstOption);
     }
 
     _log('📋 Itinerario obtenido: ${itinerary.summary}');
