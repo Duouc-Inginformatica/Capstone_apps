@@ -17,15 +17,11 @@ import '../services/backend/bus_arrivals_service.dart';
 import '../services/navigation/route_tracking_service.dart';
 import '../services/navigation/transit_boarding_service.dart';
 import '../services/navigation/integrated_navigation_service.dart';
-import '../services/device/npu_detector_service.dart';
 import '../services/debug_logger.dart';
 import '../services/ui/timer_manager.dart'; // Gestor de timers centralizado
 import '../services/polyline_compression.dart'; // Compresión Douglas-Peucker
 import '../services/geometry_cache_service.dart'; // Caché offline de geometrías
 import '../widgets/map/accessible_notification.dart';
-import '../widgets/navigation_state_panels.dart'; // NUEVO - Paneles de estado de navegación
-import 'settings_screen.dart';
-import '../widgets/bottom_nav.dart';
 
 class MapScreen extends StatefulWidget {
   const MapScreen({super.key});
@@ -52,18 +48,11 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
   // ✅ _resultDebounce gestionado por TimerManagerMixin
   String _pendingWords = '';
 
-  bool _npuAvailable = false;
-  bool _npuLoading = false;
-  bool _npuChecked = false;
-
   // Reconocimiento de voz simplificado
   bool _isProcessingCommand = false;
   // ✅ Timers gestionados por TimerManagerMixin: speechTimeout, confirmation, feedback, walkSimulation
   final List<String> _recognitionHistory = [];
   static const Duration _speechTimeout = Duration(seconds: 5);
-
-  // Trip state - solo mostrar información adicional cuando hay viaje activo
-  bool _hasActiveTrip = false;
 
   // CAP-9: Confirmación de destino
   String? _pendingConfirmationDestination;
@@ -105,14 +94,11 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
   // en IntegratedNavigationService._onLocationUpdate()
   // ============================================================================
   bool _simulationDeviationEnabled = true; // Habilitar desviaciones aleatorias en simulación
-  int _simulationDeviationStep = -1; // En qué punto índice se desviará (simulación)
   List<LatLng>? _simulationDeviationRoute; // Ruta de desviación temporal (simulación)
-  bool _isCurrentlyDeviated = false; // Si está actualmente desviado (simulación)
 
   // ============================================================================
   // TRACKING DE LLEGADAS EN TIEMPO REAL
   // ============================================================================
-  StopArrivals? _currentArrivals; // Últimas llegadas recibidas
   // NOTA: _needsRouteRecalculation se escribe pero no se lee actualmente
   // Reservado para implementación futura de recálculo automático de rutas
   // bool _needsRouteRecalculation = false;
@@ -124,19 +110,9 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
 
   // Map and location services
   final MapController _mapController = MapController();
-  StreamSubscription<Position>? _positionStreamSubscription; // ✅ Para cancelar GPS stream
-  bool _isMapReady = false;
-  double? _pendingRotation;
-  LatLng? _pendingCenter;
-  double? _pendingZoom;
   Position? _currentPosition;
   List<Marker> _markers = [];
   List<Polyline> _polylines = [];
-  
-  // NOTA: Variables de compass removidas (causaban bugs en el mapa)
-
-  // Default location (Santiago, Chile)
-  static const LatLng _initialPosition = LatLng(-33.4489, -70.6693);
 
   double _overlayBaseOffset(BuildContext context, {double min = 240}) {
     final media = MediaQuery.of(context);
@@ -161,7 +137,6 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
     DebugLogger.info('💾 Caché de geometrías + Compresión Douglas-Peucker activos', context: 'MapScreen');
     
     unawaited(TtsService.instance.setActiveContext('map_navigation'));
-    _initializeNpuDetection();
     // Usar post-frame callback para evitar bloquear la construcción del widget
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _initServices();
@@ -192,37 +167,10 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
     RouteTrackingService.instance.onDestinationReached = () {
       if (!mounted) return;
       setState(() {
-        _hasActiveTrip = false;
         _isTrackingRoute = false;
       });
       _showSuccessNotification('¡Destino alcanzado!', withVibration: true);
     };
-  }
-
-  Future<void> _initializeNpuDetection() async {
-    setState(() {
-      _npuLoading = true;
-      _npuChecked = false;
-    });
-
-    try {
-      final capabilities = await NpuDetectorService.instance
-          .detectCapabilities();
-      if (!mounted) return;
-      setState(() {
-        _npuAvailable = capabilities.hasNnapi;
-        _npuLoading = false;
-        _npuChecked = true;
-      });
-    } catch (e, st) {
-      if (!mounted) return;
-      _log('⚠️ [MAP] Error detectando NPU: $e', error: e, stackTrace: st);
-      setState(() {
-        _npuAvailable = false;
-        _npuLoading = false;
-        _npuChecked = true;
-      });
-    }
   }
 
   /// CAP-29: Configurar callbacks de abordaje
@@ -646,7 +594,7 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
                 ),
               ),
             ],
-          },
+          ],
         ),
       ),
     );
@@ -1012,10 +960,6 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
         return;
       }
       
-      // ✅ Planificar desviación aleatoria (40% probabilidad)
-      _resetSimulationDeviation();
-      _planSimulationDeviation(geometry);
-      
       // ✅ Cancelar simulación previa usando TimerManagerMixin
       cancelTimer('walkSimulation');
       
@@ -1047,9 +991,6 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
         if (isAtEnd) {
           cancelTimer('walkSimulation');
           _log('✅ [SIMULAR] Caminata completada - Llegamos al destino');
-          
-          // Resetear desviación
-          _resetSimulationDeviation();
           
           // Desactivar modo simulación
           setState(() {
@@ -1137,8 +1078,10 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
         // SIMULACIÓN CONTINUA - Moverse al siguiente punto
         // ═══════════════════════════════════════════════════════════════
         
-        // ✅ Obtener siguiente punto (con lógica de desviación incluida)
-        final nextPoint = _getNextSimulationPoint(geometry, currentPointIndex);
+        // Obtener siguiente punto de la geometría
+        final nextPoint = currentPointIndex < geometry.length 
+            ? geometry[currentPointIndex] 
+            : geometry.last;
         
         // Mover GPS al siguiente punto (SIN mover el mapa para permitir interacción)
         _updateSimulatedGPS(nextPoint, moveMap: false);
@@ -1166,9 +1109,8 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
           _updateNavigationMarkers(currentStep, activeNav);
         });
         
-        // Anunciar instrucción cuando se alcanza un nuevo segmento (solo si NO está desviado)
-        if (!_isCurrentlyDeviated && 
-            currentStep.streetInstructions != null && 
+        // Anunciar instrucción cuando se alcanza un nuevo segmento
+        if (currentStep.streetInstructions != null && 
             currentStep.streetInstructions!.isNotEmpty) {
           final instructionIndex = (currentPointIndex / pointsPerInstruction).floor()
               .clamp(0, currentStep.streetInstructions!.length - 1);
@@ -1675,7 +1617,7 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
 
   /// Ajusta el zoom del mapa para mostrar toda la ruta proporcionada
   void _fitBoundsToRoute(List<LatLng> routePoints) {
-    if (routePoints.isEmpty || !_isMapReady) return;
+    if (routePoints.isEmpty) return;
 
     // Calcular límites de la ruta
     double minLat = routePoints.first.latitude;
@@ -1716,13 +1658,7 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
   }
 
   void _moveMap(LatLng target, double zoom) {
-    // Movimiento inmediato (solo se usa para carga inicial del mapa)
-    if (_isMapReady) {
-      _mapController.move(target, zoom);
-    } else {
-      _pendingCenter = target;
-      _pendingZoom = zoom;
-    }
+    _mapController.move(target, zoom);
   }
 
   void _triggerVibration() async {
@@ -1782,8 +1718,8 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
       distanceFilter: 10, // Optimizado: Actualizar cada 10 metros (reduce carga)
     );
 
-    // ✅ MEMORY LEAK FIXED: Guardar subscription para cancelarla en dispose
-    _positionStreamSubscription = Geolocator.getPositionStream(
+    // Escuchar cambios de posición GPS
+    Geolocator.getPositionStream(
       locationSettings: locationSettings,
     ).listen(
       (Position position) {
@@ -2532,7 +2468,6 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
     // Activar viaje pero NO mostrar paradas automaticamente
     // (solo mostrar la ruta del bus en el mapa)
     setState(() {
-      _hasActiveTrip = true;
       _isCalculatingRoute = true; // 🔄 Mostrar indicador de carga
       // NO activar _showStops - solo mostrar la ruta del bus
     });
@@ -2634,7 +2569,7 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
         if (!mounted) return;
 
         setState(() {
-          _hasActiveTrip = true;
+
 
           // Usar geometría cacheada en lugar de llamar al servicio
           final stepGeometry = _getCurrentStepGeometryCached();
@@ -2721,7 +2656,7 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
         _log('🎉 ¡Destino alcanzado!');
 
         setState(() {
-          _hasActiveTrip = false;
+
           _isTrackingRoute = false;
         });
 
@@ -2783,7 +2718,7 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
         if (!mounted) return;
         
         setState(() {
-          _currentArrivals = arrivals;
+
         });
         
         _log('🔄 [ARRIVALS] UI actualizada: ${arrivals.arrivals.length} buses');
@@ -2876,7 +2811,7 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
             
             setState(() {
               // _needsRouteRecalculation = false;
-              _hasActiveTrip = false;
+
             });
           }
         }
@@ -2884,7 +2819,7 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
 
       // Dibujar mapa inicial con geometría del primer paso
       setState(() {
-        _hasActiveTrip = true;
+
 
         _log('🗺️ [MAP] Llamando _updateNavigationMapState...');
 
@@ -3437,7 +3372,7 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
         normalized.contains('detener navegación')) {
       IntegratedNavigationService.instance.cancelNavigation();
       setState(() {
-        _hasActiveTrip = false;
+
         _isTrackingRoute = false;
         _polylines.clear();
         _markers.clear();
@@ -3845,6 +3780,15 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
         _log('❌ [CACHE] Error cacheando geometrías de navegación: $e', error: e, stackTrace: st);
       }
     });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return const Scaffold(
+      body: Center(
+        child: Text('Mapa en construcción'),
+      ),
+    );
   }
 }
 

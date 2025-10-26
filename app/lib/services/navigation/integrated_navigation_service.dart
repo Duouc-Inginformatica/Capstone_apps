@@ -496,7 +496,6 @@ class IntegratedNavigationService {
   static const int maxPositionHistory = 5;
 
   // Control de anuncios duplicados
-  int? _lastProximityAnnouncedStepIndex;
   int? _lastArrivalAnnouncedStepIndex;
 
   // Control de anuncios periódicos de progreso
@@ -695,7 +694,6 @@ class IntegratedNavigationService {
     _activeNavigation!.start();
 
     // 7. Reiniciar control de anuncios
-    _lastProximityAnnouncedStepIndex = null;
     _lastArrivalAnnouncedStepIndex = null;
     _announcedStops.clear(); // Limpiar paradas anunciadas
     _currentBusStopIndex = 0; // Resetear índice de parada
@@ -1182,7 +1180,7 @@ Te iré guiando paso a paso.
     }
 
     // Si está en un paso de bus, detectar si está esperando o ya subió
-    if (currentStep.type == 'bus') {
+    if (currentStep.type == 'ride_bus' || currentStep.type == 'bus') {
       // Si está cerca del paradero de inicio Y no se ha movido mucho, está esperando
       final busLegs = _activeNavigation!.itinerary.legs
           .where((leg) => leg.type == 'bus')
@@ -1247,12 +1245,6 @@ Te iré guiando paso a paso.
 
   /// Anuncia proximidad al objetivo
   void _announceProximity(NavigationStep step) {
-    // Evitar anuncios duplicados para el mismo paso
-    if (_lastProximityAnnouncedStepIndex ==
-        _activeNavigation?.currentStepIndex) {
-      return;
-    }
-
     String message = '';
 
     switch (step.type) {
@@ -1260,7 +1252,9 @@ Te iré guiando paso a paso.
         message = 'Te estás acercando al paradero ${step.stopName}';
         break;
       case 'bus':
-        message = 'Próxima parada: ${step.stopName}';
+      case 'ride_bus':
+        final stopName = step.stopName ?? 'la próxima parada';
+        message = 'Próxima parada: $stopName';
         break;
       case 'arrival':
         message = 'Estás cerca de tu destino';
@@ -1269,51 +1263,46 @@ Te iré guiando paso a paso.
 
     if (message.isNotEmpty) {
       TtsService.instance.speak(message);
-      _lastProximityAnnouncedStepIndex = _activeNavigation?.currentStepIndex;
     }
   }
 
   /// Anuncia progreso periódicamente durante la navegación
   void _announceProgressIfNeeded(NavigationStep step, double distanceMeters) {
+    final isWalk = step.type == 'walk';
+    final isBus = step.type == 'bus' || step.type == 'ride_bus';
+
+    if (!isWalk && !isBus) {
+      return;
+    }
+
     final now = DateTime.now();
+    final announceInterval =
+        isWalk ? const Duration(minutes: 1) : const Duration(minutes: 2);
+    final distanceThreshold = isWalk ? 100.0 : 500.0;
 
-    // Intervalos de anuncio según tipo de paso
-    final announceInterval = step.type == 'walk'
-        ? const Duration(minutes: 1) // Cada minuto caminando
-        : const Duration(minutes: 2); // Cada 2 minutos en bus
-
-    // Intervalos de distancia para anunciar
-    final distanceThreshold = step.type == 'walk'
-        ? 100.0 // Cada 100m caminando
-        : 500.0; // Cada 500m en bus
-
-    // Verificar si es momento de anunciar
     bool shouldAnnounce = false;
 
-    // Primera vez o pasó suficiente tiempo
     if (_lastProgressAnnouncement == null ||
         now.difference(_lastProgressAnnouncement!) >= announceInterval) {
       shouldAnnounce = true;
     }
 
-    // O cambió significativamente la distancia
     if (_lastAnnouncedDistance != null &&
         (_lastAnnouncedDistance! - distanceMeters).abs() >= distanceThreshold) {
       shouldAnnounce = true;
     }
 
-    if (!shouldAnnounce) return;
+    if (!shouldAnnounce) {
+      return;
+    }
 
-    // Construir mensaje de progreso
     String message = '';
     final timeRemaining = _activeNavigation?.remainingTimeSeconds;
 
-    if (step.type == 'walk') {
+    if (isWalk) {
       final meters = distanceMeters.round();
-      final minutes = timeRemaining != null
-          ? (timeRemaining / 60).ceil()
-          : null;
-
+      final minutes =
+          timeRemaining != null ? (timeRemaining / 60).ceil() : null;
       if (meters > 100) {
         final simplifiedStopName = _simplifyStopNameForTTS(
           step.stopName,
@@ -1326,14 +1315,15 @@ Te iré guiando paso a paso.
         }
         message += ' para llegar al $simplifiedStopName';
       }
-    } else if (step.type == 'bus') {
+    } else if (isBus) {
       final km = (distanceMeters / 1000).toStringAsFixed(1);
+      final busLabel = step.busRoute ?? 'de la Red';
       final simplifiedStopName = _simplifyStopNameForTTS(
         step.stopName,
         isDestination: true,
       );
       message =
-          'Viajando en bus ${step.busRoute}. Faltan $km kilómetros hasta $simplifiedStopName';
+          'Viajando en bus $busLabel. Faltan $km kilómetros hasta $simplifiedStopName';
     }
 
     if (message.isNotEmpty) {
@@ -1348,80 +1338,372 @@ Te iré guiando paso a paso.
   void _handleStepArrival(NavigationStep step) {
     _navLog('✅ Llegada al paso: ${step.type}');
 
-    // Evitar anuncios duplicados para el mismo paso
-    if (_lastArrivalAnnouncedStepIndex == _activeNavigation?.currentStepIndex) {
+    if (_lastArrivalAnnouncedStepIndex ==
+        _activeNavigation?.currentStepIndex) {
       return;
     }
 
+    if (_activeNavigation == null) {
+      return;
+    }
+
+    if (step.type == 'wait_bus') {
+      _navLog('⏳ Esperando bus; la llegada se maneja con el tracking en tiempo real.');
+      return;
+    }
+
+    final currentIndex = _activeNavigation!.currentStepIndex;
+    if (currentIndex >= _activeNavigation!.steps.length) {
+      return;
+    }
+
+    _activeNavigation!.steps[currentIndex] =
+        _activeNavigation!.steps[currentIndex].copyWith(isCompleted: true);
+
     String announcement = '';
-    bool shouldAutoAdvance = true;
 
     switch (step.type) {
       case 'walk':
-        final simplifiedStopName = _simplifyStopNameForTTS(
-          step.stopName,
-          isDestination: true,
-        );
-        
-        // Verificar si el siguiente paso es un bus
-        final currentIndex = _activeNavigation!.currentStepIndex;
-        final allSteps = _activeNavigation!.steps;
-        bool hasNextBusStep = false;
-        String? busRoute;
-        int? estimatedMinutes;
-        
-        if (currentIndex < allSteps.length - 1) {
-          final nextStep = allSteps[currentIndex + 1];
-          if (nextStep.type == 'bus' || nextStep.type == 'wait_bus') {
-            hasNextBusStep = true;
-            busRoute = nextStep.busRoute;
-            
-            // NO avanzar automáticamente cuando el siguiente paso es bus
-            shouldAutoAdvance = false;
-            _navLog('⏸️ Esperando confirmación del usuario para subir al bus');
-            
-            // INICIAR TRACKING DE LLEGADAS EN TIEMPO REAL
-            final stopCode = _extractStopCode(step.stopName);
-            
-            if (stopCode != null && busRoute != null) {
-              _navLog('🚌 [ARRIVALS] Iniciando tracking: Bus $busRoute en $stopCode');
-              
-              BusArrivalsService.instance.startTracking(
-                stopCode: stopCode,
-                routeNumber: busRoute,
-                onUpdate: (arrivals) {
-                  _navLog('🔄 [ARRIVALS] Actualización: ${arrivals.arrivals.length} buses');
-                  onBusArrivalsUpdated?.call(arrivals);
-                  
+        final simplifiedStopName =
+          _simplifyStopNameForTTS(step.stopName, isDestination: true);
 
-                  // Extraer tiempo estimado del primer bus de la ruta solicitada
-                  final busArrival = arrivals.arrivals.firstWhere(
-                    (a) => a.routeNumber == busRoute,
-                    orElse: () => arrivals.arrivals.first,
-                  );
-                  estimatedMinutes = busArrival.estimatedMinutes;
-                },
-                onBusPassed: (routeNumber) {
-                  _navLog('🚨 [ARRIVALS] Bus $routeNumber ya pasó - activando recálculo');
-                  onBusMissed?.call(routeNumber);
-                },
-                onApproaching: (busArrival) {
-                  _navLog('⚠️ [ARRIVALS] Bus ${busArrival.routeNumber} llegando en ${busArrival.estimatedMinutes} min');
-                  VibrationService.instance.tripleVibration();
-                  TtsService.instance.speak('El bus ${busArrival.routeNumber} está llegando', urgent: true);
-                },
-              );
-            } else {
-              _navLog('⚠️ [ARRIVALS] No se pudo extraer stopCode o busRoute para tracking');
-            }
-          }
+      String? nextBusRoute;
+      final nextStepIndex = currentIndex + 1;
+      if (nextStepIndex < _activeNavigation!.steps.length) {
+        final nextStep = _activeNavigation!.steps[nextStepIndex];
+        if (nextStep.type == 'wait_bus' ||
+            nextStep.type == 'bus' ||
+            nextStep.type == 'ride_bus') {
+          nextBusRoute = nextStep.busRoute;
         }
-        
-        // CONSTRUIR MENSAJE FLUIDO SIN CORTES
-        if (hasNextBusStep && busRoute != null) {
-          // Mensaje con toda la información en un solo TTS
-          announcement = 'Has llegado al $simplifiedStopName. Espera el bus $busRoute';
-          if (estimatedMinutes != null && estimatedMinutes! > 0) {
-            announcement += ' que está a $estimatedMinutes ${estimatedMinutes == 1 ? "minuto" : "minutos"}';
-          }
-          announcement += '.';
+      }
+
+      final busSegment = nextBusRoute != null
+          ? 'el bus $nextBusRoute'
+          : 'tu próximo transporte';
+
+      announcement =
+          'Has llegado al $simplifiedStopName. Espera $busSegment. Te avisaré cuando se acerque.';
+
+      _announcedStops.clear();
+      _currentBusStopIndex = 0;
+
+      final stopCode = _extractStopCode(step.stopName);
+      if (stopCode != null && nextBusRoute != null) {
+        BusArrivalsService.instance.startTracking(
+          stopCode: stopCode,
+          routeNumber: nextBusRoute,
+          onUpdate: (arrivals) => onBusArrivalsUpdated?.call(arrivals),
+          onBusPassed: (routeNumber) => onBusMissed?.call(routeNumber),
+          onApproaching: (busArrival) {
+            if (_activeNavigation?.currentStep?.type != 'wait_bus') {
+              return;
+            }
+
+            final eta = busArrival.estimatedMinutes;
+            final route = busArrival.routeNumber;
+            final etaText = eta <= 1
+                ? 'está por llegar.'
+                : 'llega en $eta minutos.';
+
+            onBusDetected?.call(route);
+            VibrationService.instance.tripleVibration();
+            TtsService.instance.speak(
+              'El bus $route $etaText',
+              urgent: true,
+            );
+
+            advanceToNextStep(force: true);
+          },
+        );
+      }
+      break;
+
+    case 'ride_bus':
+    case 'bus':
+      final simplifiedStopName =
+          _simplifyStopNameForTTS(step.stopName, isDestination: true);
+      announcement =
+          'Bájate en $simplifiedStopName y sigue las indicaciones.';
+      _announcedStops.clear();
+      _currentBusStopIndex = 0;
+      break;
+
+    case 'arrival':
+      announcement = 'Has llegado a tu destino. Navegación completada.';
+      VibrationService.instance.tripleVibration();
+      onDestinationReached?.call();
+      stopNavigation(silent: true);
+      _lastArrivalAnnouncedStepIndex = currentIndex;
+      if (announcement.trim().isNotEmpty) {
+        TtsService.instance.speak(announcement.trim(), urgent: true);
+      }
+      return;
+
+    default:
+      break;
+  }
+
+  if (step.stopName != null) {
+    onArrivalAtStop?.call(step.stopName!);
+  }
+
+  _lastArrivalAnnouncedStepIndex = currentIndex;
+
+  if (announcement.trim().isNotEmpty) {
+    TtsService.instance.speak(
+      announcement.trim(),
+      urgent: step.type != 'walk',
+    );
+  }
+
+  advanceToNextStep(force: true);
+  }
+
+  // ============================================================================
+  // GETTERS PÚBLICOS
+  // ============================================================================
+
+  ActiveNavigation? get activeNavigation => _activeNavigation;
+  bool get hasActiveNavigation => _activeNavigation != null;
+  Position? get lastPosition => _lastPosition;
+  List<LatLng> get currentStepGeometry {
+    if (_activeNavigation == null || _lastPosition == null) {
+      return const <LatLng>[];
+    }
+    return _activeNavigation!.getCurrentStepGeometry(
+      LatLng(_lastPosition!.latitude, _lastPosition!.longitude),
+    );
+  }
+
+  // ============================================================================
+  // CONTROL DE NAVEGACIÓN
+  // ============================================================================
+
+  void advanceToNextStep({bool force = false}) {
+  if (_activeNavigation == null) {
+    return;
+  }
+
+  final previousStep = _activeNavigation!.currentStep;
+  if (!force &&
+      previousStep != null &&
+      previousStep.type == 'wait_bus') {
+    _navLog('⏸️ advanceToNextStep ignorado: esperando bus');
+    return;
+  }
+
+  final previousIndex = _activeNavigation!.currentStepIndex;
+  _activeNavigation!.advanceToNextStep();
+
+  _lastArrivalAnnouncedStepIndex = null;
+  _lastProgressAnnouncement = null;
+  _lastAnnouncedDistance = null;
+  _deviationCount = 0;
+  _isOffRoute = false;
+  _positionHistory.clear();
+
+  if (previousStep?.type == 'wait_bus') {
+    BusArrivalsService.instance.stopTracking();
+  }
+
+  if (_activeNavigation!.isComplete) {
+    onDestinationReached?.call();
+    stopNavigation(silent: true);
+    return;
+  }
+
+  if (previousIndex < _activeNavigation!.steps.length) {
+    _activeNavigation!.steps[previousIndex] =
+        _activeNavigation!.steps[previousIndex].copyWith(isCompleted: true);
+  }
+
+  final currentStep = _activeNavigation!.currentStep;
+  if (currentStep?.type == 'ride_bus' || currentStep?.type == 'bus') {
+    _currentBusStopIndex = 0;
+    _announcedStops.clear();
+  }
+
+  if (currentStep != null) {
+    onStepChanged?.call(currentStep);
+  }
+
+  onGeometryUpdated?.call();
+  }
+
+  void stopNavigation({bool silent = false}) {
+    _positionStream?.cancel();
+    _positionStream = null;
+    BusArrivalsService.instance.stopTracking();
+
+    _activeNavigation = null;
+    _lastPosition = null;
+    _positionHistory.clear();
+    _announcedStops.clear();
+    _currentBusStopIndex = 0;
+    _lastArrivalAnnouncedStepIndex = null;
+    _lastProgressAnnouncement = null;
+    _lastAnnouncedDistance = null;
+    _deviationCount = 0;
+    _isOffRoute = false;
+    _lastDeviationAlert = null;
+
+    if (!silent) {
+      TtsService.instance.speak('Navegación finalizada');
+    }
+
+    onGeometryUpdated?.call();
+  }
+
+  void cancelNavigation() {
+    stopNavigation();
+  }
+
+  // ============================================================================
+  // MÉTODOS AUXILIARES
+  // ============================================================================
+
+  List<String> _enrichStreetInstructions(
+    List<String> instructions,
+    List<LatLng>? geometry,
+  ) {
+    if (instructions.isEmpty) {
+      return const <String>[];
+    }
+
+    if (geometry == null || geometry.length < 2) {
+      return List<String>.from(instructions);
+    }
+
+    double totalDistance = 0;
+    for (var i = 0; i < geometry.length - 1; i++) {
+      totalDistance += _distance.as(
+        LengthUnit.Meter,
+        geometry[i],
+        geometry[i + 1],
+      );
+    }
+
+    if (totalDistance <= 0) {
+      return List<String>.from(instructions);
+    }
+
+    final perSegment = (totalDistance / instructions.length).round();
+    return instructions
+        .map((instruction) => '$instruction (~$perSegment m)')
+        .toList();
+  }
+
+  String _simplifyStopNameForTTS(
+    String? name, {
+    bool isDestination = false,
+  }) {
+    if (name == null || name.trim().isEmpty) {
+      return isDestination ? 'tu destino' : 'el paradero';
+    }
+
+    var simplified = name.trim();
+    simplified = simplified.replaceAll(RegExp(r'\s+'), ' ');
+    simplified = simplified.replaceFirst(RegExp(r'^parada', caseSensitive: false), 'Paradero');
+    return simplified;
+  }
+
+  String? _extractStopCode(String? stopName) {
+    if (stopName == null) {
+      return null;
+    }
+    final match = RegExp(r'\b([A-Z]?\d{3,})\b').firstMatch(stopName);
+    return match?.group(1);
+  }
+
+  void _checkRouteDeviation(
+    LatLng userLocation,
+    NavigationStep step,
+  ) {
+    final geometry =
+        _activeNavigation?.getCurrentStepGeometry(userLocation) ??
+            const <LatLng>[];
+    if (geometry.isEmpty) {
+      _deviationCount = 0;
+      _isOffRoute = false;
+      return;
+    }
+
+    double minDistance = double.infinity;
+    for (final point in geometry) {
+      final d = _distance.as(LengthUnit.Meter, userLocation, point);
+      if (d < minDistance) {
+        minDistance = d;
+      }
+    }
+
+    if (minDistance > maxDistanceFromRoute) {
+      _deviationCount++;
+      if (_deviationCount >= deviationConfirmationCount) {
+        final now = DateTime.now();
+        if (!_isOffRoute ||
+            _lastDeviationAlert == null ||
+            now.difference(_lastDeviationAlert!) >= deviationAlertCooldown) {
+          _isOffRoute = true;
+          _lastDeviationAlert = now;
+
+          VibrationService.instance.tripleVibration();
+          final simplified =
+              _simplifyStopNameForTTS(step.stopName, isDestination: true);
+          TtsService.instance.speak(
+            'Parece que te has desviado de la ruta hacia $simplified. Revisa el mapa.',
+            urgent: true,
+          );
+        }
+      }
+    } else {
+      if (_isOffRoute) {
+        TtsService.instance.speak('Has retomado la ruta.');
+      }
+      _deviationCount = 0;
+      _isOffRoute = false;
+      _lastDeviationAlert = null;
+    }
+  }
+
+  void _checkBusStopsProgress(
+    NavigationStep step,
+    LatLng userLocation,
+  ) {
+    if (step.busStops == null || step.busStops!.isEmpty) {
+      return;
+    }
+
+    for (var i = _currentBusStopIndex; i < step.busStops!.length; i++) {
+      final stop = step.busStops![i];
+      final latValue = stop['lat'];
+      final lngValue = stop['lng'];
+
+      if (latValue is! num || lngValue is! num) {
+        continue;
+      }
+
+      final stopPoint = LatLng(latValue.toDouble(), lngValue.toDouble());
+      final distance = _distance.as(LengthUnit.Meter, userLocation, stopPoint);
+      final stopKey =
+          (stop['code'] as String?) ?? (stop['name'] as String? ?? 'stop_$i');
+
+      if (distance <= 60 && !_announcedStops.contains(stopKey)) {
+        _announcedStops.add(stopKey);
+        _currentBusStopIndex = i + 1;
+
+        final rawName = stop['name'] as String?;
+        final simplified =
+            _simplifyStopNameForTTS(rawName, isDestination: true);
+
+        onArrivalAtStop?.call(rawName ?? simplified);
+        TtsService.instance.speak('Próxima parada: $simplified');
+        VibrationService.instance.tripleVibration();
+      }
+
+      if (distance < 200) {
+        break;
+      }
+    }
+  }
+}
