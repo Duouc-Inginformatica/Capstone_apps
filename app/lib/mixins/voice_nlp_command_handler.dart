@@ -56,7 +56,7 @@ mixin VoiceNlpCommandHandler<T extends StatefulWidget> on State<T> {
       // Ejecutar acción según la intención
       await _handleIntent(intent, entities, text);
 
-    } catch (e, stackTrace) {
+    } catch (e) {
       DebugLogger.network('❌ Error procesando comando NLP: $e');
       await _ttsService.speak('No pude procesar el comando. Intenta de nuevo.');
     }

@@ -1,6 +1,9 @@
 import 'package:flutter_tts/flutter_tts.dart';
 import '../debug_logger.dart';
 
+/// Prioridad para anuncios TTS (alias usado por la UI)
+enum TtsPriority { low, normal, high, critical }
+
 /// Servicio TTS clásico usando flutter_tts
 class TtsService {
   TtsService._internal();
@@ -220,6 +223,17 @@ class TtsService {
   }) async {
     // Agregar sonido de notificación antes de la instrucción
     await speak('Atención. $instruction', urgent: urgent);
+  }
+
+  /// Compatibilidad: método `announce` usado en varias pantallas
+  Future<void> announce(
+    String text, {
+    TtsPriority priority = TtsPriority.normal,
+    String? context,
+  }) async {
+    // Mapear prioridad a urgent flag
+    final urgent = (priority == TtsPriority.high || priority == TtsPriority.critical);
+    await speak(text, urgent: urgent, context: context);
   }
 
   /// Repite el último mensaje hablado

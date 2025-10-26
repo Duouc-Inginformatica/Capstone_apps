@@ -104,6 +104,11 @@ class TransitBoardingService {
     stopMonitoring();
   }
 
+  /// Compatibilidad: permitir que la UI confirme abordaje directamente
+  void confirmBoarding() {
+    _confirmBoarding();
+  }
+
   /// CAP-29: Confirmación manual del usuario por voz
   void confirmBoardingManually(String spokenRoute) {
     if (!_isMonitoring) return;

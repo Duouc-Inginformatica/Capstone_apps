@@ -10,10 +10,10 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:vibration/vibration.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import '../device/tts_service.dart';
+import '../device/haptic_feedback_service.dart';
 import '../debug_logger.dart';
 
 enum NotificationType { audio, vibration, visual, all }
@@ -316,60 +316,33 @@ class CustomNotificationsService {
   }
 
   Future<void> _vibrate(CustomNotification notification) async {
-    final hasVibrator = await Vibration.hasVibrator();
-    if (!hasVibrator) return;
+    final haptic = HapticFeedbackService.instance;
+    
+    // Verificar si el servicio está habilitado
+    if (!await haptic.hasVibrator()) return;
+
+    // Aplicar intensidad configurada
+    haptic.setIntensity(_preferences.vibrationIntensity);
 
     if (notification.vibrationPattern != null) {
-      // Ajustar intensidad modificando duración
-      final adjustedPattern = notification.vibrationPattern!.map((duration) {
-        if (duration > 0) {
-          return (duration * _preferences.vibrationIntensity).round();
-        }
-        return duration;
-      }).toList();
-
-      Vibration.vibrate(pattern: adjustedPattern);
+      // Usar patrón personalizado de la notificación
+      await haptic.vibrateCustomPattern(
+        notification.vibrationPattern!,
+      );
     } else {
       // Vibración por defecto basada en prioridad
       switch (notification.priority) {
         case NotificationPriority.low:
-          Vibration.vibrate(
-            duration: (200 * _preferences.vibrationIntensity).round(),
-          );
+          await haptic.vibrateWithPattern(HapticPattern.medium);
           break;
         case NotificationPriority.medium:
-          Vibration.vibrate(
-            pattern: [
-              0,
-              (200 * _preferences.vibrationIntensity).round(),
-              100,
-              (200 * _preferences.vibrationIntensity).round(),
-            ],
-          );
+          await haptic.vibrateWithPattern(HapticPattern.notification);
           break;
         case NotificationPriority.high:
-          Vibration.vibrate(
-            pattern: [
-              0,
-              (300 * _preferences.vibrationIntensity).round(),
-              100,
-              (300 * _preferences.vibrationIntensity).round(),
-              100,
-              (300 * _preferences.vibrationIntensity).round(),
-            ],
-          );
+          await haptic.vibrateWithPattern(HapticPattern.alert);
           break;
         case NotificationPriority.critical:
-          Vibration.vibrate(
-            pattern: [
-              0,
-              (500 * _preferences.vibrationIntensity).round(),
-              200,
-              (500 * _preferences.vibrationIntensity).round(),
-              200,
-              (500 * _preferences.vibrationIntensity).round(),
-            ],
-          );
+          await haptic.vibrateWithPattern(HapticPattern.success);
           break;
       }
     }

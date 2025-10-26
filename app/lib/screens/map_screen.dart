@@ -1108,17 +1108,49 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
               IntegratedNavigationService.instance.advanceToNextStep();
               
               // ═══════════════════════════════════════════════════════════════
-              // INICIAR TRACKING DE LLEGADAS DE BUS (Implementación futura)
+              // OBTENER TIEMPO DE LLEGADA DEL BUS
               // ═══════════════════════════════════════════════════════════════
-              // NOTA: BusArrivalsService se implementará cuando la API RED 
-              // proporcione endpoints de tiempo real de llegadas
-              _log('📡 [ARRIVALS] Sistema de tracking en desarrollo');
+              String waitMessage;
+              final stopCode = nextStep.stopId;
+              final routeNumber = nextStep.busRoute;
               
-              // TERCERO: Anunciar instrucción de espera
-              await TtsService.instance.speak(
-                'Espera el bus ${nextStep.busRoute}. Cuando llegue, presiona "Simular" para subir.',
-                urgent: true,
-              );
+              if (stopCode != null && stopCode.isNotEmpty && routeNumber != null) {
+                _log('📡 [ARRIVALS] Consultando llegada del bus $routeNumber en paradero $stopCode');
+                final arrivals = await BusArrivalsService.instance.getBusArrivals(stopCode);
+                
+                if (arrivals != null) {
+                  final targetBus = arrivals.findBus(routeNumber);
+                  
+                  if (targetBus != null) {
+                    final minutes = targetBus.estimatedMinutes;
+                    _log('� [ARRIVALS] Bus $routeNumber llegaría en $minutes minutos');
+                    
+                    if (minutes <= 0) {
+                      waitMessage = 'El bus $routeNumber está llegando al paradero ahora.';
+                    } else if (minutes <= 3) {
+                      waitMessage = 'Prepárate, el bus $routeNumber está llegando al paradero.';
+                    } else if (minutes <= 10) {
+                      waitMessage = 'Espera el bus $routeNumber, llegaría en $minutes minutos.';
+                    } else {
+                      waitMessage = 'Espera el bus $routeNumber, llegaría en aproximadamente ${targetBus.formattedTime}.';
+                    }
+                  } else {
+                    _log('⚠️ [ARRIVALS] Bus $routeNumber no encontrado en llegadas');
+                    waitMessage = 'Espera el bus $routeNumber en este paradero.';
+                  }
+                } else {
+                  _log('⚠️ [ARRIVALS] No se pudieron obtener llegadas para paradero $stopCode');
+                  waitMessage = 'Espera el bus $routeNumber en este paradero.';
+                }
+              } else {
+                _log('⚠️ [ARRIVALS] Sin código de paradero o ruta de bus');
+                waitMessage = routeNumber != null 
+                    ? 'Espera el bus $routeNumber en este paradero.'
+                    : 'Espera el bus en este paradero.';
+              }
+              
+              // TERCERO: Anunciar instrucción de espera CON TIEMPO ESTIMADO
+              await TtsService.instance.speak(waitMessage, urgent: true);
               
               // CUARTO: Actualizar UI para mostrar paraderos
               if (mounted) {
@@ -4233,114 +4265,230 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
   Widget _buildMinimalNavigationPanel(BuildContext context, bool isListening, dynamic activeNav) {
     final currentStep = activeNav.currentStep;
     
-    // PANEL ESPECIAL para wait_bus: Solo micrófono y tiempo de llegada
+    // PANEL ESPECIAL para wait_bus: Mostrar información del bus esperado
     if (currentStep?.type == 'wait_bus') {
       final busRoute = currentStep.busRoute ?? '';
-      // NOTA: Tiempo real de llegada se integrará cuando API RED lo soporte
-      final arrivalTime = currentStep.estimatedDuration; // Usar estimación por ahora
+      final stopName = currentStep.stopName ?? 'Destino';
+      
+      // Obtener información de paradas del siguiente paso (ride_bus)
+      int totalStops = 0;
+      int remainingStops = 0;
+      String destination = stopName;
+      
+      // Buscar el siguiente paso ride_bus para obtener destino y paradas
+      final activeNav = IntegratedNavigationService.instance.activeNavigation;
+      if (activeNav != null && activeNav.currentStepIndex < activeNav.steps.length - 1) {
+        final nextStep = activeNav.steps[activeNav.currentStepIndex + 1];
+        if (nextStep.type == 'ride_bus') {
+          totalStops = nextStep.totalStops ?? 0;
+          remainingStops = totalStops; // Al inicio, todas las paradas faltan
+          destination = nextStep.stopName ?? stopName;
+        }
+      }
       
       return SafeArea(
         top: false,
         child: Padding(
           padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(28),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.1),
-                  blurRadius: 20,
-                  offset: const Offset(0, 8),
-                ),
-              ],
-            ),
-            child: Row(
-              children: [
-                // Lado izquierdo: Icono y número del bus
-                Expanded(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        Icons.directions_bus,
-                        size: 32,
-                        color: const Color(0xFFE30613),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        busRoute,
-                        style: const TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w900,
-                          color: Color(0xFF0F172A),
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      const Text(
-                        'Bus',
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: Color(0xFF64748B),
-                        ),
-                      ),
-                    ],
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Panel principal del bus con información
+              Container(
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [Color(0xFFE30613), Color(0xFFB71C1C)],
                   ),
+                  borderRadius: BorderRadius.circular(28),
+                  boxShadow: [
+                    BoxShadow(
+                      color: const Color(0xFFE30613).withValues(alpha: 0.3),
+                      blurRadius: 20,
+                      offset: const Offset(0, 8),
+                    ),
+                  ],
                 ),
-                // Centro: Botón de micrófono
-                GestureDetector(
-                  onTap: isListening ? _stopListening : _startListening,
-                  child: Container(
-                    width: 70,
-                    height: 70,
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF0F172A),
-                      shape: BoxShape.circle,
-                      border: Border.all(
-                        color: isListening ? const Color(0xFFEF4444) : const Color(0xFF0F172A),
-                        width: 3,
+                child: Column(
+                  children: [
+                    // Fila superior: Número del bus y destino
+                    Row(
+                      children: [
+                        // Icono y número del bus
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          child: Row(
+                            children: [
+                              const Icon(
+                                Icons.directions_bus,
+                                color: Color(0xFFE30613),
+                                size: 24,
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                busRoute,
+                                style: const TextStyle(
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.w900,
+                                  color: Color(0xFF0F172A),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        // Destino
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                'Hacia',
+                                style: TextStyle(
+                                  color: Colors.white70,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                              Text(
+                                destination,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    // Fila inferior: Progreso de paradas
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.2),
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceAround,
+                        children: [
+                          // Parada inicial
+                          Column(
+                            children: [
+                              const Text(
+                                'Parada',
+                                style: TextStyle(
+                                  color: Colors.white70,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              const Text(
+                                '1',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 22,
+                                  fontWeight: FontWeight.w900,
+                                ),
+                              ),
+                            ],
+                          ),
+                          // Separador
+                          Container(
+                            width: 1,
+                            height: 30,
+                            color: Colors.white30,
+                          ),
+                          // Total de paradas
+                          Column(
+                            children: [
+                              const Text(
+                                'Total',
+                                style: TextStyle(
+                                  color: Colors.white70,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                '$totalStops',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 22,
+                                  fontWeight: FontWeight.w900,
+                                ),
+                              ),
+                            ],
+                          ),
+                          // Separador
+                          Container(
+                            width: 1,
+                            height: 30,
+                            color: Colors.white30,
+                          ),
+                          // Paradas restantes (todas al inicio)
+                          Column(
+                            children: [
+                              const Text(
+                                'Faltan',
+                                style: TextStyle(
+                                  color: Colors.white70,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                '$remainingStops',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 22,
+                                  fontWeight: FontWeight.w900,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
                       ),
                     ),
-                    child: Icon(
-                      isListening ? Icons.mic : Icons.mic_none,
-                      color: Colors.white,
-                      size: 32,
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+              // Botón de micrófono (igual que antes pero fuera del panel)
+              GestureDetector(
+                onTap: isListening ? _stopListening : _startListening,
+                child: Container(
+                  width: 70,
+                  height: 70,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF0F172A),
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: isListening ? const Color(0xFFEF4444) : const Color(0xFF0F172A),
+                      width: 3,
                     ),
                   ),
-                ),
-                // Lado derecho: Tiempo de llegada
-                Expanded(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        Icons.access_time,
-                        size: 32,
-                        color: const Color(0xFF2563EB),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        '${arrivalTime}min',
-                        style: const TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w900,
-                          color: Color(0xFF0F172A),
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      const Text(
-                        'Llegada',
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: Color(0xFF64748B),
-                        ),
-                      ),
-                    ],
+                  child: Icon(
+                    isListening ? Icons.mic : Icons.mic_none,
+                    color: Colors.white,
+                    size: 32,
                   ),
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
         ),
       );

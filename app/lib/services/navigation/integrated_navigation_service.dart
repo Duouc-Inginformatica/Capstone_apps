@@ -11,9 +11,9 @@ import 'dart:math' as math;
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:vibration/vibration.dart';
 import '../backend/api_client.dart';
 import '../device/tts_service.dart';
+import '../device/haptic_feedback_service.dart';
 import '../backend/bus_arrivals_service.dart';
 import '../debug_logger.dart';
 
@@ -2116,7 +2116,7 @@ Te iré guiando paso a paso.
     // Si está fuera del corredor de la ruta
     if (minDistance > maxDistanceFromRoute) {
       _deviationCount++;
-      _navLog('⚠️ Posible desviación detectada (${_deviationCount}/$deviationConfirmationCount)');
+      _navLog('⚠️ Posible desviación detectada ($_deviationCount/$deviationConfirmationCount)');
       
       // Confirmar desviación después de varias muestras consecutivas
       if (_deviationCount >= deviationConfirmationCount && !_isOffRoute) {
@@ -2246,19 +2246,8 @@ Te iré guiando paso a paso.
   /// Patrón: vibración fuerte intermitente (500ms, pausa 200ms, 500ms)
   Future<void> _triggerDeviationVibration() async {
     try {
-      // Verificar si el dispositivo tiene vibración
-      final hasVibrator = await Vibration.hasVibrator();
-      if (hasVibrator == true) {
-        // Patrón: [espera, vibra, espera, vibra]
-        // Duración en milisegundos
-        await Vibration.vibrate(
-          pattern: [0, 500, 200, 500],
-          intensities: [0, 255, 0, 255],
-        );
-        _navLog('📳 Vibración de alerta activada');
-      } else {
-        _navLog('⚠️ Dispositivo sin vibrador');
-      }
+      await HapticFeedbackService.instance.navigationDeviationCritical();
+      _navLog('📳 Vibración de alerta activada');
     } catch (e) {
       _navLog('⚠️ Error al activar vibración: $e');
     }

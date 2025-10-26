@@ -1,8 +1,8 @@
 import 'dart:async';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
-import 'package:vibration/vibration.dart';
 import 'device/tts_service.dart';
+import 'device/haptic_feedback_service.dart';
 
 /// Sprint 5: Servicio para alertas contextuales durante el viaje
 class TripAlertsService {
@@ -123,7 +123,7 @@ class TripAlertsService {
   void _giveApproachingAlert(double distance) {
     _approachingAlertGiven = true;
 
-    Vibration.vibrate(duration: 200);
+    HapticFeedbackService.instance.approachingDestination();
 
     final message =
         'Te estás acercando a $_destinationStopName. '
@@ -138,7 +138,7 @@ class TripAlertsService {
   void _giveNearAlert(double distance) {
     _nearAlertGiven = true;
 
-    Vibration.vibrate(pattern: [0, 200, 100, 200]);
+    HapticFeedbackService.instance.nearDestination();
 
     final message =
         'Estás muy cerca de $_destinationStopName, '
@@ -153,7 +153,7 @@ class TripAlertsService {
   void _giveVeryNearAlert(double distance) {
     _veryNearAlertGiven = true;
 
-    Vibration.vibrate(pattern: [0, 300, 100, 300, 100, 300]);
+    HapticFeedbackService.instance.arrivedAtDestination();
 
     final message =
         '¡Atención! Llegaste a $_destinationStopName. '
@@ -166,7 +166,7 @@ class TripAlertsService {
 
   /// Sprint 5: Alerta para subir a la micro correcta
   void alertCorrectBus(String busRoute) {
-    Vibration.vibrate(pattern: [0, 200, 100, 200, 100, 200]);
+    HapticFeedbackService.instance.correctBusAlert();
 
     final message =
         'Alerta: Asegúrate de subir al bus correcto. '
@@ -178,7 +178,7 @@ class TripAlertsService {
 
   /// Sprint 5: Alerta de desviación de ruta
   void alertRouteDeviation(double deviationMeters) {
-    Vibration.vibrate(pattern: [0, 400, 200, 400]);
+    HapticFeedbackService.instance.routeDeviation();
 
     final message =
         'Alerta de desviación: Te has alejado ${deviationMeters.round()} metros '

@@ -1,5 +1,4 @@
 import 'dart:developer' as developer;
-import 'package:flutter/services.dart';
 import 'npu_detector_service.dart';
 
 /// Servicio de procesamiento de lenguaje natural LOCAL usando TensorFlow Lite

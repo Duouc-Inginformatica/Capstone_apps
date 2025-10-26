@@ -5,7 +5,6 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 import '../services/debug_logger.dart';
-import '../services/ui/timer_manager.dart';
 
 /// Mixin para gestión de controles del mapa (zoom, pan, rotation, centering)
 /// 

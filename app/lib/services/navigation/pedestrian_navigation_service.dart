@@ -11,8 +11,8 @@
 import 'dart:async';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
-import 'package:vibration/vibration.dart';
 import '../device/tts_service.dart';
+import '../device/haptic_feedback_service.dart';
 
 enum TurnDirection {
   straight,
@@ -180,10 +180,7 @@ class PedestrianNavigationService {
     );
 
     // Vibración de inicio
-    final hasVibrator = await Vibration.hasVibrator();
-    if (hasVibrator) {
-      Vibration.vibrate(duration: 200);
-    }
+    await HapticFeedbackService.instance.navigationStart();
 
     // Iniciar monitoreo de posición
     _startPositionMonitoring();
@@ -352,7 +349,7 @@ class PedestrianNavigationService {
     // Verificar si llegó
     if (distanceToDestination < 10) {
       TtsService.instance.speak('¡Has llegado a tu destino!');
-      Vibration.vibrate(pattern: [0, 200, 100, 200, 100, 200]);
+      HapticFeedbackService.instance.vibrateCustomPattern([0, 200, 100, 200, 100, 200]);
       onDestinationReached?.call();
       stopNavigation();
     }
@@ -360,39 +357,39 @@ class PedestrianNavigationService {
 
   void _handleOffRoute() {
     TtsService.instance.speak('Te has desviado de la ruta. Recalculando...');
-    Vibration.vibrate(pattern: [0, 100, 100, 100]);
+    HapticFeedbackService.instance.vibrateCustomPattern([0, 100, 100, 100]);
     // Aquí se podría integrar con el servicio de routing para recalcular
   }
 
   void _alertObstacle(ObstacleType obstacle) {
     final instruction = _instructions[_currentInstructionIndex];
     TtsService.instance.speak(instruction.obstacleText);
-    Vibration.vibrate(pattern: [0, 300, 200, 300]);
+    HapticFeedbackService.instance.vibrateCustomPattern([0, 300, 200, 300]);
     onObstacleDetected?.call(obstacle);
   }
 
   void _vibrateForDirection(TurnDirection direction) async {
-    final hasVibrator = await Vibration.hasVibrator();
+    final hasVibrator = await HapticFeedbackService.instance.hasVibrator();
     if (!hasVibrator) return;
 
     switch (direction) {
       case TurnDirection.straight:
-        Vibration.vibrate(duration: 100);
+        HapticFeedbackService.instance.vibrate(duration: 100);
         break;
       case TurnDirection.slightLeft:
       case TurnDirection.slightRight:
-        Vibration.vibrate(pattern: [0, 100, 50, 100]);
+        HapticFeedbackService.instance.vibrateCustomPattern([0, 100, 50, 100]);
         break;
       case TurnDirection.left:
       case TurnDirection.right:
-        Vibration.vibrate(pattern: [0, 150, 100, 150]);
+        HapticFeedbackService.instance.vibrateCustomPattern([0, 150, 100, 150]);
         break;
       case TurnDirection.sharpLeft:
       case TurnDirection.sharpRight:
-        Vibration.vibrate(pattern: [0, 200, 100, 200, 100, 200]);
+        HapticFeedbackService.instance.vibrateCustomPattern([0, 200, 100, 200, 100, 200]);
         break;
       case TurnDirection.uTurn:
-        Vibration.vibrate(pattern: [0, 300, 100, 300, 100, 300]);
+        HapticFeedbackService.instance.vibrateCustomPattern([0, 300, 100, 300, 100, 300]);
         break;
     }
   }
