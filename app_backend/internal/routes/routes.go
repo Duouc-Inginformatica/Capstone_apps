@@ -8,6 +8,7 @@ import (
 	"github.com/yourorg/wayfindcl/internal/debug"
 	"github.com/yourorg/wayfindcl/internal/geometry"
 	"github.com/yourorg/wayfindcl/internal/handlers"
+	"github.com/yourorg/wayfindcl/internal/middleware"
 )
 
 // Variable global para configurar RedBusHandler después de inicializar geometría
@@ -19,19 +20,25 @@ func Register(app *fiber.App, db *sql.DB) {
 	// ============================================================================
 	api := app.Group("/api")
 
-	// Health check
+	// Health check (sin rate limiting)
 	api.Get("/health", handlers.Health)
 	
-	// Autenticación tradicional (username + password)
-	api.Post("/login", handlers.Login)
-	api.Post("/register", handlers.Register)
+	// ============================================================================
+	// AUTENTICACIÓN (con rate limiting estricto)
+	// ============================================================================
+	authGroup := api.Group("/auth")
+	authGroup.Use(middleware.StrictRateLimiter()) // 10 req/min
 	
 	// Autenticación biométrica (para usuarios con discapacidad visual)
-	api.Post("/auth/biometric/register", handlers.BiometricRegister)
-	api.Post("/auth/biometric/login", handlers.BiometricLogin)
+	authGroup.Post("/biometric/register", handlers.BiometricRegister)
+	authGroup.Post("/biometric/login", handlers.BiometricLogin)
+	
+	// Autenticación tradicional (username + password) - con rate limiting
+	api.Post("/login", middleware.StrictRateLimiter(), handlers.Login)
+	api.Post("/register", middleware.StrictRateLimiter(), handlers.Register)
 	
 	// Verificar si un token biométrico ya existe
-	api.Post("/biometric/check", handlers.CheckBiometricExists)
+	api.Post("/biometric/check", middleware.StrictRateLimiter(), handlers.CheckBiometricExists)
 
 	// Initialize GraphHopper (inicia como subproceso del backend)
 	handlers.InitGraphHopper()
@@ -169,8 +176,11 @@ func Register(app *fiber.App, db *sql.DB) {
 
 	// ============================================================================
 	// RED BUS (Moovit - Información específica de rutas Red)
+	// RATE LIMITING: ScrapingRateLimiter (5 req/5min) - operación costosa
 	// ============================================================================
 	red := api.Group("/red")
+	red.Use(middleware.ScrapingRateLimiter()) // Aplicar rate limiting estricto
+	
 	red.Get("/routes/common", redBusHandler.ListCommonRedRoutes)
 	red.Get("/routes/search", redBusHandler.SearchRedRoutes)
 	red.Get("/route/:routeNumber", redBusHandler.GetRedBusRoute)

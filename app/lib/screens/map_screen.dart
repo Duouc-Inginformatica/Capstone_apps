@@ -11,11 +11,15 @@ import 'package:vibration/vibration.dart';
 import '../services/device/tts_service.dart';
 import '../services/backend/api_client.dart';
 import '../services/backend/address_validation_service.dart';
+import '../services/backend/bus_arrivals_service.dart';
 import '../services/navigation/route_tracking_service.dart';
 import '../services/navigation/transit_boarding_service.dart';
 import '../services/navigation/integrated_navigation_service.dart';
 import '../services/device/npu_detector_service.dart';
 import '../services/debug_logger.dart';
+import '../services/ui/timer_manager.dart'; // ✅ Gestor de timers centralizado
+import '../services/polyline_compression.dart'; // ✅ Compresión Douglas-Peucker
+import '../services/geometry_cache_service.dart'; // ✅ Caché offline de geometrías
 import '../widgets/map/accessible_notification.dart';
 import 'settings_screen.dart';
 import '../widgets/bottom_nav.dart';
@@ -28,7 +32,7 @@ class MapScreen extends StatefulWidget {
   State<MapScreen> createState() => _MapScreenState();
 }
 
-class _MapScreenState extends State<MapScreen> {
+class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
   void _log(String message, {Object? error, StackTrace? stackTrace}) {
     developer.log(
       message,
@@ -42,7 +46,7 @@ class _MapScreenState extends State<MapScreen> {
   String _lastWords = '';
   final SpeechToText _speech = SpeechToText();
   bool _speechEnabled = false;
-  Timer? _resultDebounce;
+  // ✅ _resultDebounce gestionado por TimerManagerMixin
   String _pendingWords = '';
 
   bool _npuAvailable = false;
@@ -51,7 +55,7 @@ class _MapScreenState extends State<MapScreen> {
 
   // Reconocimiento de voz simplificado
   bool _isProcessingCommand = false;
-  Timer? _speechTimeoutTimer;
+  // ✅ Timers gestionados por TimerManagerMixin: speechTimeout, confirmation, feedback, walkSimulation
   final List<String> _recognitionHistory = [];
   static const Duration _speechTimeout = Duration(seconds: 5);
 
@@ -60,7 +64,7 @@ class _MapScreenState extends State<MapScreen> {
 
   // CAP-9: Confirmación de destino
   String? _pendingConfirmationDestination;
-  Timer? _confirmationTimer;
+  // ✅ _confirmationTimer gestionado por TimerManagerMixin
 
   // CAP-12: Instrucciones de ruta
   List<String> _currentInstructions = [];
@@ -79,7 +83,7 @@ class _MapScreenState extends State<MapScreen> {
   bool _isTrackingRoute = false;
 
   // Accessibility features
-  Timer? _feedbackTimer;
+  // ✅ _feedbackTimer gestionado por TimerManagerMixin
 
   // Cache de geometría para optimización
   List<LatLng> _cachedStepGeometry = [];
@@ -88,10 +92,30 @@ class _MapScreenState extends State<MapScreen> {
   // Control de simulación GPS
   bool _isSimulating = false; // Evita auto-centrado durante simulación
   int _currentSimulatedBusStopIndex = -1; // Índice del paradero actual durante simulación de bus
+  
+  // ============================================================================
+  // SIMULACIÓN REALISTA CON DESVIACIONES (SOLO PARA DESARROLLO/DEBUG)
+  // ============================================================================
+  // IMPORTANTE: Estas variables son SOLO para el botón "Simular" (desarrollo)
+  // Los usuarios finales NO tienen este botón - usan GPS real automático
+  // El sistema de detección de desviación funciona AUTOMÁTICAMENTE con GPS real
+  // en IntegratedNavigationService._onLocationUpdate()
+  // ============================================================================
+  bool _simulationDeviationEnabled = true; // Habilitar desviaciones aleatorias en simulación
+  int _simulationDeviationStep = -1; // En qué punto índice se desviará (simulación)
+  List<LatLng>? _simulationDeviationRoute; // Ruta de desviación temporal (simulación)
+  bool _isCurrentlyDeviated = false; // Si está actualmente desviado (simulación)
 
   // Control de visualización de ruta de bus
   final bool _busRouteShown =
       false; // Rastrea si ya se mostró la ruta del bus en wait_bus
+
+  // ============================================================================
+  // TRACKING DE LLEGADAS EN TIEMPO REAL
+  // ============================================================================
+  StopArrivals? _currentArrivals; // Últimas llegadas recibidas
+  bool _isWaitingForBus = false; // Si está esperando el bus en el paradero
+  bool _needsRouteRecalculation = false; // Si el bus pasó y necesita recalcular
 
   // Notification system
   final List<NotificationData> _activeNotifications = [];
@@ -115,7 +139,8 @@ class _MapScreenState extends State<MapScreen> {
 
   double _overlayBaseOffset(BuildContext context, {double min = 240}) {
     final media = MediaQuery.of(context);
-    final double estimate = media.size.height * 0.28 + media.padding.bottom;
+    // ✅ Reducido de 0.28 a 0.20 (20% en lugar de 28%) para dar más visibilidad al mapa
+    final double estimate = media.size.height * 0.20 + media.padding.bottom;
     return math.max(estimate, min);
   }
 
@@ -132,6 +157,7 @@ class _MapScreenState extends State<MapScreen> {
     DebugLogger.separator(title: 'MAP SCREEN OPTIMIZADO');
     DebugLogger.info('🗺️ Inicializando con autocentrado permanente', context: 'MapScreen');
     DebugLogger.info('⚡ Throttling activado: Map(100ms), GPS(10m)', context: 'MapScreen');
+    DebugLogger.info('💾 Caché de geometrías + Compresión Douglas-Peucker activos', context: 'MapScreen');
     
     unawaited(TtsService.instance.setActiveContext('map_navigation'));
     _initializeNpuDetection();
@@ -228,6 +254,11 @@ class _MapScreenState extends State<MapScreen> {
 
   /// Inicia servicios de forma no bloqueante y escalonada para evitar ANR
   void _initServices() {
+    // ✅ Inicializar caché de geometrías en background
+    GeometryCacheService.instance.initialize().catchError((e, st) {
+      _log('⚠️ Error inicializando GeometryCache: $e', error: e, stackTrace: st);
+    });
+
     // Iniciar reconocimiento de voz inmediatamente, pero no await para no bloquear UI
     _initSpeech().catchError((e, st) {
       _log('Error inicializando Speech: $e', error: e, stackTrace: st);
@@ -249,7 +280,7 @@ class _MapScreenState extends State<MapScreen> {
           _isListening = false;
           _isProcessingCommand = false;
         });
-        _speechTimeoutTimer?.cancel();
+        cancelTimer('speechTimeout'); // ✅ Usar TimerManagerMixin
 
         String errorMessage = 'Error en reconocimiento de voz';
         if (errorNotification.errorMsg.contains('network')) {
@@ -268,7 +299,7 @@ class _MapScreenState extends State<MapScreen> {
           setState(() {
             _isListening = false;
           });
-          _speechTimeoutTimer?.cancel();
+          cancelTimer('speechTimeout'); // ✅ Usar TimerManagerMixin
 
           if (!_isProcessingCommand) {
             TtsService.instance.speak('Micrófono detenido');
@@ -280,8 +311,7 @@ class _MapScreenState extends State<MapScreen> {
         }
       },
     );
-    if (!mounted) return;
-    setState(() {});
+    // ✅ Eliminado setState vacío innecesario
   }
 
   /// Determina el índice de la instrucción actual basado en la posición GPS
@@ -361,100 +391,70 @@ class _MapScreenState extends State<MapScreen> {
       color: Colors.white,
       child: Padding(
         padding: const EdgeInsets.all(20.0),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Métricas del trayecto
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                _buildMetric(
-                  Icons.straighten,
-                  '${(currentStep.realDistanceMeters! / 1000).toStringAsFixed(2)} km',
-                  'Distancia',
-                ),
-                _buildMetric(
-                  Icons.access_time,
-                  '${(currentStep.realDurationSeconds! / 60).toStringAsFixed(0)} min',
-                  'Tiempo',
-                ),
-                _buildMetric(
-                  Icons.format_list_numbered,
-                  '${currentIndex + 1}/${instructions.length}',
-                  'Paso',
-                ),
-              ],
-            ),
-            
-            const SizedBox(height: 20),
-            const Divider(color: Color(0xFFE2E8F0), height: 1),
-            const SizedBox(height: 20),
-
-            // Instrucción actual
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: const Color(0xFFFEF3C7),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                  color: const Color(0xFFF59E0B),
-                  width: 2,
-                ),
-              ),
-              child: Row(
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Métricas del trayecto
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Container(
-                    padding: const EdgeInsets.all(10),
-                    decoration: const BoxDecoration(
-                      color: Color(0xFFF59E0B),
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(
-                      Icons.navigation_rounded,
-                      color: Colors.white,
-                      size: 24,
-                    ),
+                  _buildMetric(
+                    Icons.straighten,
+                    '${(currentStep.realDistanceMeters! / 1000).toStringAsFixed(2)} km',
+                    'Distancia',
                   ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: Text(
-                      currentInstruction,
-                      style: const TextStyle(
-                        color: Color(0xFF0F172A),
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                        height: 1.4,
-                      ),
-                    ),
+                  _buildMetric(
+                    Icons.access_time,
+                    '${(currentStep.realDurationSeconds! / 60).toStringAsFixed(0)} min',
+                    'Tiempo',
+                  ),
+                  _buildMetric(
+                    Icons.format_list_numbered,
+                    '${currentIndex + 1}/${instructions.length}',
+                    'Paso',
                   ),
                 ],
               ),
-            ),
+            
+              const SizedBox(height: 20),
+              const Divider(color: Color(0xFFE2E8F0), height: 1),
+              const SizedBox(height: 20),
 
-            // Próxima instrucción (preview)
-            if (nextInstruction != null) ...[
-              const SizedBox(height: 12),
+              // Instrucción actual
               Container(
-                padding: const EdgeInsets.all(12),
+                padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
-                  color: const Color(0xFFF8FAFC),
+                  color: const Color(0xFFFEF3C7),
                   borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: const Color(0xFFF59E0B),
+                    width: 2,
+                  ),
                 ),
                 child: Row(
                   children: [
-                    const Icon(
-                      Icons.arrow_forward,
-                      color: Color(0xFF64748B),
-                      size: 20,
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: const BoxDecoration(
+                        color: Color(0xFFF59E0B),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(
+                        Icons.navigation_rounded,
+                        color: Colors.white,
+                        size: 24,
+                      ),
                     ),
-                    const SizedBox(width: 12),
+                    const SizedBox(width: 16),
                     Expanded(
                       child: Text(
-                        'Siguiente: $nextInstruction',
+                        currentInstruction,
                         style: const TextStyle(
-                          color: Color(0xFF64748B),
-                          fontSize: 13,
+                          color: Color(0xFF0F172A),
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
                           height: 1.4,
                         ),
                       ),
@@ -462,14 +462,44 @@ class _MapScreenState extends State<MapScreen> {
                   ],
                 ),
               ),
+
+              // Próxima instrucción (preview)
+              if (nextInstruction != null) ...[
+                const SizedBox(height: 12),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF8FAFC),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(
+                        Icons.arrow_forward,
+                        color: Color(0xFF64748B),
+                        size: 20,
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          'Siguiente: $nextInstruction',
+                          style: const TextStyle(
+                            color: Color(0xFF64748B),
+                            fontSize: 13,
+                            height: 1.4,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
             ],
-          ],
+          ),
         ),
       ),
     );
-  }
-
-  Widget _buildMetric(IconData icon, String value, String label) {
+  }  Widget _buildMetric(IconData icon, String value, String label) {
     return Column(
       children: [
         Icon(icon, color: const Color(0xFF0F172A), size: 20),
@@ -504,7 +534,7 @@ class _MapScreenState extends State<MapScreen> {
     
     // NO mostrar en modo viaje de bus (ride_bus)
     final activeNav = IntegratedNavigationService.instance.activeNavigation;
-    if (activeNav?.currentStep?.type == 'ride_bus' || activeNav?.currentStep?.type == 'bus') {
+    if (activeNav?.currentStep?.type == 'ride_bus') {
       return const SizedBox.shrink();
     }
 
@@ -624,7 +654,7 @@ class _MapScreenState extends State<MapScreen> {
   Widget _buildSimulationFab() {
     // NO mostrar en modo viaje de bus (ride_bus)
     final activeNav = IntegratedNavigationService.instance.activeNavigation;
-    if (activeNav?.currentStep?.type == 'ride_bus' || activeNav?.currentStep?.type == 'bus') {
+    if (activeNav?.currentStep?.type == 'ride_bus') {
       return const SizedBox.shrink();
     }
     
@@ -636,6 +666,66 @@ class _MapScreenState extends State<MapScreen> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
+          // ============================================================
+          // TOGGLE PARA DESVIACIONES EN SIMULACIÓN (SOLO DESARROLLO)
+          // ============================================================
+          // Este toggle controla si la SIMULACIÓN (botón debug) incluye
+          // desviaciones aleatorias para testing del sistema de corrección.
+          // Los USUARIOS FINALES no ven este botón - usan GPS real que
+          // detecta desviaciones automáticamente sin configuración.
+          // ============================================================
+          GestureDetector(
+            onTap: () {
+              setState(() {
+                _simulationDeviationEnabled = !_simulationDeviationEnabled;
+              });
+              _showSuccessNotification(
+                _simulationDeviationEnabled 
+                    ? '🎲 Desviaciones activadas (simulación)' 
+                    : '📍 Desviaciones desactivadas (simulación)'
+              );
+            },
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: _simulationDeviationEnabled 
+                    ? const Color(0xFFFF8C42)
+                    : Colors.grey.shade400,
+                borderRadius: BorderRadius.circular(12),
+                boxShadow: [
+                  BoxShadow(
+                    color: (_simulationDeviationEnabled 
+                        ? const Color(0xFFFF8C42)
+                        : Colors.grey.shade400).withValues(alpha: 0.3),
+                    blurRadius: 8,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    _simulationDeviationEnabled 
+                        ? Icons.shuffle_rounded
+                        : Icons.trending_flat_rounded,
+                    color: Colors.white,
+                    size: 16,
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    _simulationDeviationEnabled ? 'Desviación ON' : 'Desviación OFF',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
           Tooltip(
             message: label,
             child: GestureDetector(
@@ -789,8 +879,7 @@ class _MapScreenState extends State<MapScreen> {
     );
   }
 
-  // Timer para simular caminata
-  Timer? _walkSimulationTimer;
+  // ✅ Timer para simular caminata gestionado por TimerManagerMixin
 
   /// Devuelve el texto del botón de simulación según el paso actual
   String _getSimulationButtonLabel() {
@@ -802,10 +891,10 @@ class _MapScreenState extends State<MapScreen> {
 
     switch (currentStep.type) {
       case 'walk':
-        // Verificar si el siguiente paso es bus o es la caminata final
+        // Verificar si el siguiente paso es esperar el bus o es la caminata final
         if (activeNav.currentStepIndex < activeNav.steps.length - 1) {
           final nextStep = activeNav.steps[activeNav.currentStepIndex + 1];
-          if (nextStep.type == 'wait_bus' || nextStep.type == 'bus' || nextStep.type == 'ride_bus') {
+          if (nextStep.type == 'wait_bus') {
             return 'Simular → Paradero';
           }
         }
@@ -842,29 +931,32 @@ class _MapScreenState extends State<MapScreen> {
     
     final currentStep = activeNav.steps[activeNav.currentStepIndex];
 
-    // CASO ESPECIAL: Si estamos en wait_bus, significa que YA llegamos al paradero
-    // El botón "Simular" confirma que el usuario subió al bus y dibuja la ruta
+    // ═══════════════════════════════════════════════════════════════
+    // CASO ESPECIAL: WAIT_BUS - Usuario confirma que subió al bus
+    // ═══════════════════════════════════════════════════════════════
     if (currentStep.type == 'wait_bus') {
       _log('🚌 [SIMULAR] Usuario confirmó que subió al bus desde wait_bus');
       
-      // Verificar si hay un siguiente paso de tipo bus
+      // Detener tracking de llegadas (usuario ya subió al bus)
+      _log('🛑 [ARRIVALS] Deteniendo tracking - usuario subió al bus');
+      BusArrivalsService.instance.stopTracking();
+      
+      // Verificar que existe un siguiente paso de tipo ride_bus
       if (activeNav.currentStepIndex < activeNav.steps.length - 1) {
         final nextStep = activeNav.steps[activeNav.currentStepIndex + 1];
-        if (nextStep.type == 'bus' || nextStep.type == 'ride_bus') {
-          // PRIMERO: Dibujar la geometría del bus ANTES de avanzar
+        
+        if (nextStep.type == 'ride_bus') {
+          // Dibujar la geometría del bus
           try {
             final busLeg = activeNav.itinerary.legs.firstWhere(
               (leg) => leg.type == 'bus' && leg.isRedBus,
               orElse: () => throw Exception('No bus leg found'),
             );
             
-            // Usar la geometría COMPLETA de la ruta (no solo las paradas)
             final busGeometry = busLeg.geometry;
-            final stops = busLeg.stops;
             
             if (busGeometry != null && busGeometry.isNotEmpty) {
-              // Usar geometría real del backend (ruta completa)
-              _log('🚌 [BUS] Usando geometría completa: ${busGeometry.length} puntos');
+              _log('🚌 [BUS] Dibujando ruta del bus: ${busGeometry.length} puntos');
               
               setState(() {
                 _polylines = [
@@ -874,27 +966,7 @@ class _MapScreenState extends State<MapScreen> {
                     strokeWidth: 4.0,
                   ),
                 ];
-                
-                // TAMBIÉN actualizar marcadores para mostrar los paraderos
-                _updateNavigationMarkers(nextStep, activeNav);
-              });
-              
-              _log('🚌 [BUS] Geometría dibujada: ${busGeometry.length} puntos de ruta, ${stops?.length ?? 0} paraderos');
-            } else if (stops != null && stops.isNotEmpty) {
-              // Fallback: usar solo puntos de paradas si no hay geometría
-              final busRoutePoints = stops.map((stop) => stop.location).toList();
-              _log('⚠️ [BUS] Sin geometría completa, usando ${busRoutePoints.length} puntos de paraderos');
-              
-              setState(() {
-                _polylines = [
-                  Polyline(
-                    points: busRoutePoints,
-                    color: const Color(0xFF2196F3), // Azul para ruta de bus
-                    strokeWidth: 4.0,
-                  ),
-                ];
-                
-                // TAMBIÉN actualizar marcadores para mostrar los paraderos
+                // Actualizar marcadores para mostrar todos los paraderos
                 _updateNavigationMarkers(nextStep, activeNav);
               });
             }
@@ -902,21 +974,21 @@ class _MapScreenState extends State<MapScreen> {
             _log('⚠️ [BUS] Error dibujando geometría: $e');
           }
           
-          // SEGUNDO: Vibración de confirmación (patrón corto)
+          // Vibración de confirmación
           final hasVibrator = await Vibration.hasVibrator();
           if (hasVibrator == true) {
             Vibration.vibrate(duration: 200);
           }
           
-          // TERCERO: Anunciar TTS y ESPERAR que termine
+          // Anunciar TTS
           await TtsService.instance.speak('Subiendo al bus ${nextStep.busRoute}', urgent: true);
-          
-          // CUARTO: Pequeña pausa para dar tiempo visual
           await Future.delayed(const Duration(milliseconds: 800));
+        } else {
+          _log('⚠️ [SIMULAR] Siguiente paso no es ride_bus: ${nextStep.type}');
         }
       }
       
-      // CUARTO: Avanzar al siguiente paso (el bus)
+      // Avanzar al siguiente paso (ride_bus)
       IntegratedNavigationService.instance.advanceToNextStep();
       if (mounted) {
         setState(() {
@@ -942,26 +1014,44 @@ class _MapScreenState extends State<MapScreen> {
         return;
       }
       
-      // Cancelar cualquier simulación previa
-      _walkSimulationTimer?.cancel();
+      // ✅ Planificar desviación aleatoria (40% probabilidad)
+      _resetSimulationDeviation();
+      _planSimulationDeviation(geometry);
+      
+      // ✅ Cancelar simulación previa usando TimerManagerMixin
+      cancelTimer('walkSimulation');
       
       // Activar modo simulación para evitar auto-centrado
       setState(() {
         _isSimulating = true;
+        // ✅ INICIALIZAR MARCADORES antes de comenzar la simulación
+        _updateNavigationMarkers(currentStep, activeNav);
       });
       
       int currentPointIndex = 0;
       final totalPoints = geometry.length;
+      final totalSimulationPoints = totalPoints + (_simulationDeviationRoute?.length ?? 0);
       final pointsPerInstruction = (totalPoints / (currentStep.streetInstructions?.length ?? 1)).ceil();
       
       // Variable para rastrear la última instrucción anunciada
       int lastAnnouncedInstruction = -1;
       
-      // Timer para mover GPS cada 2 segundos
-      _walkSimulationTimer = Timer.periodic(const Duration(seconds: 2), (timer) async {
-        if (currentPointIndex >= totalPoints) {
-          timer.cancel();
-          _log('✅ [SIMULAR] Caminata completada');
+      // ✅ Timer periódico usando TimerManagerMixin
+      createPeriodicTimer(
+        const Duration(seconds: 5), // Reducido de 2 a 5 segundos para mejor control
+        (timer) async {
+        // ═══════════════════════════════════════════════════════════════
+        // VERIFICAR SI LLEGAMOS AL DESTINO (últimos 2-3 puntos)
+        // ═══════════════════════════════════════════════════════════════
+        final isNearEnd = currentPointIndex >= totalSimulationPoints - 2;
+        final isAtEnd = currentPointIndex >= totalSimulationPoints;
+        
+        if (isAtEnd) {
+          cancelTimer('walkSimulation');
+          _log('✅ [SIMULAR] Caminata completada - Llegamos al destino');
+          
+          // Resetear desviación
+          _resetSimulationDeviation();
           
           // Desactivar modo simulación
           setState(() {
@@ -979,27 +1069,114 @@ class _MapScreenState extends State<MapScreen> {
           // Detectar si es el destino final o un paradero intermedio
           final isLastStep = activeNav.currentStepIndex >= activeNav.steps.length - 1;
           if (isLastStep) {
-            await TtsService.instance.speak('Has llegado a tu destino, ${currentStep.stopName}');
-            // Finalizar navegación
+            // ═══════════════════════════════════════════════════════════════
+            // DESTINO FINAL - Mantener polilínea visible
+            // ═══════════════════════════════════════════════════════════════
+            await TtsService.instance.speak('Has llegado a tu destino, ${currentStep.stopName}', urgent: true);
+            
+            // Mantener la última polilínea visible (no borrarla)
+            setState(() {
+              _polylines = [
+                Polyline(
+                  points: [geometry.last], // Solo punto final
+                  color: const Color(0xFF10B981), // Verde para destino
+                  strokeWidth: 6.0,
+                ),
+              ];
+            });
+            
+            // Finalizar navegación después de un delay
+            await Future.delayed(const Duration(seconds: 2));
             IntegratedNavigationService.instance.stopNavigation();
           } else {
-            // NO avanzar automáticamente - el usuario debe presionar "Simular subida al bus"
-            await TtsService.instance.speak('Llegaste al paradero. Espera el bus ${currentStep.busRoute ?? ""}');
-            _log('🚏 [SIMULAR] Llegaste al paradero. NO se avanza automáticamente.');
-            _log('🚏 [SIMULAR] El usuario debe presionar "Simular subida al bus" cuando esté listo.');
+            // ═══════════════════════════════════════════════════════════════
+            // LLEGADA AL PARADERO - Proceso más realista
+            // ═══════════════════════════════════════════════════════════════
+            final nextStep = activeNav.steps[activeNav.currentStepIndex + 1];
+            _log('🚏 [SIMULAR] Llegaste al paradero. Siguiente paso: ${nextStep.type}');
             
-            // DETENER la simulación aquí - NO avanzar al siguiente paso
-            // La simulación se detendrá y el usuario debe presionar el botón de nuevo
+            if (nextStep.type == 'wait_bus') {
+              // PRIMERO: Anunciar llegada ANTES de cambiar el paso
+              await TtsService.instance.speak(
+                'Has llegado al paradero ${nextStep.stopName}.',
+                urgent: true,
+              );
+              
+              await Future.delayed(const Duration(milliseconds: 800));
+              
+              // SEGUNDO: Avanzar al paso wait_bus
+              IntegratedNavigationService.instance.advanceToNextStep();
+              
+              // ═══════════════════════════════════════════════════════════════
+              // INICIAR TRACKING DE LLEGADAS DE BUS (Implementación futura)
+              // ═══════════════════════════════════════════════════════════════
+              // NOTA: BusArrivalsService se implementará cuando la API RED 
+              // proporcione endpoints de tiempo real de llegadas
+              _log('📡 [ARRIVALS] Sistema de tracking en desarrollo');
+              
+              // TERCERO: Anunciar instrucción de espera
+              await TtsService.instance.speak(
+                'Espera el bus ${nextStep.busRoute}. Cuando llegue, presiona "Simular" para subir.',
+                urgent: true,
+              );
+              
+              // CUARTO: Actualizar UI para mostrar paraderos
+              if (mounted) {
+                setState(() {
+                  // Limpiar polilínea de caminata
+                  _polylines = [];
+                  // Actualizar marcadores para mostrar paraderos de bus
+                  _updateNavigationMapState(IntegratedNavigationService.instance.activeNavigation!);
+                });
+              }
+              
+              _log('🚏 [SIMULAR] Paso actual ahora: wait_bus. Esperando que el usuario suba al bus.');
+            } else {
+              // Fallback si no hay wait_bus (no debería pasar)
+              await TtsService.instance.speak('Llegaste al paradero', urgent: true);
+              _log('⚠️ [SIMULAR] Siguiente paso no es wait_bus: ${nextStep.type}');
+            }
           }
           return;
         }
         
+        // ═══════════════════════════════════════════════════════════════
+        // SIMULACIÓN CONTINUA - Moverse al siguiente punto
+        // ═══════════════════════════════════════════════════════════════
+        
+        // ✅ Obtener siguiente punto (con lógica de desviación incluida)
+        final nextPoint = _getNextSimulationPoint(geometry, currentPointIndex);
+        
         // Mover GPS al siguiente punto (SIN mover el mapa para permitir interacción)
-        final nextPoint = geometry[currentPointIndex];
         _updateSimulatedGPS(nextPoint, moveMap: false);
         
-        // Anunciar instrucción cuando se alcanza un nuevo segmento
-        if (currentStep.streetInstructions != null && currentStep.streetInstructions!.isNotEmpty) {
+        // ✅ ACTUALIZAR POLILÍNEA: mostrar solo el camino restante desde el punto actual
+        // IMPORTANTE: Mantener al menos los últimos 2 puntos para que no desaparezca
+        // Y MANTENER LOS MARCADORES (paradero destino, usuario, etc.)
+        setState(() {
+          final remainingGeometry = currentPointIndex < geometry.length 
+              ? geometry.sublist(currentPointIndex)
+              : [geometry.last]; // Mantener último punto si llegamos al final
+          
+          _polylines = [
+            Polyline(
+              points: remainingGeometry,
+              color: isNearEnd 
+                  ? const Color(0xFF10B981) // Verde cuando estamos cerca
+                  : const Color(0xFFE30613), // Rojo normal
+              strokeWidth: 5.0,
+            ),
+          ];
+          
+          // ✅ MANTENER MARCADORES: Actualizar marcadores en cada iteración
+          // para que no desaparezcan durante la simulación
+          _updateNavigationMarkers(currentStep, activeNav);
+        });
+        
+        // Anunciar instrucción cuando se alcanza un nuevo segmento (solo si NO está desviado)
+        if (!_isCurrentlyDeviated && 
+            currentStep.streetInstructions != null && 
+            currentStep.streetInstructions!.isNotEmpty) {
           final instructionIndex = (currentPointIndex / pointsPerInstruction).floor()
               .clamp(0, currentStep.streetInstructions!.length - 1);
           
@@ -1016,17 +1193,18 @@ class _MapScreenState extends State<MapScreen> {
         }
         
         currentPointIndex++;
-        
-        if (mounted) {
-          setState(() {}); // Actualizar UI
-        }
-      });
+        // ✅ No necesita setState aquí porque se actualiza en el bloque anterior
+      },
+        name: 'walkSimulation',
+      );
       
-    } else if (currentStep.type == 'bus' || currentStep.type == 'ride_bus') {
+    } else if (currentStep.type == 'ride_bus') {
+      // ═══════════════════════════════════════════════════════════════
       // SIMULAR VIAJE EN BUS: Mover GPS por cada parada
-      _log('� [SIMULAR] Viaje en bus - Moviendo GPS por paradas');
-      // NO anunciar "Subiendo al bus" aquí porque ya se anunció en wait_bus
-      // Dar un pequeño delay antes de empezar a mover el GPS
+      // ═══════════════════════════════════════════════════════════════
+      _log('🚌 [SIMULAR] Viaje en bus - Moviendo GPS por paradas');
+      
+      // Dar un pequeño delay antes de empezar
       await Future.delayed(const Duration(milliseconds: 500));
       
       // Obtener paradas del bus
@@ -1048,8 +1226,8 @@ class _MapScreenState extends State<MapScreen> {
         return;
       }
       
-      // Cancelar timer previo
-      _walkSimulationTimer?.cancel();
+      // ✅ Cancelar timer previo usando TimerManagerMixin
+      cancelTimer('walkSimulation');
       
       // Activar modo simulación
       setState(() {
@@ -1068,10 +1246,12 @@ class _MapScreenState extends State<MapScreen> {
         urgent: false,
       );
       
-      // Timer para mover GPS por cada parada cada 3 segundos
-      _walkSimulationTimer = Timer.periodic(const Duration(seconds: 3), (timer) async {
+      // ✅ Timer periódico usando TimerManagerMixin  
+      createPeriodicTimer(
+        const Duration(seconds: 8), // Reducido de 3 a 8 segundos para simular paradas de bus
+        (timer) async {
         if (currentStopIndex >= allStops.length) {
-          timer.cancel();
+          cancelTimer('walkSimulation');
           _log('✅ [SIMULAR] Viaje en bus completado');
           
           // Desactivar modo simulación
@@ -1090,12 +1270,24 @@ class _MapScreenState extends State<MapScreen> {
             Vibration.vibrate(duration: 100);
           }
           
-          await TtsService.instance.speak('Bajaste del bus');
+          await TtsService.instance.speak('Bajaste del bus', urgent: true);
           
-          // Avanzar al siguiente paso (probablemente walk final) pero NO continuar simulación
-          // El desarrollador debe presionar "Simular" de nuevo para la caminata final
+          // Pausa para que el usuario procese la información
+          await Future.delayed(const Duration(milliseconds: 1500));
+          
+          // Avanzar al siguiente paso (probablemente walk final)
           if (activeNav.currentStepIndex < activeNav.steps.length - 1) {
             IntegratedNavigationService.instance.advanceToNextStep();
+            
+            // Anunciar el siguiente paso
+            final nextStep = IntegratedNavigationService.instance.activeNavigation?.currentStep;
+            if (nextStep?.type == 'walk') {
+              await TtsService.instance.speak(
+                'Ahora camina hacia tu destino final. Presiona "Simular" para continuar.',
+                urgent: true,
+              );
+            }
+            
             if (mounted) {
               setState(() {
                 _updateNavigationMapState(IntegratedNavigationService.instance.activeNavigation!);
@@ -1146,7 +1338,9 @@ class _MapScreenState extends State<MapScreen> {
             _currentSimulatedBusStopIndex = currentStopIndex; // Actualizar índice
           });
         }
-      });
+      },
+        name: 'walkSimulation',
+      );
       
     } else {
       // Otros tipos de pasos
@@ -1736,14 +1930,18 @@ class _MapScreenState extends State<MapScreen> {
       return;
     }
 
-    // Configurar timeout personalizado
-    _speechTimeoutTimer?.cancel();
-    _speechTimeoutTimer = Timer(_speechTimeout, () {
+    // ✅ Configurar timeout usando TimerManagerMixin
+    cancelTimer('speechTimeout');
+    createTimer(
+      _speechTimeout,
+      () {
       if (_isListening) {
         _speech.stop();
         _showWarningNotification('Tiempo de escucha agotado');
       }
-    });
+    },
+      name: 'speechTimeout',
+    );
 
     await _speech.listen(
       onResult: (result) {
@@ -1751,18 +1949,22 @@ class _MapScreenState extends State<MapScreen> {
 
         // Procesar resultado final
         if (result.finalResult) {
-          _speechTimeoutTimer?.cancel();
+          cancelTimer('speechTimeout'); // ✅ Usar TimerManagerMixin
           _processRecognizedText(result.recognizedWords);
         } else {
-          // Debounce para resultados parciales
+          // ✅ Debounce usando TimerManagerMixin
           _pendingWords = result.recognizedWords;
-          if (_resultDebounce?.isActive ?? false) _resultDebounce?.cancel();
-          _resultDebounce = Timer(const Duration(milliseconds: 300), () {
+          cancelTimer('resultDebounce');
+          createTimer(
+            const Duration(milliseconds: 300),
+            () {
             if (!mounted) return;
             setState(() {
               _lastWords = _pendingWords;
             });
-          });
+          },
+            name: 'resultDebounce',
+          );
         }
       },
       listenFor: const Duration(seconds: 30),
@@ -1910,12 +2112,17 @@ class _MapScreenState extends State<MapScreen> {
       _pendingConfirmationDestination = destination;
     });
 
-    _confirmationTimer?.cancel();
-    _confirmationTimer = Timer(const Duration(seconds: 15), () {
+    // ✅ Usar TimerManagerMixin para timeout de confirmación
+    cancelTimer('confirmation');
+    createTimer(
+      const Duration(seconds: 15),
+      () {
       if (_pendingConfirmationDestination != null) {
         _cancelDestinationConfirmation();
       }
-    });
+    },
+      name: 'confirmation',
+    );
 
     final pretty = _toTitleCase(destination);
     TtsService.instance.speak(
@@ -1937,7 +2144,7 @@ class _MapScreenState extends State<MapScreen> {
     if (_pendingConfirmationDestination == null) return;
 
     final destination = _pendingConfirmationDestination!;
-    _confirmationTimer?.cancel();
+    cancelTimer('confirmation'); // ✅ Usar TimerManagerMixin
 
     setState(() {
       _pendingConfirmationDestination = null;
@@ -1951,7 +2158,7 @@ class _MapScreenState extends State<MapScreen> {
 
   /// CAP-9: Cancelar confirmación de destino
   void _cancelDestinationConfirmation() {
-    _confirmationTimer?.cancel();
+    cancelTimer('confirmation'); // ✅ Usar TimerManagerMixin
 
     setState(() {
       _pendingConfirmationDestination = null;
@@ -2035,36 +2242,35 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   /// CAP-20: Recalcular ruta desde posición actual
+  /// Ahora usa IntegratedNavigationService en lugar del sistema legacy
   Future<void> _recalculateRoute() async {
-    if (_currentPosition == null ||
-        RouteTrackingService.instance.destination == null) {
+    final activeNav = IntegratedNavigationService.instance.activeNavigation;
+    
+    if (_currentPosition == null || activeNav == null) {
+      _showWarningNotification('No hay navegación activa para recalcular');
       return;
     }
 
-    final dest = RouteTrackingService.instance.destination!;
-    final destName = RouteTrackingService.instance.destinationName ?? 'destino';
+    final destName = activeNav.destinationName ?? 'destino';
 
-    setState(() => _isCalculatingRoute = true); // 🔄 Mostrar indicador
+    setState(() => _isCalculatingRoute = true);
     
-    TtsService.instance.speak('Recalculando ruta a $destName');
+    await TtsService.instance.speak('Recalculando ruta a $destName');
 
     try {
-      await _calculateRoute(
-        destLat: dest.latitude,
-        destLon: dest.longitude,
-        destName: destName,
+      // Usar IntegratedNavigationService para recalcular
+      await _startIntegratedMoovitNavigation(
+        destName,
+        activeNav.destination.latitude,
+        activeNav.destination.longitude,
       );
 
       _showSuccessNotification('Ruta recalculada exitosamente');
-
-      // Reiniciar seguimiento con nueva ruta
-      if (_isTrackingRoute) {
-        _startRouteTracking();
-      }
     } catch (e) {
+      _log('❌ [RECALCULATE] Error: $e');
       _showErrorNotification('Error recalculando ruta');
     } finally {
-      setState(() => _isCalculatingRoute = false); // ✅ Ocultar indicador
+      setState(() => _isCalculatingRoute = false);
     }
   }
 
@@ -2407,6 +2613,17 @@ class _MapScreenState extends State<MapScreen> {
       // Anunciar inicio de búsqueda
       TtsService.instance.speak('Buscando ruta hacia $destination');
 
+      // ═══════════════════════════════════════════════════════════
+      // ✅ INTENTAR CARGAR DESDE CACHÉ OFFLINE
+      // ═══════════════════════════════════════════════════════════
+      final cacheKey = _generateCacheKey(
+        originLat: _currentPosition!.latitude.toStringAsFixed(4),
+        originLon: _currentPosition!.longitude.toStringAsFixed(4),
+        destLat: destLat.toStringAsFixed(4),
+        destLon: destLon.toStringAsFixed(4),
+        stepType: 'full_route',
+      );
+
       // Iniciar navegación integrada
       // Este servicio maneja: scraping Moovit, construcción de pasos,
       // geometrías separadas por paso, y anuncios TTS
@@ -2422,6 +2639,11 @@ class _MapScreenState extends State<MapScreen> {
           );
 
       _log('🗺️ [MAP] startNavigation completado exitosamente');
+      
+      // ═══════════════════════════════════════════════════════════
+      // ✅ GUARDAR GEOMETRÍAS DE CADA PASO EN CACHÉ
+      // ═══════════════════════════════════════════════════════════
+      _cacheNavigationGeometries(navigation, cacheKey);
       _log('🗺️ [MAP] Navigation tiene ${navigation.steps.length} pasos');
 
       // ══════════════════════════════════════════════════════════════
@@ -2576,6 +2798,112 @@ class _MapScreenState extends State<MapScreen> {
         });
       };
 
+      // ===================================================================
+      // CALLBACKS PARA TRACKING DE LLEGADAS EN TIEMPO REAL
+      // ===================================================================
+      IntegratedNavigationService.instance.onBusArrivalsUpdated = (arrivals) {
+        if (!mounted) return;
+        
+        setState(() {
+          _currentArrivals = arrivals;
+        });
+        
+        _log('🔄 [ARRIVALS] UI actualizada: ${arrivals.arrivals.length} buses');
+      };
+
+      IntegratedNavigationService.instance.onBusMissed = (routeNumber) async {
+        if (!mounted) return;
+        
+        _log('🚨 [RECALCULAR] Bus $routeNumber pasó - iniciando recálculo de ruta');
+        
+        setState(() {
+          _needsRouteRecalculation = true;
+        });
+        
+        // ===================================================================
+        // ALERTAS AL USUARIO - MEJORADAS
+        // ===================================================================
+        // 1. Vibración de alerta (patrón fuerte)
+        await Vibration.vibrate(pattern: [0, 300, 100, 300, 100, 300]);
+        
+        // 2. Mensaje claro y humano
+        await TtsService.instance.speak(
+          'El bus $routeNumber ya pasó por el paradero. Voy a verificar qué buses te pueden llevar a tu destino.',
+          urgent: true,
+        );
+        
+        // 3. Notificación visual
+        _showErrorNotification('🚌 Bus $routeNumber pasó - Buscando alternativas...');
+        
+        // ===================================================================
+        // RECÁLCULO DE RUTA
+        // ===================================================================
+        // Detener navegación actual
+        IntegratedNavigationService.instance.stopNavigation();
+        
+        // Obtener destino actual
+        final activeNav = IntegratedNavigationService.instance.activeNavigation;
+        if (activeNav != null && _currentPosition != null) {
+          final destination = activeNav.itinerary.destination; // Ya es LatLng
+          
+          // Recalcular ruta desde posición actual al mismo destino
+          _log('🔄 [RECALCULAR] Origen: ${_currentPosition!.latitude},${_currentPosition!.longitude}');
+          _log('🔄 [RECALCULAR] Destino: ${destination.latitude},${destination.longitude}');
+          
+          // Delay para que el usuario escuche el mensaje completo
+          await Future.delayed(const Duration(seconds: 3));
+          
+          // TTS: Indicar que está calculando
+          await TtsService.instance.speak('Calculando nuevas opciones de ruta...', urgent: false);
+          
+          // Iniciar nueva navegación
+          try {
+            final newNav = await IntegratedNavigationService.instance.startNavigation(
+              originLat: _currentPosition!.latitude,
+              originLon: _currentPosition!.longitude,
+              destLat: destination.latitude,
+              destLon: destination.longitude,
+              destinationName: 'Destino', // Nombre genérico para recalculación
+            );
+            
+            setState(() {
+              _updateNavigationMapState(newNav);
+              _needsRouteRecalculation = false;
+            });
+            
+            // Verificar si encontró una nueva ruta con bus
+            final hasRedBus = newNav.itinerary.redBusRoutes.isNotEmpty;
+            String confirmationMessage;
+            
+            if (hasRedBus) {
+              final newBuses = newNav.itinerary.redBusRoutes.join(', ');
+              confirmationMessage = 'Encontré una nueva ruta. Puedes tomar el bus $newBuses. Continúa siguiendo las instrucciones.';
+            } else {
+              confirmationMessage = 'Nueva ruta calculada. Continúa siguiendo las instrucciones.';
+            }
+            
+            await TtsService.instance.speak(confirmationMessage);
+            _showSuccessNotification('✅ Nueva ruta encontrada');
+            
+          } catch (e) {
+            _log('❌ [RECALCULAR] Error: $e');
+            
+            // Mensaje de error más amigable
+            await TtsService.instance.speak(
+              'Lo siento, no pude encontrar una nueva ruta. Por favor, intenta buscar manualmente.',
+              urgent: true,
+            );
+            
+            _showErrorNotification('❌ No se encontró ruta alternativa');
+            
+            setState(() {
+              _needsRouteRecalculation = false;
+              _hasActiveTrip = false;
+            });
+          }
+        }
+      };
+
       // Dibujar mapa inicial con geometría del primer paso
       setState(() {
         _hasActiveTrip = true;
@@ -2619,19 +2947,38 @@ class _MapScreenState extends State<MapScreen> {
     if (navigation.currentStep?.type == 'wait_bus') {
       // NO mostrar geometría del bus hasta que confirme con "Simular"
       _polylines = [];
+      _log('🗺️ [MAP] WAIT_BUS: Polilínea limpia (esperando confirmación)');
     } else if (navigation.currentStep?.type == 'ride_bus') {
-      // Geometría del bus ya se dibujó cuando confirmó "Subir al bus"
-      // Mantener la geometría existente
+      // Mantener la geometría del bus (ya dibujada en wait_bus)
+      // NO sobrescribir si ya existe
+      if (_polylines.isEmpty || _polylines.first.color != const Color(0xFF2196F3)) {
+        // Si no hay polilínea azul, dibujarla ahora (caso de restauración)
+        final busGeometry = _cachedStepGeometry;
+        if (busGeometry.isNotEmpty) {
+          _polylines = [
+            Polyline(
+              points: busGeometry,
+              color: const Color(0xFF2196F3), // Azul para bus
+              strokeWidth: 4.0,
+            ),
+          ];
+          _log('🗺️ [MAP] RIDE_BUS: Polilínea azul restaurada (${busGeometry.length} puntos)');
+        }
+      } else {
+        _log('🗺️ [MAP] RIDE_BUS: Polilínea azul mantenida');
+      }
     } else {
+      // Caminata: mostrar polilínea roja
       _polylines = _cachedStepGeometry.isNotEmpty
           ? [
               Polyline(
                 points: _cachedStepGeometry,
-                color: const Color(0xFFE30613),
+                color: const Color(0xFFE30613), // Rojo para walk
                 strokeWidth: 5.0,
               ),
             ]
           : [];
+      _log('🗺️ [MAP] WALK: Polilínea roja (${_cachedStepGeometry.length} puntos)');
     }
 
     // Actualizar marcadores
@@ -2642,6 +2989,7 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   /// Obtiene la geometría del paso actual usando caché para optimización
+  /// ✅ Aplica compresión Douglas-Peucker automáticamente
   List<LatLng> _getCurrentStepGeometryCached() {
     final activeNav = IntegratedNavigationService.instance.activeNavigation;
     if (activeNav == null) return [];
@@ -2653,8 +3001,36 @@ class _MapScreenState extends State<MapScreen> {
       return _cachedStepGeometry;
     }
     
-    // Actualizar caché
-    _cachedStepGeometry = IntegratedNavigationService.instance.currentStepGeometry;
+    // Obtener geometría del servicio
+    var geometry = IntegratedNavigationService.instance.currentStepGeometry;
+    
+    // ✅ Aplicar compresión Douglas-Peucker si la geometría tiene muchos puntos
+    if (geometry.length > 50) {
+      final originalLength = geometry.length;
+      
+      // Epsilon adaptativo según la cantidad de puntos
+      // Rutas cortas: más detalle, rutas largas: más compresión
+      double epsilon = 0.0001; // ~11 metros por defecto
+      if (geometry.length > 200) {
+        epsilon = 0.00015; // ~17 metros para rutas muy largas
+      } else if (geometry.length > 500) {
+        epsilon = 0.0002; // ~22 metros para rutas extensas
+      }
+      
+      geometry = PolylineCompression.compress(
+        points: geometry,
+        epsilon: epsilon,
+      );
+      
+      final reduction = ((1 - geometry.length / originalLength) * 100);
+      _log(
+        '🗜️ [COMPRESS] Geometría del paso comprimida: $originalLength → ${geometry.length} pts '
+        '(${reduction.toStringAsFixed(1)}% reducción, epsilon=$epsilon)',
+      );
+    }
+    
+    // Actualizar caché con geometría comprimida
+    _cachedStepGeometry = geometry;
     _cachedStepIndex = currentStepIndex;
     
     return _cachedStepGeometry;
@@ -2669,7 +3045,7 @@ class _MapScreenState extends State<MapScreen> {
   ) {
     final newMarkers = <Marker>[];
 
-    // Marcador de la ubicación del usuario (azul, siempre visible)
+    // Marcador de la ubicación del usuario (solo la flecha de navegación)
     if (_currentPosition != null) {
       newMarkers.add(
         Marker(
@@ -2677,232 +3053,338 @@ class _MapScreenState extends State<MapScreen> {
             _currentPosition!.latitude,
             _currentPosition!.longitude,
           ),
-          child: Container(
-            decoration: BoxDecoration(
-              color: Colors.blue,
-              shape: BoxShape.circle,
-              border: Border.all(color: Colors.white, width: 3),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.blue.withValues(alpha: 0.5),
-                  blurRadius: 8,
-                  spreadRadius: 2,
-                ),
-              ],
-            ),
-            child: const Icon(Icons.navigation, color: Colors.white, size: 20),
+          child: const Icon(
+            Icons.navigation,
+            color: Colors.blue,
+            size: 32,
+            shadows: [
+              Shadow(
+                color: Colors.black54,
+                blurRadius: 4,
+                offset: Offset(0, 2),
+              ),
+            ],
           ),
         ),
       );
     }
 
-    // Mostrar paraderos de bus:
-    // - SIEMPRE: paradero de origen (subida) y destino (bajada)
-    // - SOLO durante ride_bus: paradas intermedias
-    print('🔍 [MARKERS] Buscando leg de bus en itinerario...');
-    _log('🔍 [MARKERS] Buscando leg de bus en itinerario...');
-    try {
-      final busLeg = navigation.itinerary.legs.firstWhere(
-        (leg) => leg.type == 'bus' && leg.isRedBus,
-        orElse: () => throw Exception('No bus leg found'),
-      );
+    // ═══════════════════════════════════════════════════════════════
+    // MOSTRAR PARADEROS DE BUS
+    // - Durante WALK hacia el paradero: Mostrar solo el DESTINO (paradero de subida)
+    // - Durante WAIT_BUS: Mostrar subida y bajada
+    // - Durante RIDE_BUS: Mostrar todas las paradas
+    // ═══════════════════════════════════════════════════════════════
+    final shouldShowBusStops = currentStep?.type == 'walk' || currentStep?.type == 'wait_bus' || currentStep?.type == 'ride_bus';
+    
+    if (shouldShowBusStops) {
+      _log('🔍 [MARKERS] Buscando leg de bus en itinerario...');
+      try {
+        final busLeg = navigation.itinerary.legs.firstWhere(
+          (leg) => leg.type == 'bus' && leg.isRedBus,
+          orElse: () => throw Exception('No bus leg found'),
+        );
 
-      print('✅ [MARKERS] Leg de bus encontrado');
-      _log('✅ [MARKERS] Leg de bus encontrado');
+        _log('✅ [MARKERS] Leg de bus encontrado');
 
-      final stops = busLeg.stops;
-      print('🔍 [MARKERS] Stops: ${stops?.length ?? 0}');
-      _log('🔍 [MARKERS] Stops: ${stops?.length ?? 0}');
-      
-      if (stops != null && stops.isNotEmpty) {
+        final isWalking = currentStep?.type == 'walk';
         final isRidingBus = currentStep?.type == 'ride_bus';
         final isWaitingBus = currentStep?.type == 'wait_bus';
-        print('🚏 [MARKERS] Creando marcadores de paraderos (isRidingBus=$isRidingBus, isWaitingBus=$isWaitingBus, currentStep=${currentStep?.type})');
-        _log('🚏 [MARKERS] Creando marcadores de paraderos (isRidingBus=$isRidingBus, isWaitingBus=$isWaitingBus, currentStep=${currentStep?.type})');
+        _log('🚌 [MARKERS] Estado: walk=$isWalking, wait=$isWaitingBus, ride=$isRidingBus');
+
+      // ═══════════════════════════════════════════════════════════════
+      // DISEÑO ÚNICO DE PARADEROS - Simplificado y consistente
+      // ═══════════════════════════════════════════════════════════════
+      
+      final stops = busLeg.stops;
+      if (stops != null && stops.isNotEmpty) {
+        _log('📍 [MARKERS] Procesando ${stops.length} paradas del bus');
         
-        for (int i = 0; i < stops.length; i++) {
-          final stop = stops[i];
-          final isFirst = i == 0;
-          final isLast = i == stops.length - 1;
-          final isCurrent = _isSimulating && 
-                            isRidingBus && 
-                            i == _currentSimulatedBusStopIndex;
-
-          // FILTRO: Mostrar origen y destino SIEMPRE, y paradas intermedias solo durante ride_bus
-          if (!isFirst && !isLast && !isRidingBus) {
-            print('🚏 [MARKERS] Saltando parada intermedia $i (${stop.name})');
-            continue; // Saltar paradas intermedias si no estamos en el bus
+        // Determinar qué paraderos mostrar según el estado
+        final List<int> visibleStopIndices = [];
+        
+        if (isWalking) {
+          // CAMINANDO: NO mostrar paraderos aquí
+          // El paradero destino se mostrará con un marcador especial más abajo
+          _log('🚶 [MARKERS] Modo CAMINATA: NO mostrar paraderos del busLeg');
+        } else if (isWaitingBus) {
+          // ESPERANDO: Mostrar SUBIDA y BAJADA
+          visibleStopIndices.add(0); // Subida
+          if (stops.length > 1) {
+            visibleStopIndices.add(stops.length - 1); // Bajada
           }
-
-          print('🚏 [MARKERS] Creando marcador $i: ${stop.name} (isFirst=$isFirst, isLast=$isLast, isCurrent=$isCurrent)');
-
-          Color markerColor;
-          IconData markerIcon;
-          double markerSize;
+          _log('🚏 [MARKERS] Modo ESPERA: Mostrando paraderos de subida y bajada');
+        } else if (isRidingBus) {
+          // DURANTE el viaje: Mostrar todas las paradas
+          for (int i = 0; i < stops.length; i++) {
+            visibleStopIndices.add(i);
+          }
+          _log('🚌 [MARKERS] Modo VIAJE: Mostrando todas las paradas');
+        }
+        
+        // Crear marcadores con diseño formal y empresarial
+        for (final index in visibleStopIndices) {
+          final stop = stops[index];
+          final isFirst = index == 0;
+          final isLast = index == stops.length - 1;
+          final isCurrent = _isSimulating && index == _currentSimulatedBusStopIndex;
           
-          if (isCurrent) {
-            // Paradero actual durante simulación: amarillo brillante
-            markerColor = const Color(0xFFFFC107); // Amarillo
-            markerIcon = Icons.directions_bus;
-            markerSize = 45;
-          } else if (isFirst) {
-            // Paradero de ORIGEN del bus (donde se sube): Naranja
-            markerColor = Colors.orange;
-            markerIcon = Icons.arrow_upward; // Flecha hacia arriba = subida
-            markerSize = 40;
-          } else if (isLast) {
-            // Paradero de DESTINO del bus (donde se baja): Morado
-            markerColor = Colors.purple;
-            markerIcon = Icons.arrow_downward; // Flecha hacia abajo = bajada
-            markerSize = 40;
-          } else {
-            // Paraderos intermedios: icono pequeño con código
-            markerColor = const Color(0xFF2196F3); // Azul
-            markerIcon = Icons.circle;
-            markerSize = 18; // Reducido de 20 a 18
-          }
-
           newMarkers.add(
             Marker(
               point: stop.location,
-              width: isCurrent ? markerSize + 10 : (isFirst || isLast ? markerSize + 4 : 50),
-              height: isCurrent ? markerSize + 10 : (isFirst || isLast ? markerSize + 4 : 32), // Reducido de 35 a 32
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
+              width: 150,
+              height: 80,
+              child: Stack(
+                clipBehavior: Clip.none,
+                alignment: Alignment.center,
                 children: [
-                  // Icono del paradero
-                  Container(
-                    width: markerSize,
-                    height: markerSize,
-                    decoration: BoxDecoration(
-                      color: markerColor,
-                      shape: BoxShape.circle,
-                      border: Border.all(
-                        color: isCurrent ? Colors.orange : Colors.white, 
-                        width: isCurrent ? 3 : 2
-                      ),
-                      boxShadow: [
-                        BoxShadow(
-                          color: markerColor.withValues(alpha: isCurrent ? 0.8 : 0.5),
-                          blurRadius: isCurrent ? 12 : 6,
-                          spreadRadius: isCurrent ? 4 : 2,
-                        ),
-                      ],
-                    ),
-                    child: Icon(
-                      markerIcon,
-                      color: Colors.white,
-                      size: isCurrent ? 30 : (isFirst || isLast ? 24 : 9), // Reducido de 10 a 9
-                    ),
-                  ),
-                  // Código del paradero (solo para intermedios, con tamaño reducido)
-                  if (!isFirst && !isLast && stop.code != null)
-                    Container(
-                      margin: const EdgeInsets.only(top: 1), // Reducido de 2 a 1
-                      padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 1), // Reducido padding
+                  // Nombre del paradero arriba
+                  Positioned(
+                    top: 0,
+                    child: Container(
+                      constraints: const BoxConstraints(maxWidth: 140),
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                       decoration: BoxDecoration(
-                        color: isCurrent ? const Color(0xFFFFC107) : Colors.white,
-                        borderRadius: BorderRadius.circular(2), // Reducido de 3 a 2
-                        border: Border.all(
-                          color: isCurrent ? Colors.orange : const Color(0xFF2196F3), 
-                          width: isCurrent ? 2 : 1
-                        ),
+                        color: const Color(0xFF1E293B), // Gris oscuro profesional
+                        borderRadius: BorderRadius.circular(4),
                       ),
                       child: Text(
-                        stop.code!,
-                        style: TextStyle(
-                          fontSize: isCurrent ? 9 : 7, // Reducido de 10:8 a 9:7
-                          fontWeight: FontWeight.bold,
-                          color: isCurrent ? Colors.orange.shade900 : const Color(0xFF2196F3),
+                        stop.name ?? 'Paradero ${index + 1}',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w600,
+                          letterSpacing: 0.3,
+                          height: 1.2,
                         ),
+                        textAlign: TextAlign.center,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
                       ),
                     ),
+                  ),
+                  // Ícono del bus (flat design, sin círculo)
+                  Positioned(
+                    bottom: 10,
+                    child: Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: isCurrent ? const Color(0xFFEF6C00) : const Color(0xFFD84315), // Naranja corporativo
+                        borderRadius: BorderRadius.circular(6),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.25),
+                            blurRadius: 8,
+                            offset: const Offset(0, 3),
+                          ),
+                        ],
+                      ),
+                      child: Icon(
+                        Icons.directions_bus,
+                        color: Colors.white,
+                        size: isCurrent ? 28 : 24,
+                      ),
+                    ),
+                  ),
                 ],
               ),
             ),
           );
+          
+          _log('🚏 [MARKERS] Paradero ${index + 1}/${stops.length}: ${stop.name} ${isCurrent ? "(ACTUAL)" : ""}');
         }
-        final visibleCount = isRidingBus ? stops.length : 2; // Solo origen y destino antes de subir
-        print('🗺️ [MARKERS] Creados $visibleCount marcadores de paraderos (${stops.length} paradas totales)');
-        print('🗺️ [MARKERS] Total markers hasta ahora: ${newMarkers.length}');
-        _log('🗺️ [MARKERS] Creados $visibleCount marcadores de paraderos (${stops.length} paradas totales)');
-        _log('🗺️ [MARKERS] Total markers hasta ahora: ${newMarkers.length}');
+        
+        _log('🗺️ [MARKERS] Creados ${visibleStopIndices.length} marcadores de paradero');
       }
-    } catch (e) {
-      print('⚠️ [MARKERS] No hay leg de bus en este itinerario: $e');
-      _log('⚠️ [MARKERS] No hay leg de bus en este itinerario: $e');
+      } catch (e) {
+        _log('⚠️ [MARKERS] No hay leg de bus en este itinerario: $e');
+      }
+    } else {
+      _log('🚫 [MARKERS] No mostrar paraderos - paso actual: ${currentStep?.type}');
     }
 
-    // Marcador del paso actual (paradero o punto de acción)
-    // SOLO si NO es ride_bus (porque ya están los marcadores de paradas)
-    if (currentStep?.location != null && currentStep!.type != 'ride_bus') {
-      print('🎯 [MARKERS] Creando marcador del paso actual: ${currentStep.type} en ${currentStep.location}');
-      final Widget markerWidget;
-
-      if (currentStep.type == 'walk' || currentStep.type == 'wait_bus') {
-        print('🚏 [MARKERS] Creando marcador de paradero (tipo: ${currentStep.type})');
-        // Icono de paradero de bus
-        markerWidget = Container(
-          width: 40,
-          height: 40,
-          decoration: BoxDecoration(
-            color: Colors.orange,
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: Colors.white, width: 2),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.orange.withValues(alpha: 0.5),
-                blurRadius: 8,
-                spreadRadius: 2,
-              ),
-            ],
-          ),
-          child: const Icon(
-            Icons.directions_bus,
-            color: Colors.white,
-            size: 24,
-          ),
-        );
-      } else {
-        final (icon, color) = _getStepMarkerStyle(currentStep.type);
-        markerWidget = Icon(icon, color: color, size: 30);
-      }
-
-      newMarkers.add(Marker(point: currentStep.location!, child: markerWidget));
-    }
-
-    // Marcador del destino final (siempre visible)
-    final lastStep = navigation.steps.last;
-    if (lastStep.location != null) {
-      print('🏁 [MARKERS] Creando marcador del destino final en ${lastStep.location}');
-      newMarkers.add(
-        Marker(
-          point: lastStep.location!,
-          child: Container(
-            decoration: BoxDecoration(
-              color: Colors.green,
-              shape: BoxShape.circle,
-              border: Border.all(color: Colors.white, width: 3),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.green.withValues(alpha: 0.5),
-                  blurRadius: 8,
-                  spreadRadius: 2,
+    // ═══════════════════════════════════════════════════════════════
+    // MARCADOR DE PARADERO DESTINO durante WALK
+    // Mostrar el paradero destino con diseño naranja profesional
+    // Usa el ÚLTIMO punto de la geometría walk (destino real)
+    // ═══════════════════════════════════════════════════════════════
+    if (currentStep?.type == 'walk' && currentStep?.location != null) {
+      final nextStep = navigation.currentStepIndex < navigation.steps.length - 1
+          ? navigation.steps[navigation.currentStepIndex + 1]
+          : null;
+      
+      // Verificar si el siguiente paso es wait_bus (paradero)
+      if (nextStep?.type == 'wait_bus' && nextStep?.stopName != null) {
+        // Obtener el último punto de la geometría walk (destino exacto)
+        final walkGeometry = _getCurrentStepGeometryCached();
+        final paraderoLocation = walkGeometry.isNotEmpty 
+            ? walkGeometry.last  // Usar último punto de la geometría
+            : currentStep!.location!;  // Fallback a currentStep.location
+        
+        _log('🚏 [MARKERS] Mostrando paradero destino: ${nextStep!.stopName} en $paraderoLocation');
+        
+        newMarkers.add(
+          Marker(
+            point: paraderoLocation,
+            width: 160,
+            height: 100,
+            child: Stack(
+              clipBehavior: Clip.none,
+              alignment: Alignment.topCenter,
+              children: [
+                // Nombre del paradero arriba
+                Positioned(
+                  top: 0,
+                  child: Container(
+                    constraints: const BoxConstraints(maxWidth: 150),
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1E293B),
+                      borderRadius: BorderRadius.circular(6),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.2),
+                          blurRadius: 4,
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
+                    ),
+                    child: Text(
+                      nextStep.stopName!,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 0.3,
+                        height: 1.2,
+                      ),
+                      textAlign: TextAlign.center,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ),
+                // Pin de ubicación estilo Google Maps/RED (globo rojo)
+                Positioned(
+                  top: 35,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // Globo del pin
+                      Container(
+                        width: 44,
+                        height: 44,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFD84315), // Rojo corporativo RED
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.white, width: 3),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.3),
+                              blurRadius: 8,
+                              offset: const Offset(0, 4),
+                            ),
+                          ],
+                        ),
+                        child: const Icon(
+                          Icons.directions_bus_rounded,
+                          color: Colors.white,
+                          size: 22,
+                        ),
+                      ),
+                      // Punta del pin (triángulo hacia abajo)
+                      CustomPaint(
+                        size: const Size(12, 8),
+                        painter: _PinTipPainter(color: const Color(0xFFD84315)),
+                      ),
+                    ],
+                  ),
                 ),
               ],
             ),
-            child: const Icon(Icons.flag, color: Colors.white, size: 24),
           ),
-        ),
-      );
+        );
+      } else {
+        _log('🚫 [MARKERS] Siguiente paso no es wait_bus: ${nextStep?.type}');
+      }
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // MARCADOR DEL DESTINO FINAL
+    // Solo mostrar cuando estemos en el ÚLTIMO paso de la navegación
+    // ═══════════════════════════════════════════════════════════════
+    final isLastStep = navigation.currentStepIndex >= navigation.steps.length - 1;
+    if (isLastStep) {
+      final lastStep = navigation.steps.last;
+      if (lastStep.location != null) {
+        _log('🏁 [MARKERS] ÚLTIMO PASO - Mostrando destino final en ${lastStep.location}');
+        newMarkers.add(
+          Marker(
+            point: lastStep.location!,
+            width: 150,
+            height: 80,
+            child: Stack(
+              clipBehavior: Clip.none,
+              alignment: Alignment.center,
+              children: [
+                // Etiqueta "Destino"
+                Positioned(
+                  top: 0,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1E293B),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: const Text(
+                      'Destino',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                  ),
+                ),
+                // Pin de ubicación (flat design)
+                Positioned(
+                  bottom: 10,
+                  child: Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF2E7D32), // Verde corporativo
+                      borderRadius: BorderRadius.circular(6),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.25),
+                          blurRadius: 8,
+                          offset: const Offset(0, 3),
+                        ),
+                      ],
+                    ),
+                    child: const Icon(
+                      Icons.location_on,
+                      color: Colors.white,
+                      size: 28,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      }
+    } else {
+      _log('🚫 [MARKERS] NO es el último paso - Destino final NO visible');
     }
 
     // Actualizar marcadores
-    print('🗺️ [MARKERS] ═══════════════════════════════════════════════════════');
-    print('🗺️ [MARKERS] TOTAL DE MARCADORES CREADOS: ${newMarkers.length}');
-    print('🗺️ [MARKERS] Paso actual: ${currentStep?.type}');
-    print('🗺️ [MARKERS] ═══════════════════════════════════════════════════════');
+    _log('🗺️ [MARKERS] ═══════════════════════════════════════════════════════');
     _log('🗺️ [MARKERS] TOTAL DE MARCADORES CREADOS: ${newMarkers.length}');
+    _log('🗺️ [MARKERS] Paso actual: ${currentStep?.type} (${navigation.currentStepIndex + 1}/${navigation.steps.length})');
+    _log('🗺️ [MARKERS] Es último paso: $isLastStep');
+    _log('🗺️ [MARKERS] ═══════════════════════════════════════════════════════');
     _markers = newMarkers;
   }
 
@@ -3015,172 +3497,12 @@ class _MapScreenState extends State<MapScreen> {
     }
   }
 
-  Future<void> _calculateRoute({
-    required double destLat,
-    required double destLon,
-    required String destName,
-  }) async {
-    if (_currentPosition == null) return;
-
-    try {
-      final apiClient = ApiClient();
-      final route = await apiClient.getPublicTransitRoute(
-        originLat: _currentPosition!.latitude,
-        originLon: _currentPosition!.longitude,
-        destLat: destLat,
-        destLon: destLon,
-        departureTime: DateTime.now(),
-        includeGeometry: true,
-      );
-
-      _displayRoute(route);
-
-      // CAP-12: Guardar instrucciones para lectura posterior
-      final instructions =
-          (route['instructions'] as List<dynamic>?)
-              ?.map((e) => e.toString())
-              .toList() ??
-          [];
-
-      setState(() {
-        _currentInstructions = instructions;
-        _currentInstructionStep = 0;
-        _instructionFocusIndex = 0;
-        _hasActiveTrip = true;
-      });
-
-      final durationMinutes = ((route['duration_seconds'] as num?) ?? 0) / 60;
-      final distanceMeters = (route['distance_meters'] as num?) ?? 0;
-
-      // CAP-12: Leer primera instrucción automáticamente
-      String message =
-          'Ruta a $destName encontrada. '
-          'Duración: ${durationMinutes.round()} minutos, '
-          'distancia: ${(distanceMeters / 1000).toStringAsFixed(1)} kilómetros. ';
-
-      if (instructions.isNotEmpty) {
-        message += 'Primera instrucción: ${instructions[0]}';
-        _currentInstructionStep = 1;
-        _instructionFocusIndex = 0;
-      }
-
-      TtsService.instance.speak(message);
-      _announce('Ruta calculada exitosamente');
-      
-      // Vibración de confirmación al calcular ruta
-      final hasVibrator = await Vibration.hasVibrator();
-      if (hasVibrator == true) {
-        Vibration.vibrate(duration: 200);
-      }
-    } catch (e) {
-      if (e is ApiException && e.isNetworkError) {
-        _showWarningNotification(
-          'Servidor no disponible, usando ruta de demostración',
-        );
-        _displayFallbackRoute(
-          destLat: destLat,
-          destLon: destLon,
-          destName: destName,
-        );
-        return;
-      }
-
-      TtsService.instance.speak(
-        'Error calculando ruta. Verifique la conexión con el servidor',
-      );
-      _showErrorNotification('No se pudo calcular la ruta: ${e.toString()}');
-      
-      // Vibración de error (patrón largo-corto-largo)
-      final hasVibrator = await Vibration.hasVibrator();
-      if (hasVibrator == true) {
-        Vibration.vibrate(duration: 300);
-        await Future.delayed(const Duration(milliseconds: 200));
-        Vibration.vibrate(duration: 100);
-        await Future.delayed(const Duration(milliseconds: 200));
-        Vibration.vibrate(duration: 300);
-      }
-    }
-  }
-
-  void _displayFallbackRoute({
-    required double destLat,
-    required double destLon,
-    required String destName,
-  }) {
-    if (_currentPosition == null) {
-      return;
-    }
-
-    final origin = LatLng(
-      _currentPosition!.latitude,
-      _currentPosition!.longitude,
-    );
-    final destination = LatLng(destLat, destLon);
-
-    setState(() {
-      _polylines = [
-        Polyline(
-          points: [origin, destination],
-          color: Colors.blueGrey,
-          strokeWidth: 4,
-        ),
-      ];
-      _markers = [
-        Marker(
-          point: origin,
-          child: const Icon(Icons.my_location, color: Colors.blue, size: 30),
-        ),
-        Marker(
-          point: destination,
-          child: const Icon(Icons.location_on, color: Colors.orange, size: 30),
-        ),
-      ];
-    });
-
-    final distanceMeters = Geolocator.distanceBetween(
-      origin.latitude,
-      origin.longitude,
-      destination.latitude,
-      destination.longitude,
-    );
-
-    TtsService.instance.speak(
-      'Ruta de demostración hacia $destName. Distancia aproximada ${(distanceMeters / 1000).toStringAsFixed(1)} kilómetros. '
-      'Conéctate al servidor para obtener instrucciones detalladas.',
-    );
-  }
-
-  /// Muestra un diálogo con rutas alternativas y permite seleccionar una
-  /// Muestra la ruta calculada con detalles de itinerario estilo Moovit
-  /// Display route from GraphHopper (fallback, ya no se usa porque ahora
-  /// todo viene de IntegratedNavigationService que usa Moovit)
-  void _displayRoute(Map<String, dynamic> route) {
-    _polylines.clear();
-
-    final geometry = route['geometry'] as List<dynamic>?;
-    if (geometry != null && geometry.isNotEmpty) {
-      final points = geometry.map((point) {
-        final coords = point as List<dynamic>;
-        // GraphHopper geometry is [lon, lat], convert to LatLng(lat, lon)
-        return LatLng(coords[1] as double, coords[0] as double);
-      }).toList();
-
-      _polylines.add(
-        Polyline(points: points, color: Colors.blue, strokeWidth: 4.0),
-      );
-
-      // Add destination marker
-      final lastPoint = points.last;
-      _markers.add(
-        Marker(
-          point: lastPoint,
-          child: const Icon(Icons.location_on, color: Colors.green, size: 30),
-        ),
-      );
-    }
-
-    if (mounted) setState(() {});
-  }
+  // ═══════════════════════════════════════════════════════════════
+  // MÉTODOS LEGACY ELIMINADOS
+  // ═══════════════════════════════════════════════════════════════
+  // ❌ _calculateRoute() - Obsoleto, ahora se usa IntegratedNavigationService
+  // ❌ _displayRoute() - Obsoleto, todo viene de IntegratedNavigationService
+  // ❌ _displayFallbackRoute() - Obsoleto, no se usa ruta de demostración
 
   void _showPermissionDialog() {
     showDialog(
@@ -3364,13 +3686,199 @@ class _MapScreenState extends State<MapScreen> {
       ],
     );
   }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // MÉTODOS DE CACHÉ Y COMPRESIÓN DE GEOMETRÍAS
+  // ═══════════════════════════════════════════════════════════════════════
+
+  /// Intenta cargar geometría desde caché, si no existe la obtiene del servicio
+  /// y la guarda comprimida para uso futuro
+  Future<List<LatLng>> _getOrCacheGeometry({
+    required String cacheKey,
+    required Future<List<LatLng>> Function() fetchGeometry,
+    bool compress = true,
+    double epsilon = 0.0001,
+  }) async {
+    try {
+      // 1. Intentar cargar desde caché
+      final cached = await GeometryCacheService.instance.getRoute(cacheKey);
+      if (cached != null && cached.isNotEmpty) {
+        _log('💾 [CACHE] Geometría cargada desde caché: $cacheKey (${cached.length} pts)');
+        return cached;
+      }
+
+      // 2. No hay caché, obtener desde servicio
+      _log('🌐 [CACHE] No hay caché, obteniendo desde servicio: $cacheKey');
+      final geometry = await fetchGeometry();
+
+      if (geometry.isEmpty) {
+        _log('⚠️ [CACHE] Geometría vacía desde servicio: $cacheKey');
+        return geometry;
+      }
+
+      // 3. Guardar en caché (comprimido si es necesario)
+      unawaited(
+        GeometryCacheService.instance.saveRoute(
+          key: cacheKey,
+          geometry: geometry,
+          compress: compress,
+          epsilon: epsilon,
+          metadata: {
+            'timestamp': DateTime.now().toIso8601String(),
+            'source': 'integrated_navigation',
+          },
+        ),
+      );
+
+      // 4. Retornar comprimido si se solicitó
+      if (compress) {
+        final compressed = PolylineCompression.compress(
+          points: geometry,
+          epsilon: epsilon,
+        );
+        _log(
+          '🗜️ [COMPRESS] ${geometry.length} → ${compressed.length} pts '
+          '(${((1 - compressed.length / geometry.length) * 100).toStringAsFixed(1)}% reducción)',
+        );
+        return compressed;
+      }
+
+      return geometry;
+    } catch (e, st) {
+      _log('❌ [CACHE] Error en getOrCacheGeometry: $e', error: e, stackTrace: st);
+      // Fallback: intentar obtener sin caché
+      try {
+        return await fetchGeometry();
+      } catch (e2) {
+        _log('❌ [CACHE] Error en fallback: $e2');
+        return [];
+      }
+    }
+  }
+
+  /// Genera una clave de caché única para una geometría de paso
+  String _generateCacheKey({
+    required String originLat,
+    required String originLon,
+    required String destLat,
+    required String destLon,
+    required String stepType,
+    int? stepIndex,
+  }) {
+    // Redondear coordenadas a 4 decimales (aprox. 11m de precisión)
+    // para agrupar rutas similares
+    final origin = '${originLat}_${originLon}';
+    final dest = '${destLat}_${destLon}';
+    final step = stepIndex != null ? '${stepType}_$stepIndex' : stepType;
+    
+    return 'route_${origin}_to_${dest}_$step';
+  }
+
+  /// Comprime una lista de puntos usando Douglas-Peucker
+  /// Útil para polilíneas ya obtenidas que necesitan optimización
+  List<LatLng> _compressPolyline(List<LatLng> points, {double epsilon = 0.0001}) {
+    if (points.length <= 2) return points;
+
+    final compressed = PolylineCompression.compress(
+      points: points,
+      epsilon: epsilon,
+    );
+
+    final reduction = (1 - compressed.length / points.length) * 100;
+    _log(
+      '🗜️ [COMPRESS] Douglas-Peucker: ${points.length} → ${compressed.length} pts '
+      '(${reduction.toStringAsFixed(1)}% reducción, epsilon=$epsilon)',
+    );
+
+    return compressed;
+  }
+
+  /// Obtiene estadísticas del caché para debugging/monitoring
+  Future<void> _logCacheStats() async {
+    try {
+      final stats = await GeometryCacheService.instance.getStats();
+      _log('📊 [CACHE STATS] ${stats.toString()}');
+    } catch (e) {
+      _log('⚠️ [CACHE] Error obteniendo stats: $e');
+    }
+  }
+
+  /// Cachea las geometrías de todos los pasos de navegación en background
+  void _cacheNavigationGeometries(ActiveNavigation navigation, String routeCacheKey) {
+    // Ejecutar en background para no bloquear UI
+    Future(() async {
+      try {
+        int cached = 0;
+        
+        for (int i = 0; i < navigation.steps.length; i++) {
+          final step = navigation.steps[i];
+          
+          // Obtener geometría del paso desde el servicio
+          List<LatLng> geometry = [];
+          if (step.type == 'walk' || step.type == 'ride_bus') {
+            // Buscar geometría en los legs del itinerario
+            try {
+              if (step.type == 'walk') {
+                // Buscar leg de caminata correspondiente
+                final walkLegs = navigation.itinerary.legs
+                    .where((leg) => leg.type == 'walk')
+                    .toList();
+                
+                if (i < walkLegs.length && walkLegs[i].geometry != null) {
+                  geometry = walkLegs[i].geometry!;
+                }
+              } else if (step.type == 'ride_bus') {
+                // Buscar leg de bus
+                final busLeg = navigation.itinerary.legs
+                    .firstWhere((leg) => leg.type == 'bus');
+                
+                if (busLeg.geometry != null) {
+                  geometry = busLeg.geometry!;
+                }
+              }
+            } catch (e) {
+              _log('⚠️ [CACHE] No se pudo obtener geometría para paso $i: $e');
+              continue;
+            }
+          }
+          
+          if (geometry.isEmpty) continue;
+          
+          // Generar clave única para este paso
+          final stepKey = '${routeCacheKey}_step_$i';
+          
+          // Guardar en caché comprimido
+          final success = await GeometryCacheService.instance.saveRoute(
+            key: stepKey,
+            geometry: geometry,
+            compress: true,
+            epsilon: geometry.length > 200 ? 0.00015 : 0.0001,
+            ttl: const Duration(days: 7),
+            metadata: {
+              'stepType': step.type,
+              'stepIndex': i,
+              'instruction': step.instruction,
+              'timestamp': DateTime.now().toIso8601String(),
+            },
+          );
+          
+          if (success) cached++;
+        }
+        
+        _log('💾 [CACHE] Guardados $cached/${navigation.steps.length} pasos en caché offline');
+        
+        // Log de estadísticas
+        await _logCacheStats();
+      } catch (e, st) {
+        _log('❌ [CACHE] Error cacheando geometrías de navegación: $e', error: e, stackTrace: st);
+      }
+    });
+  }
+
   @override
   @override
   void dispose() {
-    _resultDebounce?.cancel();
-    _feedbackTimer?.cancel();
-    _confirmationTimer?.cancel();
-    _walkSimulationTimer?.cancel();
+    // ✅ TimerManagerMixin limpia automáticamente: feedback, confirmation, speechTimeout, walkSimulation, resultDebounce
 
     unawaited(TtsService.instance.releaseContext('map_navigation'));
 
@@ -3728,7 +4236,8 @@ class _MapScreenState extends State<MapScreen> {
     // PANEL ESPECIAL para wait_bus: Solo micrófono y tiempo de llegada
     if (currentStep?.type == 'wait_bus') {
       final busRoute = currentStep.busRoute ?? '';
-      final arrivalTime = currentStep.arrivalTime ?? 0; // minutos
+      // NOTA: Tiempo real de llegada se integrará cuando API RED lo soporte
+      final arrivalTime = currentStep.estimatedDuration; // Usar estimación por ahora
       
       return SafeArea(
         top: false,
@@ -3838,7 +4347,7 @@ class _MapScreenState extends State<MapScreen> {
     }
     
     // PANEL ESPECIAL para ride_bus: Muestra progreso del viaje en bus
-    if (currentStep?.type == 'ride_bus' || currentStep?.type == 'bus') {
+    if (currentStep?.type == 'ride_bus') {
       final busRoute = currentStep.busRoute ?? '';
       final stopName = currentStep.stopName ?? 'Destino';
       final totalStops = currentStep.totalStops ?? 0;
@@ -4089,67 +4598,15 @@ class _MapScreenState extends State<MapScreen> {
     
     // Determinar el tipo de actividad actual (walk o bus)
     final isWalking = currentStep?.type == 'walk';
-    final isBus = currentStep?.type == 'bus' || currentStep?.type == 'wait_bus';
+    final isBusRelated = currentStep?.type == 'wait_bus' || currentStep?.type == 'ride_bus';
 
     return SafeArea(
       top: false,
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 24), // Panel cerca del borde inferior
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // Mensajes de ruta (pegado arriba del panel principal)
-            if (_messageHistory.isNotEmpty)
-              Container(
-                margin: const EdgeInsets.only(bottom: 4), // Espacio mínimo con el panel
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF1E293B),
-                  borderRadius: BorderRadius.circular(20),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.15),
-                      blurRadius: 12,
-                      offset: const Offset(0, 4),
-                    ),
-                  ],
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Row(
-                      children: const [
-                        Icon(Icons.campaign, color: Colors.amber, size: 16),
-                        SizedBox(width: 6),
-                        Text(
-                          'Mensajes de ruta',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 6),
-                    ...(_messageHistory.reversed.take(2).map((msg) => Padding(
-                      padding: const EdgeInsets.only(bottom: 3),
-                      child: Text(
-                        msg,
-                        style: const TextStyle(
-                          color: Colors.white70,
-                          fontSize: 11,
-                          height: 1.3,
-                        ),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ))),
-                  ],
-                ),
-              ),
-            
             // Panel minimal con micrófono
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
@@ -4172,7 +4629,7 @@ class _MapScreenState extends State<MapScreen> {
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         Icon(
-                          isWalking ? Icons.directions_walk : isBus ? Icons.directions_bus : Icons.access_time,
+                          isWalking ? Icons.directions_walk : isBusRelated ? Icons.directions_bus : Icons.access_time,
                           size: 20,
                           color: const Color(0xFF64748B),
                         ),
@@ -4396,10 +4853,148 @@ class _MapScreenState extends State<MapScreen> {
   /// Simplifica nombres de paraderos para TTS
   /// Convierte "PA1234 / Av. Providencia" en "Paradero" cuando es destino
   /// o simplemente remueve el código manteniendo la calle
+
+  // ============================================================================
+  // SIMULACIÓN REALISTA CON DESVIACIONES
+  // ============================================================================
+
+  /// Planifica una desviación aleatoria en la simulación de caminata
+  /// Genera un punto de desviación y una ruta de regreso
+  void _planSimulationDeviation(List<LatLng> originalGeometry) {
+    if (!_simulationDeviationEnabled || originalGeometry.length < 20) {
+      _simulationDeviationStep = -1;
+      _simulationDeviationRoute = null;
+      return;
+    }
+
+    final random = math.Random();
+    
+    // 40% de probabilidad de desviarse durante la simulación
+    if (random.nextDouble() > 0.4) {
+      _simulationDeviationStep = -1;
+      _simulationDeviationRoute = null;
+      return;
+    }
+
+    // Desviarse entre el 30% y 70% del recorrido
+    final minIndex = (originalGeometry.length * 0.3).toInt();
+    final maxIndex = (originalGeometry.length * 0.7).toInt();
+    _simulationDeviationStep = minIndex + random.nextInt(maxIndex - minIndex);
+
+    // Generar ruta de desviación (perpendicular a la ruta correcta)
+    final deviationPoint = originalGeometry[_simulationDeviationStep];
+    final nextPoint = _simulationDeviationStep < originalGeometry.length - 1
+        ? originalGeometry[_simulationDeviationStep + 1]
+        : originalGeometry[_simulationDeviationStep - 1];
+
+    // Calcular vector perpendicular
+    final dx = nextPoint.longitude - deviationPoint.longitude;
+    final dy = nextPoint.latitude - deviationPoint.latitude;
+    
+    // Vector perpendicular (rotar 90 grados)
+    final perpDx = -dy;
+    final perpDy = dx;
+    
+    // Normalizar y escalar (desviación de 60-80 metros)
+    final length = math.sqrt(perpDx * perpDx + perpDy * perpDy);
+    final deviationDistance = 0.0006 + random.nextDouble() * 0.0002; // ~60-80m
+    final normDx = (perpDx / length) * deviationDistance;
+    final normDy = (perpDy / length) * deviationDistance;
+
+    // Punto de máxima desviación
+    final maxDeviationPoint = LatLng(
+      deviationPoint.latitude + normDy,
+      deviationPoint.longitude + normDx,
+    );
+
+    // Crear ruta de desviación: salida gradual (4 puntos) + regreso gradual (5 puntos)
+    _simulationDeviationRoute = [
+      // Salida gradual de la ruta
+      LatLng(
+        deviationPoint.latitude + normDy * 0.25,
+        deviationPoint.longitude + normDx * 0.25,
+      ),
+      LatLng(
+        deviationPoint.latitude + normDy * 0.5,
+        deviationPoint.longitude + normDx * 0.5,
+      ),
+      LatLng(
+        deviationPoint.latitude + normDy * 0.75,
+        deviationPoint.longitude + normDx * 0.75,
+      ),
+      maxDeviationPoint,
+      // Regreso gradual a la ruta
+      LatLng(
+        deviationPoint.latitude + normDy * 0.75,
+        deviationPoint.longitude + normDx * 0.75,
+      ),
+      LatLng(
+        deviationPoint.latitude + normDy * 0.5,
+        deviationPoint.longitude + normDx * 0.5,
+      ),
+      LatLng(
+        deviationPoint.latitude + normDy * 0.25,
+        deviationPoint.longitude + normDx * 0.25,
+      ),
+      // Punto de regreso (siguiente en la ruta original)
+      _simulationDeviationStep < originalGeometry.length - 5
+          ? originalGeometry[_simulationDeviationStep + 5]
+          : originalGeometry.last,
+    ];
+
+    _log('🎲 [SIMULACIÓN] Desviación planificada en punto $_simulationDeviationStep/${originalGeometry.length}');
+    _log('   Distancia de desviación: ~${(deviationDistance * 111000).toInt()}m');
+  }
+
+  /// Obtiene el siguiente punto GPS para la simulación (con o sin desviación)
+  LatLng _getNextSimulationPoint(List<LatLng> originalGeometry, int currentIndex) {
+    // Si estamos en el punto de desviación, comenzar a seguir la ruta de desviación
+    if (currentIndex == _simulationDeviationStep && _simulationDeviationRoute != null && !_isCurrentlyDeviated) {
+      _isCurrentlyDeviated = true;
+      _log('⚠️ [SIMULACIÓN] Iniciando desviación de ruta...');
+      return _simulationDeviationRoute!.first;
+    }
+
+    // Si estamos desviados, seguir la ruta de desviación
+    if (_isCurrentlyDeviated && _simulationDeviationRoute != null) {
+      final deviationIndex = currentIndex - _simulationDeviationStep;
+      
+      if (deviationIndex < _simulationDeviationRoute!.length) {
+        final deviationPoint = _simulationDeviationRoute![deviationIndex];
+        
+        // Último punto de desviación = regreso a la ruta
+        if (deviationIndex == _simulationDeviationRoute!.length - 1) {
+          _log('✅ [SIMULACIÓN] Regresando a la ruta correcta...');
+          _isCurrentlyDeviated = false;
+        }
+        
+        return deviationPoint;
+      } else {
+        // Terminar desviación y continuar con ruta original
+        _isCurrentlyDeviated = false;
+        final newIndex = _simulationDeviationStep + _simulationDeviationRoute!.length;
+        return newIndex < originalGeometry.length 
+            ? originalGeometry[newIndex]
+            : originalGeometry.last;
+      }
+    }
+
+    // Navegación normal por la ruta original
+    return currentIndex < originalGeometry.length 
+        ? originalGeometry[currentIndex]
+        : originalGeometry.last;
+  }
+
+  /// Resetea el estado de desviación al iniciar nueva simulación
+  void _resetSimulationDeviation() {
+    _simulationDeviationStep = -1;
+    _simulationDeviationRoute = null;
+    _isCurrentlyDeviated = false;
+  }
 }
 
 /// Widget optimizado para el marcador de ubicación del usuario
-/// Usa const para evitar reconstrucciones innecesarias
+/// Diseño empresarial con flecha de navegación tipo GPS
 class _UserLocationMarkerWidget extends StatelessWidget {
   const _UserLocationMarkerWidget();
 
@@ -4408,38 +5003,35 @@ class _UserLocationMarkerWidget extends StatelessWidget {
     return Stack(
       alignment: Alignment.center,
       children: [
-        // Pulso animado de fondo
+        // Círculo de precisión (sutil)
         Container(
-          width: 56,
-          height: 56,
+          width: 70,
+          height: 70,
           decoration: BoxDecoration(
             shape: BoxShape.circle,
-            color: Colors.blue.withValues(alpha: 0.2),
+            color: const Color(0xFF1565C0).withValues(alpha: 0.1),
+            border: Border.all(
+              color: const Color(0xFF1565C0).withValues(alpha: 0.2),
+              width: 1,
+            ),
           ),
         ),
-        // Círculo principal con icono "Tú estás aquí"
+        // Triángulo/Flecha de navegación principal
         Container(
-          width: 44,
-          height: 44,
+          padding: const EdgeInsets.all(8),
           decoration: BoxDecoration(
-            color: const Color(0xFF1976D2), // Colors.blue.shade700
-            shape: BoxShape.circle,
-            border: Border.all(color: Colors.white, width: 3),
+            color: const Color(0xFF1565C0), // Azul corporativo
+            borderRadius: BorderRadius.circular(6),
             boxShadow: [
               BoxShadow(
                 color: Colors.black.withValues(alpha: 0.3),
-                blurRadius: 8,
-                offset: const Offset(0, 2),
-              ),
-              BoxShadow(
-                color: Colors.blue.withValues(alpha: 0.5),
-                blurRadius: 16,
-                spreadRadius: 4,
+                blurRadius: 10,
+                offset: const Offset(0, 3),
               ),
             ],
           ),
           child: const Icon(
-            Icons.person_pin_circle_rounded,
+            Icons.navigation, // Triángulo de navegación
             color: Colors.white,
             size: 28,
           ),
@@ -4447,4 +5039,29 @@ class _UserLocationMarkerWidget extends StatelessWidget {
       ],
     );
   }
+}
+
+/// Painter para dibujar la punta triangular del pin de ubicación
+class _PinTipPainter extends CustomPainter {
+  final Color color;
+
+  _PinTipPainter({required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.fill;
+
+    final path = Path()
+      ..moveTo(size.width / 2, size.height) // Punta del triángulo (abajo centro)
+      ..lineTo(0, 0) // Esquina superior izquierda
+      ..lineTo(size.width, 0) // Esquina superior derecha
+      ..close();
+
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }

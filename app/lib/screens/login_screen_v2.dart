@@ -120,6 +120,9 @@ class _LoginScreenV2State extends State<LoginScreenV2>
   /// Inicializa la detección de NPU en background
   /// Cuando termine, activa el badge IA con animación (preparado para futuros modelos)
   Future<void> _initializeNpuDetection() async {
+    // ✅ CORREGIDO: Verificar mounted al inicio
+    if (!mounted) return;
+    
     try {
       setState(() {
         _npuLoading = true;
@@ -133,17 +136,18 @@ class _LoginScreenV2State extends State<LoginScreenV2>
       // Intentar detectar capacidades NPU
       final capabilities = await NpuDetectorService.instance
           .detectCapabilities();
+      
+      // ✅ CORREGIDO: Verificar mounted después de operación asíncrona
+      if (!mounted) return;
+      
       final hasAcceleration = capabilities.hasAcceleration;
 
-      if (mounted) {
-        setState(() {
-          _npuAvailable = hasAcceleration;
-          _npuLoading = false;
-        });
-        _badgeController.forward();
-      } else {
+      setState(() {
+        _npuAvailable = hasAcceleration;
         _npuLoading = false;
-      }
+      });
+      
+      _badgeController.forward();
 
       if (hasAcceleration) {
         developer.log(
@@ -159,6 +163,9 @@ class _LoginScreenV2State extends State<LoginScreenV2>
 
       await _announceNpuStatus(hasAcceleration);
     } catch (e) {
+      // ✅ CORREGIDO: Verificar mounted antes de setState
+      if (!mounted) return;
+      
       setState(() {
         _npuLoading = false;
       });

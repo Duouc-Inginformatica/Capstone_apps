@@ -11,6 +11,7 @@ import 'dart:math' as math;
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:vibration/vibration.dart';
 import '../backend/api_client.dart';
 import '../device/tts_service.dart';
 import '../backend/bus_arrivals_service.dart';
@@ -477,6 +478,8 @@ class IntegratedNavigationService {
   Function()? onDestinationReached;
   Function(String)? onBusDetected;
   Function()? onGeometryUpdated; // Nuevo: se llama cuando la geometría cambia
+  Function(StopArrivals)? onBusArrivalsUpdated; // Nuevo: actualización de llegadas en tiempo real
+  Function(String routeNumber)? onBusMissed; // Nuevo: bus ya pasó - recalcular ruta
 
   // Configuración de umbrales adaptativos
   static const double arrivalThresholdMeters =
@@ -503,6 +506,14 @@ class IntegratedNavigationService {
   // Control de paradas visitadas durante viaje en bus
   final Set<String> _announcedStops = {}; // IDs de paradas ya anunciadas
   int _currentBusStopIndex = 0; // Índice de la parada actual en el viaje
+
+  // Detección de desviación de ruta
+  static const double maxDistanceFromRoute = 50.0; // 50m máximo de desviación
+  static const int deviationConfirmationCount = 3; // 3 muestras GPS consecutivas
+  int _deviationCount = 0;
+  bool _isOffRoute = false;
+  DateTime? _lastDeviationAlert;
+  static const Duration deviationAlertCooldown = Duration(seconds: 30); // Cooldown entre alertas
 
   /// Inicia navegación completa desde ubicación actual a destino
   Future<ActiveNavigation> startNavigation({
@@ -743,8 +754,11 @@ class IntegratedNavigationService {
           );
         }
       } else if (leg.type == 'bus' && leg.isRedBus) {
-        // Paso de bus: UN SOLO paso tipo 'bus' (simplificado)
-        // La detección de subir al bus se hará por velocidad GPS
+        // ═══════════════════════════════════════════════════════════════
+        // PASO DE BUS: Crear DOS pasos separados
+        // 1. wait_bus - Esperar el bus en el paradero
+        // 2. ride_bus - Viajar en el bus
+        // ═══════════════════════════════════════════════════════════════
         _navLog(
           '🚌 Paso BUS ${leg.routeNumber}: ${leg.departStop?.name} → ${leg.arriveStop?.name}',
         );
@@ -775,21 +789,43 @@ class IntegratedNavigationService {
           );
         }
 
+        // PASO 1: WAIT_BUS - Esperar el bus en el paradero de subida
+        _navLog('🚏 Creando paso WAIT_BUS en ${leg.departStop?.name}');
         steps.add(
           NavigationStep(
-            type: 'bus',
+            type: 'wait_bus',
             instruction:
-                'Toma el bus Red ${leg.routeNumber} en ${leg.departStop?.name} hasta ${leg.arriveStop?.name}',
+                'Espera el bus Red ${leg.routeNumber} en ${leg.departStop?.name}',
+            location: leg.departStop?.location,
+            stopId: null,
+            stopName: leg.departStop?.name,
+            busRoute: leg.routeNumber,
+            busOptions: const [],
+            estimatedDuration: 5, // 5 minutos de espera estimada
+            totalStops: leg.stops?.length,
+            realDistanceMeters: 0, // No hay distancia en espera
+            realDurationSeconds: 300, // 5 minutos
+            busStops: busStops,
+          ),
+        );
+
+        // PASO 2: RIDE_BUS - Viajar en el bus
+        _navLog('🚌 Creando paso RIDE_BUS hasta ${leg.arriveStop?.name}');
+        steps.add(
+          NavigationStep(
+            type: 'ride_bus',
+            instruction:
+                'Viaja en el bus Red ${leg.routeNumber} hasta ${leg.arriveStop?.name}',
             location: leg.arriveStop?.location,
-            stopId: null, // Sin consultar GTFS para optimizar
+            stopId: null,
             stopName: leg.arriveStop?.name,
             busRoute: leg.routeNumber,
-            busOptions: const [], // Sin consultar para optimizar
-            estimatedDuration: leg.durationMinutes + 5, // Incluye espera
+            busOptions: const [],
+            estimatedDuration: leg.durationMinutes,
             totalStops: leg.stops?.length,
             realDistanceMeters: leg.distanceKm * 1000,
             realDurationSeconds: leg.durationMinutes * 60,
-            busStops: busStops, // Paradas del backend
+            busStops: busStops,
           ),
         );
       }
@@ -853,48 +889,57 @@ class IntegratedNavigationService {
   ) async {
     final geometries = <int, List<LatLng>>{};
 
-    for (int i = 0; i < steps.length && i < itinerary.legs.length; i++) {
-      final step = steps[i];
-      final leg = itinerary.legs[i];
-
-      _navLog(
-        '🗺️ [SIMPLE] Paso $i: step.type=${step.type} ← leg.type=${leg.type}',
-      );
-
-      // Validar que los tipos coincidan
-      if ((step.type == 'walk' && leg.type != 'walk') ||
-          (step.type == 'bus' && leg.type != 'bus')) {
-        _navLog('   ⚠️ [SIMPLE] ADVERTENCIA: Tipos no coinciden!');
-      }
-
-      // Usar geometría del backend directamente
-      if (leg.geometry != null && leg.geometry!.isNotEmpty) {
-        geometries[i] = List.from(leg.geometry!);
-        _navLog(
-          '   ✅ [SIMPLE] Geometría: ${leg.geometry!.length} puntos',
-        );
-
-        if (leg.departStop != null || leg.arriveStop != null) {
-          _navLog(
-            '   📍 [SIMPLE] ${leg.departStop?.name ?? "Inicio"} → ${leg.arriveStop?.name ?? "Destino"}',
-          );
+    // ═══════════════════════════════════════════════════════════════
+    // MAPEO CORRECTO: steps vs legs
+    // Ahora que wait_bus y ride_bus son pasos separados del mismo leg:
+    // - walk → walk (1:1)
+    // - bus → wait_bus + ride_bus (1:2)
+    // - walk → walk (1:1)
+    // ═══════════════════════════════════════════════════════════════
+    
+    int legIndex = 0;
+    
+    for (int stepIndex = 0; stepIndex < steps.length; stepIndex++) {
+      final step = steps[stepIndex];
+      
+      _navLog('🗺️ [GEOMETRY] Paso $stepIndex: ${step.type}');
+      
+      // Determinar qué leg corresponde a este paso
+      if (step.type == 'walk') {
+        // Paso walk corresponde directamente a un leg walk
+        if (legIndex < itinerary.legs.length) {
+          final leg = itinerary.legs[legIndex];
+          
+          if (leg.type == 'walk' && leg.geometry != null && leg.geometry!.isNotEmpty) {
+            geometries[stepIndex] = List.from(leg.geometry!);
+            _navLog('   ✅ Geometría walk: ${leg.geometry!.length} puntos (leg $legIndex)');
+          }
+          legIndex++; // Avanzar al siguiente leg
         }
-      } else {
-        // Fallback: línea recta entre origen y destino
-        final start = leg.departStop?.location ?? origin;
-        final end = leg.arriveStop?.location ?? step.location;
-
-        if (end != null) {
-          geometries[i] = [start, end];
-          _navLog('   ⚠️ [SIMPLE] Fallback línea recta (2 puntos)');
-        } else {
-          _navLog('   ❌ [SIMPLE] Sin geometría disponible');
+      } else if (step.type == 'wait_bus') {
+        // wait_bus NO tiene geometría (es solo esperar)
+        // La geometría será del paradero (punto único)
+        if (step.location != null) {
+          geometries[stepIndex] = [step.location!];
+          _navLog('   ✅ Geometría wait_bus: Punto único en paradero');
+        }
+        // NO incrementar legIndex porque ride_bus usará el mismo leg
+      } else if (step.type == 'ride_bus' || step.type == 'bus') {
+        // ride_bus corresponde al leg de bus (mismo que wait_bus)
+        if (legIndex < itinerary.legs.length) {
+          final leg = itinerary.legs[legIndex];
+          
+          if (leg.type == 'bus' && leg.geometry != null && leg.geometry!.isNotEmpty) {
+            geometries[stepIndex] = List.from(leg.geometry!);
+            _navLog('   ✅ Geometría ride_bus: ${leg.geometry!.length} puntos (leg $legIndex)');
+          }
+          legIndex++; // Ahora sí avanzar al siguiente leg
         }
       }
     }
 
     _navLog(
-      '🗺️ [SIMPLE] Geometrías creadas: ${geometries.keys.toList()}',
+      '🗺️ [GEOMETRY] Geometrías creadas para pasos: ${geometries.keys.toList()}',
     );
     return geometries;
   }
@@ -947,11 +992,17 @@ class IntegratedNavigationService {
         // Agregar info de la micro
         firstStepInstruction += '$busInfo$arrivalInfo. ';
 
-        // Agregar instrucciones de calle si están disponibles
+        // Agregar instrucciones de calle si están disponibles CON DISTANCIAS
         if (step.streetInstructions != null &&
             step.streetInstructions!.isNotEmpty) {
-          final firstStreetInstruction = step.streetInstructions!.first;
-          firstStepInstruction += 'Comienza así: $firstStreetInstruction. ';
+          final enrichedInstructions = _enrichStreetInstructions(
+            step.streetInstructions!,
+            _activeNavigation!.stepGeometries[_activeNavigation!.currentStepIndex],
+          );
+          
+          if (enrichedInstructions.isNotEmpty) {
+            firstStepInstruction += 'Comienza así: ${enrichedInstructions.first}. ';
+          }
         }
       }
     }
@@ -1019,8 +1070,9 @@ Te iré guiando paso a paso.
     // Filtrar posiciones con baja precisión GPS
     if (position.accuracy > gpsAccuracyThreshold) {
       _navLog(
-        '⚠️ GPS con baja precisión: ${position.accuracy.toStringAsFixed(1)}m - Ignorando',
+        '⚠️ GPS con baja precisión: ${position.accuracy.toStringAsFixed(1)}m (umbral: ${gpsAccuracyThreshold}m)',
       );
+      
       return;
     }
 
@@ -1095,6 +1147,15 @@ Te iré guiando paso a paso.
 
       // Actualizar distancia en el objeto de navegación
       _activeNavigation!.updateDistanceToNext(distanceToTarget);
+
+      // ⚠️ DETECCIÓN DE DESVIACIÓN DE RUTA (AUTOMÁTICA CON GPS REAL)
+      // ============================================================
+      // Este sistema funciona AUTOMÁTICAMENTE con GPS real del usuario
+      // NO requiere botón de simulación - se activa con cada update GPS
+      // Detecta cuando el usuario se aleja >50m de la ruta planificada
+      // Alerta: Vibración + TTS contextual con nombre de calle
+      // ============================================================
+      _checkRouteDeviation(userLocation, currentStep);
 
       // Anunciar progreso periódicamente (cada 100m para caminata, cada 500m para bus)
       _announceProgressIfNeeded(currentStep, distanceToTarget);
@@ -1317,6 +1378,36 @@ Te iré guiando paso a paso.
             // El usuario debe confirmar que subió usando el botón "Simular"
             shouldAutoAdvance = false;
             _navLog('⏸️ Esperando confirmación del usuario para subir al bus');
+            
+            // ===================================================================
+            // INICIAR TRACKING DE LLEGADAS EN TIEMPO REAL
+            // ===================================================================
+            // Obtener código del paradero y número de bus
+            final stopCode = _extractStopCode(step.stopName);
+            final busRoute = nextStep.busRoute;
+            
+            if (stopCode != null && busRoute != null) {
+              _navLog('🚌 [ARRIVALS] Iniciando tracking: Bus $busRoute en $stopCode');
+              
+              BusArrivalsService.instance.startTracking(
+                stopCode: stopCode,
+                routeNumber: busRoute,
+                onUpdate: (arrivals) {
+                  _navLog('🔄 [ARRIVALS] Actualización: ${arrivals.arrivals.length} buses');
+                  onBusArrivalsUpdated?.call(arrivals);
+                },
+                onBusPassed: (routeNumber) {
+                  _navLog('🚨 [ARRIVALS] Bus $routeNumber ya pasó - activando recálculo');
+                  onBusMissed?.call(routeNumber);
+                },
+                onApproaching: (busArrival) {
+                  _navLog('⚠️ [ARRIVALS] Bus ${busArrival.routeNumber} llegando en ${busArrival.estimatedMinutes} min');
+                  TtsService.instance.speak('El bus ${busArrival.routeNumber} está llegando', urgent: true);
+                },
+              );
+            } else {
+              _navLog('⚠️ [ARRIVALS] No se pudo extraer stopCode o busRoute para tracking');
+            }
           }
         }
         break;
@@ -1776,22 +1867,23 @@ Te iré guiando paso a paso.
       _navLog('🚌 [VOICE] Buscando paradero cercano a posición GPS...');
 
       try {
-        final arrivals = await BusArrivalsService.instance
-            .getBusArrivalsByLocation(
-              _lastPosition!.latitude,
-              _lastPosition!.longitude,
-            );
+        // TODO: Implementar getBusArrivalsByLocation en BusArrivalsService
+        // final arrivals = await BusArrivalsService.instance
+        //     .getBusArrivalsByLocation(
+        //       _lastPosition!.latitude,
+        //       _lastPosition!.longitude,
+        //     );
 
-        if (arrivals != null && arrivals.arrivals.isNotEmpty) {
-          TtsService.instance.speak(arrivals.arrivalsSummary, urgent: true);
-          return true;
-        } else {
-          TtsService.instance.speak(
-            'No encontré paraderos cercanos con información de buses',
-            urgent: true,
-          );
-          return true;
-        }
+        // if (arrivals != null && arrivals.arrivals.isNotEmpty) {
+        //   TtsService.instance.speak(arrivals.arrivalsSummary, urgent: true);
+        //   return true;
+        // } else {
+        TtsService.instance.speak(
+          'No encontré paraderos cercanos con información de buses',
+          urgent: true,
+        );
+        return true;
+        // }
       } catch (e) {
         _navLog('❌ [VOICE] Error buscando paradero cercano: $e');
         TtsService.instance.speak(
@@ -1920,5 +2012,278 @@ Te iré guiando paso a paso.
     }
 
     return cleaned;
+  }
+
+  /// Enriquece instrucciones de calle con distancias aproximadas
+  /// 
+  /// Ejemplo:
+  /// "Gira a la derecha" → "Gira a la derecha, luego avanza 200 metros"
+  /// "Continúa por Av. La Dehesa" → "Continúa por Av. La Dehesa 150 metros"
+  List<String> _enrichStreetInstructions(
+    List<String> instructions,
+    List<LatLng>? geometry,
+  ) {
+    if (geometry == null || geometry.length < 2) {
+      return instructions;
+    }
+
+    final enriched = <String>[];
+    
+    // Dividir geometría en segmentos según número de instrucciones
+    final segmentSize = (geometry.length / instructions.length).ceil();
+    
+    for (int i = 0; i < instructions.length; i++) {
+      final instruction = instructions[i];
+      
+      // Calcular índices del segmento
+      final startIdx = i * segmentSize;
+      final endIdx = ((i + 1) * segmentSize).clamp(0, geometry.length - 1);
+      
+      if (startIdx >= geometry.length || endIdx <= startIdx) {
+        enriched.add(instruction);
+        continue;
+      }
+      
+      // Calcular distancia del segmento
+      double distance = 0.0;
+      for (int j = startIdx; j < endIdx; j++) {
+        distance += _calculateDistance(geometry[j], geometry[j + 1]);
+      }
+      
+      // Convertir a metros y redondear
+      final distanceM = (distance * 1000).round();
+      
+      // Enriquecer instrucción
+      String enrichedInstruction = instruction;
+      
+      // Solo agregar distancia si es significativa (más de 10 metros)
+      if (distanceM > 10) {
+        // Si la instrucción ya contiene "por [calle]", agregar distancia
+        if (instruction.toLowerCase().contains(' por ')) {
+          enrichedInstruction = '$instruction y sigue recto por $distanceM metros';
+        } else {
+          // Para giros sin calle específica, usar formato genérico
+          enrichedInstruction = '$instruction y sigue recto por $distanceM metros';
+        }
+      }
+      
+      enriched.add(enrichedInstruction);
+    }
+    
+    return enriched;
+  }
+
+  /// Verifica si el usuario se ha desviado de la ruta planificada
+  /// Usa la geometría del paso actual para calcular distancia perpendicular
+  /// 
+  /// ⚠️ IMPORTANTE: Este método se ejecuta AUTOMÁTICAMENTE en cada actualización
+  /// GPS real del usuario (cada 2-5 segundos). NO requiere botón de simulación.
+  /// El botón "Simular" es solo para desarrollo/testing.
+  void _checkRouteDeviation(LatLng userLocation, NavigationStep currentStep) {
+    // Solo verificar desviación en pasos de caminata (no en bus o espera)
+    if (currentStep.type != 'walk') {
+      _resetDeviationDetection();
+      return;
+    }
+
+    // Obtener geometría del paso actual
+    final geometry = _activeNavigation?.getCurrentStepGeometry(userLocation);
+    if (geometry == null || geometry.length < 2) {
+      return;
+    }
+
+    // Calcular distancia mínima perpendicular a cualquier segmento de la ruta
+    double minDistance = double.infinity;
+    
+    for (int i = 0; i < geometry.length - 1; i++) {
+      final segmentStart = geometry[i];
+      final segmentEnd = geometry[i + 1];
+      
+      // Calcular distancia perpendicular al segmento
+      final distance = _perpendicularDistance(
+        userLocation,
+        segmentStart,
+        segmentEnd,
+      );
+      
+      if (distance < minDistance) {
+        minDistance = distance;
+      }
+    }
+
+    _navLog('🛣️ Distancia mínima a la ruta: ${minDistance.toStringAsFixed(1)}m');
+
+    // Si está fuera del corredor de la ruta
+    if (minDistance > maxDistanceFromRoute) {
+      _deviationCount++;
+      _navLog('⚠️ Posible desviación detectada (${_deviationCount}/$deviationConfirmationCount)');
+      
+      // Confirmar desviación después de varias muestras consecutivas
+      if (_deviationCount >= deviationConfirmationCount && !_isOffRoute) {
+        _handleRouteDeviation(currentStep);
+      }
+    } else {
+      // Dentro de la ruta
+      if (_isOffRoute) {
+        _handleBackOnRoute();
+      }
+      _resetDeviationDetection();
+    }
+  }
+
+  /// Maneja cuando el usuario se desvía de la ruta
+  Future<void> _handleRouteDeviation(NavigationStep currentStep) async {
+    // Verificar cooldown para evitar spam de alertas
+    if (_lastDeviationAlert != null) {
+      final timeSinceLastAlert = DateTime.now().difference(_lastDeviationAlert!);
+      if (timeSinceLastAlert < deviationAlertCooldown) {
+        return;
+      }
+    }
+
+    _isOffRoute = true;
+    _lastDeviationAlert = DateTime.now();
+
+    _navLog('🚨 DESVIACIÓN DE RUTA CONFIRMADA');
+
+    // Vibración de alerta (patrón: 500ms on, 200ms off, 500ms on)
+    try {
+      await _triggerDeviationVibration();
+    } catch (e) {
+      _navLog('⚠️ Error al activar vibración: $e');
+    }
+
+    // Anuncio por TTS
+    final streetName = _extractStreetName(currentStep);
+    final message = streetName != null
+        ? 'Atención: Te has desviado de la ruta. Debes estar en $streetName. Busca recalcular la ruta.'
+        : 'Atención: Te has desviado de la ruta planificada. Busca recalcular la ruta.';
+
+    await TtsService.instance.speak(message);
+    _navLog('🔊 Alerta de desviación anunciada: $message');
+  }
+
+  /// Maneja cuando el usuario regresa a la ruta
+  Future<void> _handleBackOnRoute() async {
+    _navLog('✅ Usuario de regreso en la ruta correcta');
+    _isOffRoute = false;
+    
+    await TtsService.instance.speak('De vuelta en la ruta correcta. Continúa siguiendo las instrucciones.');
+  }
+
+  /// Resetea el contador de desviación
+  void _resetDeviationDetection() {
+    if (_deviationCount > 0) {
+      _deviationCount = 0;
+    }
+  }
+
+  /// Extrae el nombre de la calle de las instrucciones del paso
+  String? _extractStreetName(NavigationStep step) {
+    if (step.streetInstructions == null || step.streetInstructions!.isEmpty) {
+      return null;
+    }
+
+    final firstInstruction = step.streetInstructions!.first;
+    
+    // Buscar patrón "por [nombre de calle]"
+    final regex = RegExp(r'por\s+(.+?)(?:\s+y\s+|$)', caseSensitive: false);
+    final match = regex.firstMatch(firstInstruction);
+    
+    if (match != null && match.groupCount >= 1) {
+      return match.group(1)?.trim();
+    }
+    
+    return null;
+  }
+
+  /// Calcula la distancia perpendicular de un punto a un segmento de línea
+  /// Retorna la distancia en metros
+  double _perpendicularDistance(
+    LatLng point,
+    LatLng lineStart,
+    LatLng lineEnd,
+  ) {
+    // Convertir a coordenadas cartesianas aproximadas (suficiente para distancias cortas)
+    final x = point.longitude;
+    final y = point.latitude;
+    final x1 = lineStart.longitude;
+    final y1 = lineStart.latitude;
+    final x2 = lineEnd.longitude;
+    final y2 = lineEnd.latitude;
+
+    // Calcular distancia perpendicular usando fórmula de punto a línea
+    final A = x - x1;
+    final B = y - y1;
+    final C = x2 - x1;
+    final D = y2 - y1;
+
+    final dot = A * C + B * D;
+    final lenSq = C * C + D * D;
+    
+    double param = -1.0;
+    if (lenSq != 0) {
+      param = dot / lenSq;
+    }
+
+    LatLng closestPoint;
+    if (param < 0) {
+      closestPoint = lineStart;
+    } else if (param > 1) {
+      closestPoint = lineEnd;
+    } else {
+      closestPoint = LatLng(
+        y1 + param * D,
+        x1 + param * C,
+      );
+    }
+
+    // Calcular distancia usando Haversine
+    return _distance.as(LengthUnit.Meter, point, closestPoint);
+  }
+
+  /// Activa patrón de vibración para alertar desviación
+  /// Patrón: vibración fuerte intermitente (500ms, pausa 200ms, 500ms)
+  Future<void> _triggerDeviationVibration() async {
+    try {
+      // Verificar si el dispositivo tiene vibración
+      final hasVibrator = await Vibration.hasVibrator();
+      if (hasVibrator == true) {
+        // Patrón: [espera, vibra, espera, vibra]
+        // Duración en milisegundos
+        await Vibration.vibrate(
+          pattern: [0, 500, 200, 500],
+          intensities: [0, 255, 0, 255],
+        );
+        _navLog('📳 Vibración de alerta activada');
+      } else {
+        _navLog('⚠️ Dispositivo sin vibrador');
+      }
+    } catch (e) {
+      _navLog('⚠️ Error al activar vibración: $e');
+    }
+  }
+
+  /// Extrae el código del paradero del nombre
+  /// Ejemplo: "PC1237 / Av. Costanera" → "PC1237"
+  /// Ejemplo: "Paradero PC615" → "PC615"
+  String? _extractStopCode(String? stopName) {
+    if (stopName == null || stopName.isEmpty) return null;
+
+    // Patrón: PC seguido de dígitos
+    final regex = RegExp(r'PC\d+', caseSensitive: false);
+    final match = regex.firstMatch(stopName);
+    
+    if (match != null) {
+      return match.group(0)?.toUpperCase();
+    }
+    
+    return null;
+  }
+
+  /// Calcula la distancia entre dos puntos en kilómetros
+  double _calculateDistance(LatLng point1, LatLng point2) {
+    const Distance distance = Distance();
+    return distance.as(LengthUnit.Kilometer, point1, point2);
   }
 }

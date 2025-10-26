@@ -1,11 +1,13 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"log"
 	"os"
 	"strings"
+	"time"
 
 	_ "github.com/go-sql-driver/mysql"
 )
@@ -24,7 +26,46 @@ func Connect() (*sql.DB, error) {
 		port = "3306"
 	}
 	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?parseTime=true&charset=utf8mb4,utf8", user, pass, host, port, name)
-	return sql.Open("mysql", dsn)
+	
+	db, err := sql.Open("mysql", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("error abriendo conexión: %w", err)
+	}
+
+	// ============================================================================
+	// CONFIGURACIÓN DEL POOL DE CONEXIONES
+	// ============================================================================
+	// Configurar límites basados en variables de entorno o valores por defecto
+	maxOpenConns := 25  // Máximo de conexiones abiertas simultáneas
+	maxIdleConns := 10  // Conexiones idle en el pool
+	
+	if env := os.Getenv("DB_MAX_OPEN_CONNS"); env != "" {
+		fmt.Sscanf(env, "%d", &maxOpenConns)
+	}
+	if env := os.Getenv("DB_MAX_IDLE_CONNS"); env != "" {
+		fmt.Sscanf(env, "%d", &maxIdleConns)
+	}
+
+	db.SetMaxOpenConns(maxOpenConns)                  // Máximo de conexiones abiertas
+	db.SetMaxIdleConns(maxIdleConns)                  // Conexiones idle en el pool
+	db.SetConnMaxLifetime(5 * time.Minute)            // Tiempo de vida máximo de una conexión
+	db.SetConnMaxIdleTime(2 * time.Minute)            // Tiempo máximo que una conexión puede estar idle
+
+	log.Printf("📊 Pool de conexiones configurado: max_open=%d, max_idle=%d", maxOpenConns, maxIdleConns)
+
+	// ============================================================================
+	// VERIFICAR CONECTIVIDAD
+	// ============================================================================
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := db.PingContext(ctx); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("❌ ping a base de datos falló: %w", err)
+	}
+
+	log.Println("✅ Conexión a base de datos verificada")
+	return db, nil
 }
 
 // EnsureSchema creates required tables if not exist.

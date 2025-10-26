@@ -141,25 +141,38 @@ func StartGraphHopperProcess() error {
 
 // StopGraphHopperProcess detiene GraphHopper de forma segura
 func StopGraphHopperProcess() error {
-	if !ghRunning {
+	if !ghRunning || ghProcess == nil || ghProcess.Process == nil {
+		fmt.Println("ℹ️  GraphHopper no está ejecutándose")
 		return nil
 	}
 
 	fmt.Println("🛑 Deteniendo GraphHopper...")
 	
-	// Buscar todos los procesos Java (GraphHopper)
-	// Usar taskkill para matar el árbol de procesos completo
-	cmd := exec.Command("taskkill", "/F", "/IM", "java.exe", "/T")
+	// Matar solo el proceso específico por PID (no todos los procesos Java)
+	pid := ghProcess.Process.Pid
+	fmt.Printf("🔍 Deteniendo GraphHopper (PID: %d)\n", pid)
+	
+	cmd := exec.Command("taskkill", "/F", "/PID", fmt.Sprintf("%d", pid), "/T")
 	if err := cmd.Run(); err != nil {
-		fmt.Printf("⚠️  Advertencia al detener GraphHopper: %v\n", err)
+		return fmt.Errorf("error al detener GraphHopper (PID %d): %w", pid, err)
 	}
 	
-	// También intentar cerrar nuestra referencia si existe
-	if ghProcess != nil && ghProcess.Process != nil {
+	// Esperar a que el proceso termine completamente
+	done := make(chan error, 1)
+	go func() {
+		done <- ghProcess.Wait()
+	}()
+	
+	select {
+	case <-done:
+		// Proceso terminado
+	case <-time.After(10 * time.Second):
+		// Timeout: forzar kill si aún está corriendo
+		fmt.Println("⚠️  Timeout esperando terminación, forzando...")
 		ghProcess.Process.Kill()
-		ghProcess = nil
 	}
-
+	
+	ghProcess = nil
 	ghRunning = false
 	fmt.Println("✅ GraphHopper detenido correctamente")
 	return nil

@@ -909,11 +909,16 @@ func (s *Scraper) scrapeMovitWithCorrectURL(originName, destName string, originL
 
 	log.Printf("📄 [MOOVIT] HTML con JavaScript ejecutado: %d caracteres", len(htmlContent))
 
-	// Guardar HTML para debugging
-	if err := os.WriteFile("moovit_chromedp_debug.html", []byte(htmlContent), 0644); err != nil {
-		log.Printf("⚠️  No se pudo guardar HTML debug: %v", err)
-	} else {
-		log.Printf("💾 HTML de Chrome guardado en moovit_chromedp_debug.html")
+	// Guardar HTML para debugging (solo en modo DEBUG)
+	if os.Getenv("DEBUG") == "true" || os.Getenv("DEBUG_SCRAPING") == "true" {
+		timestamp := time.Now().Format("20060102_150405")
+		debugFile := fmt.Sprintf("debug_scraping/moovit_chromedp_%s.html", timestamp)
+		
+		if err := os.WriteFile(debugFile, []byte(htmlContent), 0644); err != nil {
+			log.Printf("⚠️  No se pudo guardar HTML debug: %v", err)
+		} else {
+			log.Printf("💾 HTML de Chrome guardado en %s", debugFile)
+		}
 	}
 
 	// Parsear HTML para extraer rutas
@@ -1365,7 +1370,7 @@ func (s *Scraper) buildItineraryFromStops(routeNumber string, duration int, stop
 		log.Printf("🗺️ [GraphHopper] Calculando ruta a pie: origen → paradero %s", originStop.Name)
 		walkRoute, err := s.geometryService.GetWalkingRoute(originLat, originLon, originStop.Latitude, originStop.Longitude, true)
 
-		if err == nil {
+		if err == nil && len(walkRoute.MainGeometry) > 0 {
 			log.Printf("✅ [GraphHopper] Ruta a pie: %.0fm, %d segundos, %d puntos de geometría",
 				walkRoute.TotalDistance, walkRoute.TotalDuration, len(walkRoute.MainGeometry))
 
@@ -1395,68 +1400,21 @@ func (s *Scraper) buildItineraryFromStops(routeNumber string, duration int, stop
 			itinerary.TotalDuration += walkRoute.TotalDuration / 60
 			itinerary.TotalDistance += walkRoute.TotalDistance / 1000
 		} else {
-			log.Printf("⚠️  [GraphHopper] Error calculando ruta a pie: %v (usando fallback)", err)
-			// Fallback: línea recta
-			walkDistance := s.calculateDistance(originLat, originLon, originStop.Latitude, originStop.Longitude)
-			walkDuration := int((walkDistance / 80) / 60) // 80 m/min
-			if walkDuration < 1 {
-				walkDuration = 1
-			}
-
-			walkLeg = TripLeg{
-				Type:        "walk",
-				Mode:        "walk",
-				Duration:    walkDuration,
-				Distance:    walkDistance / 1000,
-				Instruction: walkInstruction,
-				Geometry: [][]float64{
-					{originLon, originLat},
-					{originStop.Longitude, originStop.Latitude},
-				},
-				DepartStop: &BusStop{
-					Name:      "Tu ubicación",
-					Latitude:  originLat,
-					Longitude: originLon,
-				},
-				ArriveStop:         &originStop,
-				StreetInstructions: []string{walkInstruction},
-			}
-
-			itinerary.TotalDuration += walkDuration
-			itinerary.TotalDistance += walkDistance / 1000
+			// FALLBACK: Si GraphHopper falla, usar cálculo simple
+			log.Printf("⚠️  [GraphHopper] Error o geometría vacía: %v - usando fallback", err)
+			walkLeg = s.createFallbackWalkLeg(originLat, originLon, originStop.Latitude, originStop.Longitude, walkInstruction, &originStop)
+			itinerary.TotalDuration += walkLeg.Duration
+			itinerary.TotalDistance += walkLeg.Distance
 		}
 	} else {
-		log.Printf("⚠️  [GraphHopper] Servicio no disponible, usando línea recta")
-		// Fallback: línea recta
-		walkDistance := s.calculateDistance(originLat, originLon, originStop.Latitude, originStop.Longitude)
-		walkDuration := int((walkDistance / 80) / 60) // 80 m/min
-		if walkDuration < 1 {
-			walkDuration = 1
-		}
-
-		walkLeg = TripLeg{
-			Type:        "walk",
-			Mode:        "walk",
-			Duration:    walkDuration,
-			Distance:    walkDistance / 1000,
-			Instruction: walkInstruction,
-			Geometry: [][]float64{
-				{originLon, originLat},
-				{originStop.Longitude, originStop.Latitude},
-			},
-			DepartStop: &BusStop{
-				Name:      "Tu ubicación",
-				Latitude:  originLat,
-				Longitude: originLon,
-			},
-			ArriveStop:         &originStop,
-			StreetInstructions: []string{walkInstruction},
-		}
-
-		itinerary.TotalDuration += walkDuration
-		itinerary.TotalDistance += walkDistance / 1000
+		// FALLBACK: Si no hay geometryService configurado
+		log.Printf("⚠️  [FALLBACK] GeometryService no configurado, usando cálculo aproximado")
+		walkLeg = s.createFallbackWalkLeg(originLat, originLon, originStop.Latitude, originStop.Longitude, walkInstruction, &originStop)
+		itinerary.TotalDuration += walkLeg.Duration
+		itinerary.TotalDistance += walkLeg.Distance
 	}
 
+	// Agregar leg de caminata al itinerario
 	itinerary.Legs = append(itinerary.Legs, walkLeg)
 
 	// PIERNA 2: Bus con geometría REAL usando GraphHopper
@@ -3713,6 +3671,49 @@ func (s *Scraper) generateItineraryFromMoovitStops(routeNumber string, stops []B
 
 	log.Printf("✅ Itinerario creado desde Moovit: %d legs, %d paradas", len(itinerary.Legs), len(stops))
 	return itinerary
+}
+
+// ============================================================================
+// FALLBACK FUNCTIONS - Cuando GraphHopper no está disponible
+// ============================================================================
+
+// createFallbackWalkLeg crea un leg de caminata usando cálculos simples
+// cuando GraphHopper no está disponible o falla
+func (s *Scraper) createFallbackWalkLeg(fromLat, fromLon, toLat, toLon float64, instruction string, arriveStop *BusStop) TripLeg {
+	distance := s.calculateDistance(fromLat, fromLon, toLat, toLon)
+	
+	// Calcular duración estimada: 5 km/h velocidad promedio de caminata
+	durationMinutes := int(math.Ceil(distance / 1000 / 5 * 60))
+	if durationMinutes < 1 {
+		durationMinutes = 1
+	}
+	
+	// Crear geometría simple (línea recta)
+	geometry := [][]float64{
+		{fromLon, fromLat},
+		{toLon, toLat},
+	}
+	
+	log.Printf("📏 [FALLBACK] Caminata simple: %.0fm, ~%d minutos (5km/h)", distance, durationMinutes)
+	
+	return TripLeg{
+		Type:        "walk",
+		Mode:        "walk",
+		Duration:    durationMinutes,
+		Distance:    distance / 1000,
+		Instruction: instruction,
+		Geometry:    geometry,
+		DepartStop: &BusStop{
+			Name:      "Tu ubicación",
+			Latitude:  fromLat,
+			Longitude: fromLon,
+		},
+		ArriveStop: arriveStop,
+		StreetInstructions: []string{
+			instruction,
+			fmt.Sprintf("Camina aproximadamente %d metros (%d minutos)", int(distance), durationMinutes),
+		},
+	}
 }
 
 // NOTA: Geometría de rutas ahora se obtiene de GraphHopper

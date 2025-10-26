@@ -25,9 +25,10 @@ func main() {
 	_ = godotenv.Load()
 
 	app := fiber.New(fiber.Config{
-		ReadTimeout:  180 * time.Second, // 3 minutos para operaciones muy lentas como scraping
-		WriteTimeout: 180 * time.Second, // 3 minutos para respuestas grandes
-		IdleTimeout:  240 * time.Second, // 4 minutos de timeout idle
+		ReadTimeout:  30 * time.Second,  // Reducido de 180s a 30s para operaciones normales
+		WriteTimeout: 60 * time.Second,  // Reducido de 180s a 60s para respuestas grandes
+		IdleTimeout:  120 * time.Second, // Reducido de 240s a 120s
+		BodyLimit:    10 * 1024 * 1024,  // 10MB límite de body
 	})
 	
 	// CORS para permitir dashboard

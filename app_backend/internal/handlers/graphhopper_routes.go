@@ -13,24 +13,57 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/yourorg/wayfindcl/internal/graphhopper"
+	"github.com/yourorg/wayfindcl/internal/validation"
 )
 
-var ghClient *graphhopper.Client
+var (
+	ghClient     *graphhopper.Client
+	ghClientMu   sync.RWMutex
+	ghClientOnce sync.Once
+)
 
 // InitGraphHopper inicializa GraphHopper como subproceso del backend
 func InitGraphHopper() error {
-	// Iniciar GraphHopper como subproceso
-	if err := graphhopper.StartGraphHopperProcess(); err != nil {
-		return fmt.Errorf("no se pudo iniciar GraphHopper: %w", err)
-	}
+	var initErr error
+	ghClientOnce.Do(func() {
+		// Iniciar GraphHopper como subproceso
+		if err := graphhopper.StartGraphHopperProcess(); err != nil {
+			initErr = fmt.Errorf("no se pudo iniciar GraphHopper: %w", err)
+			return
+		}
+		
+		// Crear cliente
+		ghClientMu.Lock()
+		ghClient = graphhopper.NewClient()
+		ghClientMu.Unlock()
+	})
 	
-	// Crear cliente
-	ghClient = graphhopper.NewClient()
-	return nil
+	return initErr
+}
+
+// getGHClient retorna el cliente de GraphHopper de forma segura
+func getGHClient() *graphhopper.Client {
+	ghClientMu.RLock()
+	defer ghClientMu.RUnlock()
+	return ghClient
+}
+
+// ensureGHClient verifica que el cliente esté disponible y retorna error si no
+func ensureGHClient(c *fiber.Ctx) (*graphhopper.Client, error) {
+	client := getGHClient()
+	if client == nil {
+		c.Status(503).JSON(fiber.Map{
+			"error": "GraphHopper no disponible",
+			"message": "El servicio de routing no está listo, por favor intenta de nuevo en unos momentos",
+		})
+		return nil, fmt.Errorf("graphhopper client not initialized")
+	}
+	return client, nil
 }
 
 // ============================================================================
@@ -38,20 +71,71 @@ func InitGraphHopper() error {
 // ============================================================================
 // Ruta peatonal simple (reemplaza OSRM foot)
 // ============================================================================
+// GetFootRoute es el handler para rutas peatonales
 func GetFootRoute(c *fiber.Ctx) error {
-	originLat, _ := strconv.ParseFloat(c.Query("origin_lat"), 64)
-	originLon, _ := strconv.ParseFloat(c.Query("origin_lon"), 64)
-	destLat, _ := strconv.ParseFloat(c.Query("dest_lat"), 64)
-	destLon, _ := strconv.ParseFloat(c.Query("dest_lon"), 64)
-
-	if originLat == 0 || originLon == 0 || destLat == 0 || destLon == 0 {
+	// Parsear coordenadas
+	originLat, err := strconv.ParseFloat(c.Query("origin_lat"), 64)
+	if err != nil {
 		return c.Status(400).JSON(fiber.Map{
-			"error": "Missing coordinates",
+			"error": "origin_lat inválido",
+		})
+	}
+	
+	originLon, err := strconv.ParseFloat(c.Query("origin_lon"), 64)
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{
+			"error": "origin_lon inválido",
+		})
+	}
+	
+	destLat, err := strconv.ParseFloat(c.Query("dest_lat"), 64)
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{
+			"error": "dest_lat inválido",
+		})
+	}
+	
+	destLon, err := strconv.ParseFloat(c.Query("dest_lon"), 64)
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{
+			"error": "dest_lon inválido",
 		})
 	}
 
-	// Llamar a GraphHopper
-	route, err := ghClient.GetFootRoute(originLat, originLon, destLat, destLon)
+	// Validar coordenadas de origen
+	if err := validation.ValidateCoordinatePair(originLat, originLon, "origin"); err != nil {
+		return c.Status(400).JSON(fiber.Map{
+			"error": fmt.Sprintf("coordenadas de origen inválidas: %v", err),
+		})
+	}
+
+	// Validar coordenadas de destino
+	if err := validation.ValidateCoordinatePair(destLat, destLon, "dest"); err != nil {
+		return c.Status(400).JSON(fiber.Map{
+			"error": fmt.Sprintf("coordenadas de destino inválidas: %v", err),
+		})
+	}
+
+	// Verificar que no sean coordenadas (0, 0)
+	if validation.IsZeroCoordinate(originLat, originLon) {
+		return c.Status(400).JSON(fiber.Map{
+			"error": "coordenadas de origen no pueden ser (0, 0)",
+		})
+	}
+	
+	if validation.IsZeroCoordinate(destLat, destLon) {
+		return c.Status(400).JSON(fiber.Map{
+			"error": "coordenadas de destino no pueden ser (0, 0)",
+		})
+	}
+
+	// Obtener cliente de GraphHopper de forma segura
+	client, err := ensureGHClient(c)
+	if err != nil {
+		return err // Ya se envió la respuesta en ensureGHClient
+	}
+	
+	route, err := client.GetFootRoute(originLat, originLon, destLat, destLon)
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{
 			"error": "GraphHopper error",
@@ -83,18 +167,56 @@ func GetFootRoute(c *fiber.Ctx) error {
 // Calcula SOLO distancia y tiempo (sin geometría, ultra rápido)
 // ============================================================================
 func GetWalkingDistance(c *fiber.Ctx) error {
-	originLat, _ := strconv.ParseFloat(c.Query("origin_lat"), 64)
-	originLon, _ := strconv.ParseFloat(c.Query("origin_lon"), 64)
-	destLat, _ := strconv.ParseFloat(c.Query("dest_lat"), 64)
-	destLon, _ := strconv.ParseFloat(c.Query("dest_lon"), 64)
-
-	if originLat == 0 || originLon == 0 || destLat == 0 || destLon == 0 {
+	// Parsear coordenadas
+	originLat, err := strconv.ParseFloat(c.Query("origin_lat"), 64)
+	if err != nil {
 		return c.Status(400).JSON(fiber.Map{
-			"error": "Missing coordinates",
+			"error": "origin_lat inválido",
+		})
+	}
+	
+	originLon, err := strconv.ParseFloat(c.Query("origin_lon"), 64)
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{
+			"error": "origin_lon inválido",
+		})
+	}
+	
+	destLat, err := strconv.ParseFloat(c.Query("dest_lat"), 64)
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{
+			"error": "dest_lat inválido",
+		})
+	}
+	
+	destLon, err := strconv.ParseFloat(c.Query("dest_lon"), 64)
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{
+			"error": "dest_lon inválido",
 		})
 	}
 
-	route, err := ghClient.GetFootRoute(originLat, originLon, destLat, destLon)
+	// Validar coordenadas
+	if err := validation.ValidateCoordinatePair(originLat, originLon, "origin"); err != nil {
+		return c.Status(400).JSON(fiber.Map{
+			"error": fmt.Sprintf("coordenadas de origen inválidas: %v", err),
+		})
+	}
+
+	if err := validation.ValidateCoordinatePair(destLat, destLon, "dest"); err != nil {
+		return c.Status(400).JSON(fiber.Map{
+			"error": fmt.Sprintf("coordenadas de destino inválidas: %v", err),
+		})
+	}
+
+	client := getGHClient()
+	if client == nil {
+		return c.Status(503).JSON(fiber.Map{
+			"error": "GraphHopper no disponible",
+		})
+	}
+
+	route, err := client.GetFootRoute(originLat, originLon, destLat, destLon)
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{
 			"error": "GraphHopper error",

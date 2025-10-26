@@ -21,6 +21,8 @@ import (
 
 // package-level dependencies
 var (
+	setupOnce       sync.Once     // Garantiza inicialización única
+	setupMu         sync.RWMutex  // Protege acceso a variables globales
 	dbConn          *sql.DB
 	jwtSecret       []byte
 	tokenTTL        = 24 * time.Hour
@@ -32,37 +34,66 @@ var (
 
 // Setup wires shared dependencies for handlers. Call this during app bootstrap.
 func Setup(db *sql.DB) {
-	dbConn = db
-	secret := os.Getenv("JWT_SECRET")
-	if secret == "" {
-		// fallback dev-secret (not for production)
-		secret = "dev-secret-change-me"
-	}
-	jwtSecret = []byte(secret)
+	setupOnce.Do(func() {
+		setupMu.Lock()
+		defer setupMu.Unlock()
 
-	if ttl := os.Getenv("JWT_TTL"); ttl != "" {
-		dur, err := time.ParseDuration(ttl)
-		if err != nil || dur <= 0 {
-			log.Printf("invalid JWT_TTL=%q, using default %s", ttl, tokenTTL)
-		} else {
-			tokenTTL = dur
+		dbConn = db
+		secret := os.Getenv("JWT_SECRET")
+		if secret == "" {
+			// Verificar si estamos en producción
+			if os.Getenv("ENV") == "production" || os.Getenv("ENVIRONMENT") == "production" {
+				log.Fatal("❌ CRITICAL: JWT_SECRET must be set in production environment")
+			}
+			log.Println("⚠️ WARNING: Using default JWT secret (development only)")
+			secret = "dev-secret-change-me"
 		}
-	}
 
-	feedURL := strings.TrimSpace(os.Getenv("GTFS_FEED_URL"))
-	if feedURL == "" {
-		feedURL = "https://www.dtpm.cl/descarga.php?file=gtfs/gtfs.zip"
-	}
-	fallbackURL := strings.TrimSpace(os.Getenv("GTFS_FALLBACK_URL"))
-	if fallbackURL == "" {
-		fallbackURL = "https://www.dtpm.cl/descarga.php?file=gtfs/gtfs.zip"
-	}
-	gtfsLoader = gtfs.NewLoader(feedURL, fallbackURL, nil)
+		// Validar longitud mínima del secret
+		if len(secret) < 32 {
+			log.Fatalf("❌ CRITICAL: JWT_SECRET must be at least 32 characters long (current: %d)", len(secret))
+		}
 
-	if auto := strings.TrimSpace(os.Getenv("GTFS_AUTO_SYNC")); strings.EqualFold(auto, "true") {
-		// Iniciar sincronización inicial y programar actualizaciones mensuales
-		go startGTFSAutoSync(dbConn)
-	}
+		jwtSecret = []byte(secret)
+
+		if ttl := os.Getenv("JWT_TTL"); ttl != "" {
+			dur, err := time.ParseDuration(ttl)
+			if err != nil || dur <= 0 {
+				log.Printf("invalid JWT_TTL=%q, using default %s", ttl, tokenTTL)
+			} else {
+				tokenTTL = dur
+			}
+		}
+
+		feedURL := strings.TrimSpace(os.Getenv("GTFS_FEED_URL"))
+		if feedURL == "" {
+			feedURL = "https://www.dtpm.cl/descarga.php?file=gtfs/gtfs.zip"
+		}
+		fallbackURL := strings.TrimSpace(os.Getenv("GTFS_FALLBACK_URL"))
+		if fallbackURL == "" {
+			fallbackURL = "https://www.dtpm.cl/descarga.php?file=gtfs/gtfs.zip"
+		}
+		gtfsLoader = gtfs.NewLoader(feedURL, fallbackURL, nil)
+
+		if auto := strings.TrimSpace(os.Getenv("GTFS_AUTO_SYNC")); strings.EqualFold(auto, "true") {
+			// Iniciar sincronización inicial y programar actualizaciones mensuales
+			go startGTFSAutoSync(dbConn)
+		}
+	})
+}
+
+// getDBConn retorna la conexión de base de datos de forma segura
+func getDBConn() *sql.DB {
+	setupMu.RLock()
+	defer setupMu.RUnlock()
+	return dbConn
+}
+
+// getJWTSecret retorna el secret JWT de forma segura
+func getJWTSecret() []byte {
+	setupMu.RLock()
+	defer setupMu.RUnlock()
+	return jwtSecret
 }
 
 // startGTFSAutoSync inicia la sincronización automática de GTFS y verifica mensualmente
@@ -163,13 +194,14 @@ func issueToken(userID int64, username string) (string, time.Time, error) {
 		},
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	signed, err := token.SignedString(jwtSecret)
+	signed, err := token.SignedString(getJWTSecret())
 	return signed, expires, err
 }
 
 // Register handles POST /api/register.
 func Register(c *fiber.Ctx) error {
-	if dbConn == nil {
+	db := getDBConn()
+	if db == nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(models.ErrorResponse{Error: "server not ready"})
 	}
 	var req models.RegisterRequest
@@ -199,7 +231,7 @@ func Register(c *fiber.Ctx) error {
 
 		// Verificar que el token biométrico no esté ya registrado
 		var existingID int64
-		err := dbConn.QueryRow(`SELECT id FROM users WHERE biometric_id = ?`, req.BiometricToken).Scan(&existingID)
+		err := db.QueryRow(`SELECT id FROM users WHERE biometric_id = ?`, req.BiometricToken).Scan(&existingID)
 		if err == nil {
 			log.Printf("⚠️ Token biométrico ya registrado para user_id=%d", existingID)
 			return c.Status(fiber.StatusConflict).JSON(models.ErrorResponse{Error: "biometric token already registered"})
@@ -209,7 +241,7 @@ func Register(c *fiber.Ctx) error {
 		}
 
 		// Insertar usuario con autenticación biométrica (sin password)
-		res, err := dbConn.Exec(`
+		res, err := db.Exec(`
 			INSERT INTO users (username, email, name, biometric_id, auth_type) 
 			VALUES (?, ?, ?, ?, 'biometric')
 		`, req.Username, req.Email, req.Name, req.BiometricToken)
@@ -234,7 +266,7 @@ func Register(c *fiber.Ctx) error {
 			return c.Status(fiber.StatusInternalServerError).JSON(models.ErrorResponse{Error: "failed to secure password"})
 		}
 
-		res, err := dbConn.Exec(`
+		res, err := db.Exec(`
 			INSERT INTO users (username, email, name, password_hash, auth_type) 
 			VALUES (?, ?, ?, ?, 'password')
 		`, req.Username, req.Email, req.Name, string(hash))
@@ -267,7 +299,8 @@ func Register(c *fiber.Ctx) error {
 
 // Login handles POST /api/login.
 func Login(c *fiber.Ctx) error {
-	if dbConn == nil {
+	db := getDBConn()
+	if db == nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(models.ErrorResponse{Error: "server not ready"})
 	}
 	var req models.LoginRequest
@@ -283,11 +316,12 @@ func Login(c *fiber.Ctx) error {
 		id                           int64
 		username, name, passwordHash string
 	)
-	err := dbConn.QueryRow(`SELECT id, username, name, password_hash FROM users WHERE username = ?`, req.Username).Scan(&id, &username, &name, &passwordHash)
+	err := db.QueryRow(`SELECT id, username, name, password_hash FROM users WHERE username = ?`, req.Username).Scan(&id, &username, &name, &passwordHash)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return c.Status(fiber.StatusUnauthorized).JSON(models.ErrorResponse{Error: "invalid credentials"})
 		}
+		log.Printf("❌ Error consultando usuario: %v", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(models.ErrorResponse{Error: "db error"})
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(req.Password)); err != nil {
@@ -308,7 +342,8 @@ func Login(c *fiber.Ctx) error {
 // BiometricRegister handles POST /api/auth/biometric/register
 // Registers a new user using biometric authentication (for blind users)
 func BiometricRegister(c *fiber.Ctx) error {
-	if dbConn == nil {
+	db := getDBConn()
+	if db == nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(models.ErrorResponse{Error: "server not ready"})
 	}
 
@@ -339,25 +374,25 @@ func BiometricRegister(c *fiber.Ctx) error {
 
 	// Verificar si ya existe el biometric_id
 	var existingID int64
-	err := dbConn.QueryRow(`SELECT id FROM users WHERE biometric_id = ?`, req.BiometricID).Scan(&existingID)
+	err := db.QueryRow(`SELECT id FROM users WHERE biometric_id = ?`, req.BiometricID).Scan(&existingID)
 	if err == nil {
 		return c.Status(fiber.StatusConflict).JSON(models.ErrorResponse{Error: "biometric already registered"})
 	} else if !errors.Is(err, sql.ErrNoRows) {
-		log.Printf("Error checking biometric_id: %v", err)
+		log.Printf("❌ Error verificando biometric_id: %v", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(models.ErrorResponse{Error: "db error"})
 	}
 
 	// Verificar si ya existe el username
-	err = dbConn.QueryRow(`SELECT id FROM users WHERE username = ?`, req.Username).Scan(&existingID)
+	err = db.QueryRow(`SELECT id FROM users WHERE username = ?`, req.Username).Scan(&existingID)
 	if err == nil {
 		return c.Status(fiber.StatusConflict).JSON(models.ErrorResponse{Error: "username already exists"})
 	} else if !errors.Is(err, sql.ErrNoRows) {
-		log.Printf("Error checking username: %v", err)
+		log.Printf("❌ Error verificando username: %v", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(models.ErrorResponse{Error: "db error"})
 	}
 
 	// Insertar nuevo usuario biométrico
-	res, err := dbConn.Exec(
+	res, err := db.Exec(
 		`INSERT INTO users (biometric_id, username, name, email, device_info, auth_type, created_at, last_login) VALUES (?, ?, ?, ?, ?, 'biometric', NOW(), NOW())`,
 		req.BiometricID,
 		req.Username,
@@ -400,7 +435,8 @@ func BiometricRegister(c *fiber.Ctx) error {
 // BiometricLogin handles POST /api/auth/biometric/login
 // Authenticates a user using biometric ID (for blind users)
 func BiometricLogin(c *fiber.Ctx) error {
-	if dbConn == nil {
+	db := getDBConn()
+	if db == nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(models.ErrorResponse{Error: "server not ready"})
 	}
 
@@ -420,7 +456,7 @@ func BiometricLogin(c *fiber.Ctx) error {
 		username string
 		email    sql.NullString
 	)
-	err := dbConn.QueryRow(
+	err := db.QueryRow(
 		`SELECT id, username, email FROM users WHERE biometric_id = ? AND auth_type = 'biometric'`,
 		req.BiometricID,
 	).Scan(&id, &username, &email)
@@ -429,14 +465,14 @@ func BiometricLogin(c *fiber.Ctx) error {
 		if errors.Is(err, sql.ErrNoRows) {
 			return c.Status(fiber.StatusUnauthorized).JSON(models.ErrorResponse{Error: "biometric not recognized"})
 		}
-		log.Printf("Error querying biometric user: %v", err)
+		log.Printf("❌ Error consultando usuario biométrico: %v", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(models.ErrorResponse{Error: "db error"})
 	}
 
 	// Actualizar last_login
-	_, err = dbConn.Exec(`UPDATE users SET last_login = NOW() WHERE id = ?`, id)
+	_, err = db.Exec(`UPDATE users SET last_login = NOW() WHERE id = ?`, id)
 	if err != nil {
-		log.Printf("Warning: failed to update last_login for user %d: %v", id, err)
+		log.Printf("⚠️ Warning: failed to update last_login for user %d: %v", id, err)
 	}
 
 	// Generar token JWT
@@ -469,7 +505,8 @@ func BiometricLogin(c *fiber.Ctx) error {
 // CheckBiometricExists handles POST /api/biometric/check
 // Verifica si un token biométrico ya está registrado
 func CheckBiometricExists(c *fiber.Ctx) error {
-	if dbConn == nil {
+	db := getDBConn()
+	if db == nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(models.ErrorResponse{Error: "server not ready"})
 	}
 
@@ -488,7 +525,7 @@ func CheckBiometricExists(c *fiber.Ctx) error {
 
 	// Verificar si existe
 	var existingID int64
-	err := dbConn.QueryRow(`SELECT id FROM users WHERE biometric_id = ?`, req.BiometricToken).Scan(&existingID)
+	err := db.QueryRow(`SELECT id FROM users WHERE biometric_id = ?`, req.BiometricToken).Scan(&existingID)
 
 	exists := false
 	if err == nil {
@@ -496,6 +533,9 @@ func CheckBiometricExists(c *fiber.Ctx) error {
 		exists = true
 		log.Printf("🔍 Token biométrico encontrado: user_id=%d", existingID)
 	} else if !errors.Is(err, sql.ErrNoRows) {
+		// Error real de base de datos
+		log.Printf("❌ Error verificando token biométrico: %v", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(models.ErrorResponse{Error: "db error"})
 		// Error de BD
 		log.Printf("❌ Error verificando token biométrico: %v", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(models.ErrorResponse{Error: "db error"})
