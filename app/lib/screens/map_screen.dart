@@ -60,9 +60,6 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
   final List<String> _recognitionHistory = [];
   static const Duration _speechTimeout = Duration(seconds: 5);
 
-  // Trip state - solo mostrar información adicional cuando hay viaje activo
-  bool _hasActiveTrip = false;
-
   // CAP-9: Confirmación de destino
   String? _pendingConfirmationDestination;
   // ✅ _confirmationTimer gestionado por TimerManagerMixin
@@ -192,7 +189,6 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
     RouteTrackingService.instance.onDestinationReached = () {
       if (!mounted) return;
       setState(() {
-        _hasActiveTrip = false;
         _isTrackingRoute = false;
       });
       _showSuccessNotification('¡Destino alcanzado!', withVibration: true);
@@ -364,166 +360,6 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
   }
 
   /// Construye el panel de instrucción actual basado en posición GPS
-  Widget _buildInstructionsPanel() {
-    final activeNav = IntegratedNavigationService.instance.activeNavigation;
-    if (activeNav == null) return const SizedBox.shrink();
-
-    final currentStep = activeNav.currentStep;
-    if (currentStep == null) return const SizedBox.shrink();
-
-    // Solo mostrar para pasos de caminata con instrucciones
-    if (currentStep.type != 'walk' ||
-        currentStep.streetInstructions == null ||
-        currentStep.streetInstructions!.isEmpty) {
-      return const SizedBox.shrink();
-    }
-
-    final instructions = currentStep.streetInstructions!;
-    final int currentIndex = _determineCurrentInstructionIndex();
-    final String currentInstruction = instructions[currentIndex];
-    final String? nextInstruction = 
-        currentIndex < instructions.length - 1 
-            ? instructions[currentIndex + 1] 
-            : null;
-
-    return Card(
-      elevation: 8,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-      color: Colors.white,
-      child: Padding(
-        padding: const EdgeInsets.all(20.0),
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Métricas del trayecto
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  _buildMetric(
-                    Icons.straighten,
-                    '${(currentStep.realDistanceMeters! / 1000).toStringAsFixed(2)} km',
-                    'Distancia',
-                  ),
-                  _buildMetric(
-                    Icons.access_time,
-                    '${(currentStep.realDurationSeconds! / 60).toStringAsFixed(0)} min',
-                    'Tiempo',
-                  ),
-                  _buildMetric(
-                    Icons.format_list_numbered,
-                    '${currentIndex + 1}/${instructions.length}',
-                    'Paso',
-                  ),
-                ],
-              ),
-            
-              const SizedBox(height: 20),
-              const Divider(color: Color(0xFFE2E8F0), height: 1),
-              const SizedBox(height: 20),
-
-              // Instrucción actual
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFFEF3C7),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(
-                    color: const Color(0xFFF59E0B),
-                    width: 2,
-                  ),
-                ),
-                child: Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(10),
-                      decoration: const BoxDecoration(
-                        color: Color(0xFFF59E0B),
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Icon(
-                        Icons.navigation_rounded,
-                        color: Colors.white,
-                        size: 24,
-                      ),
-                    ),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: Text(
-                        currentInstruction,
-                        style: const TextStyle(
-                          color: Color(0xFF0F172A),
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                          height: 1.4,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-
-              // Próxima instrucción (preview)
-              if (nextInstruction != null) ...[
-                const SizedBox(height: 12),
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFF8FAFC),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Row(
-                    children: [
-                      const Icon(
-                        Icons.arrow_forward,
-                        color: Color(0xFF64748B),
-                        size: 20,
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Text(
-                          'Siguiente: $nextInstruction',
-                          style: const TextStyle(
-                            color: Color(0xFF64748B),
-                            fontSize: 13,
-                            height: 1.4,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ],
-          ),
-        ),
-      ),
-    );
-  }  Widget _buildMetric(IconData icon, String value, String label) {
-    return Column(
-      children: [
-        Icon(icon, color: const Color(0xFF0F172A), size: 20),
-        const SizedBox(height: 4),
-        Text(
-          value,
-          style: const TextStyle(
-            color: Color(0xFF0F172A),
-            fontSize: 16,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-        Text(
-          label,
-          style: const TextStyle(
-            color: Color(0xFF64748B),
-            fontSize: 12,
-          ),
-        ),
-      ],
-    );
-  }
-
   Widget _buildNavigationQuickActions(bool hasActiveNavigation) {
     final instructions = _getActiveWalkInstructions();
     final bool hasWalkInstructions =
@@ -654,13 +490,25 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
   }
 
   Widget _buildSimulationFab() {
-    // NO mostrar en modo viaje de bus (ride_bus)
     final activeNav = IntegratedNavigationService.instance.activeNavigation;
-    if (activeNav?.currentStep?.type == 'ride_bus') {
+    final currentStep = activeNav?.currentStep;
+    
+    // NO mostrar en modo viaje de bus (ride_bus)
+    if (currentStep?.type == 'ride_bus') {
       return const SizedBox.shrink();
     }
     
-    final String label = _getSimulationButtonLabel();
+    // Determinar si estamos esperando en el paradero
+    final bool isWaitingAtStop = currentStep?.type == 'wait_bus';
+    
+    // Cambiar el ícono y label según el estado
+    final IconData icon = isWaitingAtStop 
+        ? Icons.directions_bus_rounded  // Ícono de bus cuando esperas
+        : Icons.play_arrow_rounded;      // Ícono de play normal
+    
+    final String label = isWaitingAtStop
+        ? 'Subir al bus'                 // Cuando esperas: "Subir al bus"
+        : _getSimulationButtonLabel();   // Resto: "Simular → Paradero", etc.
 
     return Semantics(
       button: true,
@@ -668,7 +516,7 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Botón de simulación (sin el toggle de desviación)
+          // Botón de simulación consciente del estado
           Tooltip(
             message: label,
             child: GestureDetector(
@@ -676,23 +524,33 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
               child: Container(
                 width: 64,
                 height: 64,
-                decoration: const BoxDecoration(
+                decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  gradient: LinearGradient(
-                    colors: [Color(0xFFFF8C42), Color(0xFFFF6B2C)],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                  ),
+                  gradient: isWaitingAtStop
+                      ? const LinearGradient(
+                          // Gradiente rojo cuando esperas el bus
+                          colors: [Color(0xFFEF4444), Color(0xFFDC2626)],
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                        )
+                      : const LinearGradient(
+                          // Gradiente naranja normal
+                          colors: [Color(0xFFFF8C42), Color(0xFFFF6B2C)],
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                        ),
                   boxShadow: [
                     BoxShadow(
-                      color: Color(0x66FF8C42),
+                      color: isWaitingAtStop
+                          ? const Color(0x66EF4444)
+                          : const Color(0x66FF8C42),
                       blurRadius: 18,
-                      offset: Offset(0, 10),
+                      offset: const Offset(0, 10),
                     ),
                   ],
                 ),
-                child: const Icon(
-                  Icons.play_arrow_rounded,
+                child: Icon(
+                  icon,
                   color: Colors.white,
                   size: 28,
                 ),
@@ -700,13 +558,21 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
             ),
           ),
           const SizedBox(height: 8),
-          Text(
-            label,
-            textAlign: TextAlign.center,
-            style: const TextStyle(
-              color: Color(0xFF9A3412),
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
+          Container(
+            constraints: const BoxConstraints(maxWidth: 80),
+            child: Text(
+              label,
+              textAlign: TextAlign.center,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: isWaitingAtStop 
+                    ? const Color(0xFF991B1B)  // Rojo oscuro cuando esperas
+                    : const Color(0xFF9A3412),  // Naranja oscuro normal
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                height: 1.2,
+              ),
             ),
           ),
         ],
@@ -2556,7 +2422,6 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
     // Activar viaje pero NO mostrar paradas automaticamente
     // (solo mostrar la ruta del bus en el mapa)
     setState(() {
-      _hasActiveTrip = true;
       _isCalculatingRoute = true; // 🔄 Mostrar indicador de carga
       // NO activar _showStops - solo mostrar la ruta del bus
     });
@@ -2658,8 +2523,6 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
         if (!mounted) return;
 
         setState(() {
-          _hasActiveTrip = true;
-
           // Usar geometría cacheada en lugar de llamar al servicio
           final stepGeometry = _getCurrentStepGeometryCached();
 
@@ -2745,7 +2608,6 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
         _log('🎉 ¡Destino alcanzado!');
 
         setState(() {
-          _hasActiveTrip = false;
           _isTrackingRoute = false;
         });
 
@@ -2900,7 +2762,6 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
             
             setState(() {
               _needsRouteRecalculation = false;
-              _hasActiveTrip = false;
             });
           }
         }
@@ -2908,8 +2769,6 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
 
       // Dibujar mapa inicial con geometría del primer paso
       setState(() {
-        _hasActiveTrip = true;
-
         _log('🗺️ [MAP] Llamando _updateNavigationMapState...');
 
         // Configurar polyline y marcadores iniciales
@@ -3460,7 +3319,6 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
         normalized.contains('detener navegación')) {
       IntegratedNavigationService.instance.cancelNavigation();
       setState(() {
-        _hasActiveTrip = false;
         _isTrackingRoute = false;
         _polylines.clear();
         _markers.clear();
@@ -3910,7 +3768,6 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
           final double gap = _overlayGap(context);
           final double floatingPrimary = overlayBase + gap * 2;
           final double floatingSecondary = overlayBase + gap * 1.15;
-          final double instructionsBottom = overlayBase + gap * 0.85;
           final bool hasActiveNavigation =
               IntegratedNavigationService.instance.activeNavigation != null;
 
@@ -3982,20 +3839,6 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
                 child: Center(child: _buildHeaderChips(context)),
               ),
 
-              // Acciones rápidas de simulación y guía paso a paso
-              Positioned(
-                left: 16,
-                bottom: floatingPrimary,
-                child: _buildNavigationQuickActions(hasActiveNavigation),
-              ),
-
-              if (hasActiveNavigation)
-                Positioned(
-                  right: 96,
-                  bottom: floatingPrimary,
-                  child: _buildSimulationFab(),
-                ),
-
               // Botón de configuración (derecha)
               Positioned(
                 right: 20,
@@ -4028,20 +3871,6 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
                   ),
                 ),
               ),
-
-              // Panel de instrucciones detalladas (GraphHopper)
-              if (_hasActiveTrip)
-                Positioned(
-                  left: 16,
-                  right: 16,
-                  bottom: instructionsBottom,
-                  child: Center(
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 640),
-                      child: _buildInstructionsPanel(),
-                    ),
-                  ),
-                ),
 
               // Panel inferior modernizado
               Positioned(
@@ -4437,26 +4266,74 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
                 ),
               ),
               const SizedBox(height: 16),
-              // Botón de micrófono (igual que antes pero fuera del panel)
-              GestureDetector(
-                onTap: isListening ? _stopListening : _startListening,
-                child: Container(
-                  width: 70,
-                  height: 70,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF0F172A),
-                    shape: BoxShape.circle,
-                    border: Border.all(
-                      color: isListening ? const Color(0xFFEF4444) : const Color(0xFF0F172A),
-                      width: 3,
+              // Fila de botones: Simular (desarrollo) + Micrófono
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  // Botón SIMULAR "Subir al bus" (desarrollo)
+                  GestureDetector(
+                    onTap: _simulateArrivalAtStop,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                      decoration: BoxDecoration(
+                        gradient: const LinearGradient(
+                          colors: [Color(0xFFEF4444), Color(0xFFDC2626)],
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                        ),
+                        borderRadius: BorderRadius.circular(20),
+                        boxShadow: [
+                          BoxShadow(
+                            color: const Color(0xFFEF4444).withValues(alpha: 0.4),
+                            blurRadius: 12,
+                            offset: const Offset(0, 6),
+                          ),
+                        ],
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(
+                            Icons.directions_bus_rounded,
+                            color: Colors.white,
+                            size: 24,
+                          ),
+                          const SizedBox(width: 8),
+                          const Text(
+                            'Subir al bus',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 16,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
-                  child: Icon(
-                    isListening ? Icons.mic : Icons.mic_none,
-                    color: Colors.white,
-                    size: 32,
+                  const SizedBox(width: 16),
+                  // Botón de micrófono
+                  GestureDetector(
+                    onTap: isListening ? _stopListening : _startListening,
+                    child: Container(
+                      width: 60,
+                      height: 60,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF0F172A),
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: isListening ? const Color(0xFFEF4444) : const Color(0xFF0F172A),
+                          width: 3,
+                        ),
+                      ),
+                      child: Icon(
+                        isListening ? Icons.mic : Icons.mic_none,
+                        color: Colors.white,
+                        size: 28,
+                      ),
+                    ),
                   ),
-                ),
+                ],
               ),
             ],
           ),
