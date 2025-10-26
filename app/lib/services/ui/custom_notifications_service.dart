@@ -10,10 +10,10 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:vibration/vibration.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import '../device/tts_service.dart';
+import '../device/vibration_service.dart';
 import '../debug_logger.dart';
 
 enum NotificationType { audio, vibration, visual, all }
@@ -316,9 +316,6 @@ class CustomNotificationsService {
   }
 
   Future<void> _vibrate(CustomNotification notification) async {
-    final hasVibrator = await Vibration.hasVibrator();
-    if (!hasVibrator) return;
-
     if (notification.vibrationPattern != null) {
       // Ajustar intensidad modificando duración
       final adjustedPattern = notification.vibrationPattern!.map((duration) {
@@ -328,39 +325,23 @@ class CustomNotificationsService {
         return duration;
       }).toList();
 
-      Vibration.vibrate(pattern: adjustedPattern);
+      await VibrationService.instance.custom(pattern: adjustedPattern);
     } else {
       // Vibración por defecto basada en prioridad
       switch (notification.priority) {
         case NotificationPriority.low:
-          Vibration.vibrate(
+          await VibrationService.instance.custom(
             duration: (200 * _preferences.vibrationIntensity).round(),
           );
           break;
         case NotificationPriority.medium:
-          Vibration.vibrate(
-            pattern: [
-              0,
-              (200 * _preferences.vibrationIntensity).round(),
-              100,
-              (200 * _preferences.vibrationIntensity).round(),
-            ],
-          );
+          await VibrationService.instance.doubleVibration();
           break;
         case NotificationPriority.high:
-          Vibration.vibrate(
-            pattern: [
-              0,
-              (300 * _preferences.vibrationIntensity).round(),
-              100,
-              (300 * _preferences.vibrationIntensity).round(),
-              100,
-              (300 * _preferences.vibrationIntensity).round(),
-            ],
-          );
+          await VibrationService.instance.tripleVibration();
           break;
         case NotificationPriority.critical:
-          Vibration.vibrate(
+          await VibrationService.instance.custom(
             pattern: [
               0,
               (500 * _preferences.vibrationIntensity).round(),

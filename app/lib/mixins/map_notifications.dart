@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:vibration/vibration.dart';
 import '../../widgets/map/accessible_notification.dart';
 import '../../services/device/tts_service.dart';
+import '../../services/device/vibration_service.dart';
 
 /// Mixin para el manejo de notificaciones y utilidades en la pantalla de mapa
 mixin MapNotifications on State {
@@ -72,10 +72,7 @@ mixin MapNotifications on State {
   /// Activa vibración háptica
   void triggerVibration() async {
     try {
-      final hasVibrator = await Vibration.hasVibrator();
-      if (hasVibrator == true) {
-        await Vibration.vibrate(duration: 200);
-      }
+      await VibrationService.instance.doubleVibration();
     } catch (e) {
       // Ignorar errores de vibración en dispositivos sin soporte
     }

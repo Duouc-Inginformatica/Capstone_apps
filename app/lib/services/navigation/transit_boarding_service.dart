@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'package:geolocator/geolocator.dart';
-import 'package:vibration/vibration.dart';
 import '../device/tts_service.dart';
+import '../device/vibration_service.dart';
 
 /// CAP-29: Confirmación de micro abordada
 /// Detecta cuando el usuario aborda un bus y confirma el número de línea
@@ -93,7 +93,7 @@ class TransitBoardingService {
 
   /// CAP-29: Confirmar abordaje exitoso
   void _confirmBoarding() {
-    Vibration.vibrate(pattern: [0, 300, 100, 300]); // Confirmación háptica
+    VibrationService.instance.custom(pattern: [0, 300, 100, 300]); // Confirmación háptica
 
     TtsService.instance.speak(
       '¡Confirmado! Has abordado el bus $_expectedBusRoute. '
@@ -115,7 +115,7 @@ class TransitBoardingService {
         spokenRoute.toLowerCase().contains('sí') ||
         spokenRoute.toLowerCase().contains('si') ||
         spokenRoute.toLowerCase().contains('confirmar')) {
-      Vibration.vibrate(duration: 300);
+      VibrationService.instance.confirmation();
       TtsService.instance.speak(
         'Perfecto, confirmado manualmente. Abordaste el bus $_expectedBusRoute',
       );

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
-import 'package:vibration/vibration.dart';
+import '../../services/device/vibration_service.dart';
 
 enum NotificationType { success, error, warning, info, navigation, orientation }
 
@@ -102,10 +102,7 @@ class _AccessibleNotificationState extends State<AccessibleNotification>
     if (!widget.notification.withVibration) return;
 
     try {
-      final hasVibrator = await Vibration.hasVibrator();
-      if (hasVibrator == true) {
-        await Vibration.vibrate(duration: 120);
-      }
+      await VibrationService.instance.confirmation();
     } catch (_) {
       // Ignorar fallas de vibración para no interrumpir la notificación.
     }

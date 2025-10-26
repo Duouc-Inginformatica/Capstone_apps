@@ -29,7 +29,7 @@ class _BiometricRegisterScreenState extends State<BiometricRegisterScreen> {
   }
 
   final BiometricAuthService _biometricService = BiometricAuthService.instance;
-  final TtsService _ttsService = TtsService();
+  final TtsService _ttsService = TtsService.instance;
   final ApiClient _apiClient = ApiClient();
   final stt.SpeechToText _speech = stt.SpeechToText();
 
@@ -55,6 +55,9 @@ class _BiometricRegisterScreenState extends State<BiometricRegisterScreen> {
   void dispose() {
     _usernameCtrl.dispose();
     _emailCtrl.dispose();
+    if (_speechAvailable && _speech.isListening) {
+      _speech.stop();
+    }
     super.dispose();
   }
 

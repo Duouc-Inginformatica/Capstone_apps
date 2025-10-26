@@ -1,15 +1,17 @@
+// ignore_for_file: unused_element, unnecessary_brace_in_string_interps, deprecated_member_use
+
 import 'package:flutter/material.dart';
 import 'dart:async';
 import 'dart:developer' as developer;
 import 'dart:math' as math;
+import 'dart:ui' as ui; // ✅ Para Path en CustomPainter
 import 'package:speech_to_text/speech_to_text.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:vibration/vibration.dart';
 import '../services/device/tts_service.dart';
-import '../services/backend/api_client.dart';
+import '../services/device/vibration_service.dart'; // Servicio centralizado
 import '../services/backend/address_validation_service.dart';
 import '../services/backend/bus_arrivals_service.dart';
 import '../services/navigation/route_tracking_service.dart';
@@ -17,10 +19,11 @@ import '../services/navigation/transit_boarding_service.dart';
 import '../services/navigation/integrated_navigation_service.dart';
 import '../services/device/npu_detector_service.dart';
 import '../services/debug_logger.dart';
-import '../services/ui/timer_manager.dart'; // ✅ Gestor de timers centralizado
-import '../services/polyline_compression.dart'; // ✅ Compresión Douglas-Peucker
-import '../services/geometry_cache_service.dart'; // ✅ Caché offline de geometrías
+import '../services/ui/timer_manager.dart'; // Gestor de timers centralizado
+import '../services/polyline_compression.dart'; // Compresión Douglas-Peucker
+import '../services/geometry_cache_service.dart'; // Caché offline de geometrías
 import '../widgets/map/accessible_notification.dart';
+import '../widgets/navigation_state_panels.dart'; // NUEVO - Paneles de estado de navegación
 import 'settings_screen.dart';
 import '../widgets/bottom_nav.dart';
 
@@ -106,16 +109,13 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
   List<LatLng>? _simulationDeviationRoute; // Ruta de desviación temporal (simulación)
   bool _isCurrentlyDeviated = false; // Si está actualmente desviado (simulación)
 
-  // Control de visualización de ruta de bus
-  final bool _busRouteShown =
-      false; // Rastrea si ya se mostró la ruta del bus en wait_bus
-
   // ============================================================================
   // TRACKING DE LLEGADAS EN TIEMPO REAL
   // ============================================================================
   StopArrivals? _currentArrivals; // Últimas llegadas recibidas
-  bool _isWaitingForBus = false; // Si está esperando el bus en el paradero
-  bool _needsRouteRecalculation = false; // Si el bus pasó y necesita recalcular
+  // NOTA: _needsRouteRecalculation se escribe pero no se lee actualmente
+  // Reservado para implementación futura de recálculo automático de rutas
+  // bool _needsRouteRecalculation = false;
 
   // Notification system
   final List<NotificationData> _activeNotifications = [];
@@ -124,6 +124,7 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
 
   // Map and location services
   final MapController _mapController = MapController();
+  StreamSubscription<Position>? _positionStreamSubscription; // ✅ Para cancelar GPS stream
   bool _isMapReady = false;
   double? _pendingRotation;
   LatLng? _pendingCenter;
@@ -645,7 +646,7 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
                 ),
               ),
             ],
-          ],
+          },
         ),
       ),
     );
@@ -975,10 +976,7 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
           }
           
           // Vibración de confirmación
-          final hasVibrator = await Vibration.hasVibrator();
-          if (hasVibrator == true) {
-            Vibration.vibrate(duration: 200);
-          }
+          await VibrationService.instance.confirmation();
           
           // Anunciar TTS
           await TtsService.instance.speak('Subiendo al bus ${nextStep.busRoute}', urgent: true);
@@ -1058,13 +1056,8 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
             _isSimulating = false;
           });
           
-          // Vibración de llegada (doble vibración)
-          final hasVibrator = await Vibration.hasVibrator();
-          if (hasVibrator == true) {
-            Vibration.vibrate(duration: 150);
-            await Future.delayed(const Duration(milliseconds: 200));
-            Vibration.vibrate(duration: 150);
-          }
+          // Vibración doble de llegada
+          await VibrationService.instance.doubleVibration();
           
           // Detectar si es el destino final o un paradero intermedio
           final isLastStep = activeNav.currentStepIndex >= activeNav.steps.length - 1;
@@ -1260,15 +1253,8 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
             _currentSimulatedBusStopIndex = -1; // Resetear índice
           });
           
-          // Vibración al bajar del bus (triple vibración)
-          final hasVibrator = await Vibration.hasVibrator();
-          if (hasVibrator == true) {
-            Vibration.vibrate(duration: 100);
-            await Future.delayed(const Duration(milliseconds: 150));
-            Vibration.vibrate(duration: 100);
-            await Future.delayed(const Duration(milliseconds: 150));
-            Vibration.vibrate(duration: 100);
-          }
+          // Vibración triple al bajar del bus
+          await VibrationService.instance.tripleVibration();
           
           await TtsService.instance.speak('Bajaste del bus', urgent: true);
           
@@ -1309,20 +1295,14 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
         String announcement = '';
         if (isLastStop) {
           announcement = 'Próxima parada: ${stop.name}. Prepárate para bajar';
-          // Vibración más fuerte para última parada
-          final hasVibrator = await Vibration.hasVibrator();
-          if (hasVibrator == true) {
-            Vibration.vibrate(duration: 300);
-          }
+          // Vibración fuerte para última parada
+          await VibrationService.instance.error();
         } else if (isImportantStop && !isFirstStop) {
           // Anunciar paraderos importantes (cada N paradas)
           final stopCode = stop.code != null ? 'código ${stop.code}' : '';
           announcement = 'Paradero ${stop.name} $stopCode';
           // Vibración sutil para paraderos importantes
-          final hasVibrator = await Vibration.hasVibrator();
-          if (hasVibrator == true) {
-            Vibration.vibrate(duration: 100);
-          }
+          await VibrationService.instance.custom(duration: 100);
         }
         
         if (announcement.isNotEmpty) {
@@ -1501,7 +1481,8 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
 
   // Calcular nueva posición dado bearing y distancia
   /// Crea y visualiza los paraderos del bus (sin mostrar la línea de ruta)
-  void _createBusRouteVisualization(ActiveNavigation navigation) {
+  /// RESERVADO: Helper no usado actualmente, disponible para visualización futura
+  void __reservedCreateBusRouteVisualization(ActiveNavigation navigation) {
     _log('🗺️ [BUS_STOPS] Mostrando paraderos de la ruta del bus...');
 
     // Buscar el leg del bus en el itinerario original
@@ -1745,14 +1726,7 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
   }
 
   void _triggerVibration() async {
-    try {
-      bool? hasVibrator = await Vibration.hasVibrator();
-      if (hasVibrator == true) {
-        Vibration.vibrate(duration: 200);
-      }
-    } catch (e) {
-      // Vibración no soportada
-    }
+    await VibrationService.instance.confirmation();
   }
 
   // Sobrescribir método para guardar último anuncio
@@ -1808,7 +1782,10 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
       distanceFilter: 10, // Optimizado: Actualizar cada 10 metros (reduce carga)
     );
 
-    Geolocator.getPositionStream(locationSettings: locationSettings).listen(
+    // ✅ MEMORY LEAK FIXED: Guardar subscription para cancelarla en dispose
+    _positionStreamSubscription = Geolocator.getPositionStream(
+      locationSettings: locationSettings,
+    ).listen(
       (Position position) {
         if (!mounted) return;
 
@@ -2251,7 +2228,8 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
       return;
     }
 
-    final destName = activeNav.destinationName ?? 'destino';
+    final destName = activeNav.destination; // Es String
+    final destCoords = activeNav.itinerary.destination; // Es LatLng
 
     setState(() => _isCalculatingRoute = true);
     
@@ -2261,8 +2239,8 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
       // Usar IntegratedNavigationService para recalcular
       await _startIntegratedMoovitNavigation(
         destName,
-        activeNav.destination.latitude,
-        activeNav.destination.longitude,
+        destCoords.latitude,
+        destCoords.longitude,
       );
 
       _showSuccessNotification('Ruta recalculada exitosamente');
@@ -2731,7 +2709,7 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
         _log('✅ Llegaste al paradero: $stopId');
 
         // Vibración de confirmación
-        Vibration.vibrate(duration: 500);
+        VibrationService.instance.custom(duration: 500);
         _showSuccessNotification(
           'Has llegado al paradero',
           withVibration: true,
@@ -2752,7 +2730,7 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
           withVibration: true,
         );
 
-        Vibration.vibrate(duration: 1000);
+        VibrationService.instance.custom(duration: 1000);
       };
 
       // Callback cuando la geometría se actualiza (posición del usuario cambia)
@@ -2816,15 +2794,15 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
         
         _log('🚨 [RECALCULAR] Bus $routeNumber pasó - iniciando recálculo de ruta');
         
-        setState(() {
-          _needsRouteRecalculation = true;
-        });
+        // setState(() {
+        //   _needsRouteRecalculation = true;
+        // });
         
         // ===================================================================
         // ALERTAS AL USUARIO - MEJORADAS
         // ===================================================================
-        // 1. Vibración de alerta (patrón fuerte)
-        await Vibration.vibrate(pattern: [0, 300, 100, 300, 100, 300]);
+        // 1. Vibración de alerta (patrón triple)
+        await VibrationService.instance.tripleVibration();
         
         // 2. Mensaje claro y humano
         await TtsService.instance.speak(
@@ -2868,7 +2846,7 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
             
             setState(() {
               _updateNavigationMapState(newNav);
-              _needsRouteRecalculation = false;
+              // _needsRouteRecalculation = false;
             });
             
             // Verificar si encontró una nueva ruta con bus
@@ -2897,7 +2875,7 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
             _showErrorNotification('❌ No se encontró ruta alternativa');
             
             setState(() {
-              _needsRouteRecalculation = false;
+              // _needsRouteRecalculation = false;
               _hasActiveTrip = false;
             });
           }
@@ -3070,7 +3048,7 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
     }
 
     // ═══════════════════════════════════════════════════════════════
-    // MOSTRAR PARADEROS DE BUS
+    // MOSTRANDO PARADEROS DE BUS
     // - Durante WALK hacia el paradero: Mostrar solo el DESTINO (paradero de subida)
     // - Durante WAIT_BUS: Mostrar subida y bajada
     // - Durante RIDE_BUS: Mostrar todas las paradas
@@ -3125,8 +3103,8 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
         // Crear marcadores con diseño formal y empresarial
         for (final index in visibleStopIndices) {
           final stop = stops[index];
-          final isFirst = index == 0;
-          final isLast = index == stops.length - 1;
+          // final isFirst = index == 0;
+          // final isLast = index == stops.length - 1;
           final isCurrent = _isSimulating && index == _currentSimulatedBusStopIndex;
           
           newMarkers.add(
@@ -3149,7 +3127,7 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
                         borderRadius: BorderRadius.circular(4),
                       ),
                       child: Text(
-                        stop.name ?? 'Paradero ${index + 1}',
+                        stop.name,
                         style: const TextStyle(
                           color: Colors.white,
                           fontSize: 10,
@@ -3389,7 +3367,8 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
   }
 
   /// Retorna el icono y color apropiado para cada tipo de paso
-  (IconData, Color) _getStepMarkerStyle(String stepType) {
+  /// RESERVADO: Helper no usado actualmente, disponible para estilos futuros
+  (IconData, Color) __reservedGetStepMarkerStyle(String stepType) {
     return switch (stepType) {
       'walk' => (Icons.directions_walk, Colors.blue),
       'wait_bus' => (Icons.directions_bus, Colors.orange),
@@ -3496,13 +3475,6 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
       }
     }
   }
-
-  // ═══════════════════════════════════════════════════════════════
-  // MÉTODOS LEGACY ELIMINADOS
-  // ═══════════════════════════════════════════════════════════════
-  // ❌ _calculateRoute() - Obsoleto, ahora se usa IntegratedNavigationService
-  // ❌ _displayRoute() - Obsoleto, todo viene de IntegratedNavigationService
-  // ❌ _displayFallbackRoute() - Obsoleto, no se usa ruta de demostración
 
   void _showPermissionDialog() {
     showDialog(
@@ -3629,10 +3601,8 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
           const Text(
             'Procesando ruta...',
             style: TextStyle(
-              color: Colors.white,
               fontSize: 12,
-              fontWeight: FontWeight.w600,
-              letterSpacing: 0.3,
+              color: Color(0xFF2563EB),
             ),
           ),
         ],
@@ -3693,7 +3663,8 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
 
   /// Intenta cargar geometría desde caché, si no existe la obtiene del servicio
   /// y la guarda comprimida para uso futuro
-  Future<List<LatLng>> _getOrCacheGeometry({
+  /// RESERVADO: Helper no usado actualmente, disponible para caché futura
+  Future<List<LatLng>> __reservedGetOrCacheGeometry({
     required String cacheKey,
     required Future<List<LatLng>> Function() fetchGeometry,
     bool compress = true,
@@ -3776,7 +3747,8 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
 
   /// Comprime una lista de puntos usando Douglas-Peucker
   /// Útil para polilíneas ya obtenidas que necesitan optimización
-  List<LatLng> _compressPolyline(List<LatLng> points, {double epsilon = 0.0001}) {
+  /// RESERVADO: Helper no usado actualmente, disponible para compresión futura
+  List<LatLng> __reservedCompressPolyline(List<LatLng> points, {double epsilon = 0.0001}) {
     if (points.length <= 2) return points;
 
     final compressed = PolylineCompression.compress(
@@ -3874,1123 +3846,6 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
       }
     });
   }
-
-  @override
-  @override
-  void dispose() {
-    // ✅ TimerManagerMixin limpia automáticamente: feedback, confirmation, speechTimeout, walkSimulation, resultDebounce
-
-    unawaited(TtsService.instance.releaseContext('map_navigation'));
-
-    // Liberar servicios de tracking
-    RouteTrackingService.instance.dispose();
-    TransitBoardingService.instance.dispose();
-
-    // Garantiza liberar el reconocimiento si la vista se destruye
-    if (_isListening) {
-      _speech.stop();
-    }
-    // Intenta cancelar cualquier operación pendiente
-    _speech.cancel();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFFF5F6FF),
-      body: LayoutBuilder(
-        builder: (context, constraints) {
-          final double overlayBase = math.max(
-            _overlayBaseOffset(context, min: 260),
-            constraints.maxHeight * 0.26,
-          );
-          final double gap = _overlayGap(context);
-          final double floatingPrimary = overlayBase + gap * 2;
-          final double floatingSecondary = overlayBase + gap * 1.15;
-          final double instructionsBottom = overlayBase + gap * 0.85;
-          final bool hasActiveNavigation =
-              IntegratedNavigationService.instance.activeNavigation != null;
-
-          return Stack(
-            children: [
-              // Área del mapa con esquinas suavizadas
-              Positioned.fill(
-                child: ClipRRect(
-                  borderRadius: const BorderRadius.vertical(
-                    top: Radius.circular(32),
-                  ),
-                  child: FlutterMap(
-                    mapController: _mapController,
-                    options: MapOptions(
-                      initialCenter: _currentPosition != null
-                          ? LatLng(
-                              _currentPosition!.latitude,
-                              _currentPosition!.longitude,
-                            )
-                          : _initialPosition,
-                      initialZoom: 14.0,
-                      minZoom: 10.0,
-                      maxZoom: 18.0,
-                      initialRotation: 0.0,
-                      onMapReady: () {
-                        _isMapReady = true;
-
-                        if (_pendingCenter != null) {
-                          final zoom =
-                              _pendingZoom ?? _mapController.camera.zoom;
-                          _mapController.move(_pendingCenter!, zoom);
-                          _pendingCenter = null;
-                          _pendingZoom = null;
-                        }
-
-                        if (_pendingRotation != null) {
-                          _mapController.rotate(_pendingRotation!);
-                          _pendingRotation = null;
-                        }
-                      },
-                      // onPositionChanged eliminado - el mapa siempre sigue al usuario
-                      keepAlive: true,
-                    ),
-                    children: [
-                      TileLayer(
-                        urlTemplate:
-                            'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                        userAgentPackageName: 'com.example.wayfindcl',
-                        maxZoom: 18,
-                        maxNativeZoom: 18,
-                        retinaMode: false,
-                        // Optimizaciones de rendimiento
-                        tileSize: 256,
-                        panBuffer: 1, // Reduce tiles cargados fuera de pantalla
-                      ),
-                      if (_polylines.isNotEmpty)
-                        PolylineLayer(polylines: _polylines),
-                      if (_markers.isNotEmpty) MarkerLayer(markers: _markers),
-                    ],
-                  ),
-                ),
-              ),
-
-              // Encabezado con título e indicador IA
-              Positioned(
-                top: MediaQuery.of(context).padding.top + 12,
-                left: 16,
-                right: 16,
-                child: Center(child: _buildHeaderChips(context)),
-              ),
-
-              // Acciones rápidas de simulación y guía paso a paso
-              Positioned(
-                left: 16,
-                bottom: floatingPrimary,
-                child: _buildNavigationQuickActions(hasActiveNavigation),
-              ),
-
-              if (hasActiveNavigation)
-                Positioned(
-                  right: 96,
-                  bottom: floatingPrimary,
-                  child: _buildSimulationFab(),
-                ),
-
-              // Botón de configuración (derecha)
-              Positioned(
-                right: 20,
-                bottom: floatingSecondary,
-                child: GestureDetector(
-                  onTap: () => Navigator.pushNamed(context, '/settings'),
-                  child: Container(
-                    width: 58,
-                    height: 58,
-                    decoration: BoxDecoration(
-                      gradient: const LinearGradient(
-                        colors: [Color(0xFF111827), Color(0xFF1F2937)],
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                      ),
-                      borderRadius: BorderRadius.circular(18),
-                      boxShadow: [
-                        BoxShadow(
-                          color: const Color(0xFF0F172A).withValues(alpha: 0.4),
-                          blurRadius: 18,
-                          offset: const Offset(0, 10),
-                        ),
-                      ],
-                    ),
-                    child: const Icon(
-                      Icons.settings,
-                      color: Colors.white,
-                      size: 24,
-                    ),
-                  ),
-                ),
-              ),
-
-              // Panel de instrucciones detalladas (GraphHopper)
-              if (_hasActiveTrip)
-                Positioned(
-                  left: 16,
-                  right: 16,
-                  bottom: instructionsBottom,
-                  child: Center(
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 640),
-                      child: _buildInstructionsPanel(),
-                    ),
-                  ),
-                ),
-
-              // Panel inferior modernizado
-              Positioned(
-                left: 0,
-                right: 0,
-                bottom: 0,
-                child: _buildBottomPanel(context),
-              ),
-
-              // Sistema de notificaciones
-              Positioned(
-                top: 0,
-                left: 0,
-                right: 0,
-                child: SafeArea(
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: _activeNotifications.map((notification) {
-                        return Padding(
-                          padding: const EdgeInsets.only(bottom: 8),
-                          child: ConstrainedBox(
-                            constraints: const BoxConstraints(maxWidth: 480),
-                            child: AccessibleNotification(
-                              key: ValueKey(notification.hashCode),
-                              notification: notification,
-                              onDismiss: () =>
-                                  _dismissNotification(notification),
-                            ),
-                          ),
-                        );
-                      }).toList(),
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          );
-        },
-      ),
-    );
-  }
-
-  Widget _buildHeaderChips(BuildContext context) {
-    final bool loading = _npuLoading && !_npuChecked;
-    final bool available = _npuAvailable;
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(28),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.08),
-            blurRadius: 18,
-            offset: const Offset(0, 10),
-          ),
-        ],
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // Logo Red Movilidad (32x32)
-          Container(
-            width: 32,
-            height: 32,
-            decoration: BoxDecoration(
-              color: Colors.white,
-              shape: BoxShape.circle,
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.1),
-                  blurRadius: 4,
-                  offset: const Offset(0, 2),
-                ),
-              ],
-            ),
-            child: ClipOval(
-              child: Image.asset(
-                'assets/icons.png',
-                width: 32,
-                height: 32,
-                fit: BoxFit.cover,
-                errorBuilder: (context, error, stackTrace) {
-                  // Fallback si no existe la imagen
-                  return const Icon(
-                    Icons.directions_bus,
-                    color: Color(0xFFE30613),
-                    size: 18,
-                  );
-                },
-              ),
-            ),
-          ),
-          const SizedBox(width: 12),
-          const Text(
-            'WayFindCL',
-            style: TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.w700,
-              color: Color(0xFF0F172A),
-            ),
-          ),
-          const SizedBox(width: 12),
-          _buildIaBadge(loading: loading, available: available),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildIaBadge({required bool loading, required bool available}) {
-    final List<Color> colors;
-    final String label;
-    if (loading) {
-      colors = [const Color(0xFFE2E8F0), const Color(0xFFCBD5F5)];
-      label = 'IA';
-    } else if (available) {
-      colors = [const Color(0xFF00BCD4), const Color(0xFF0097A7)];
-      label = 'IA';
-    } else {
-      colors = [const Color(0xFFE53935), const Color(0xFFD32F2F)];
-      label = 'IA OFF';
-    }
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(colors: colors),
-        borderRadius: BorderRadius.circular(18),
-        boxShadow: [
-          BoxShadow(
-            color: colors.last.withValues(alpha: 0.35),
-            blurRadius: 12,
-            offset: const Offset(0, 6),
-          ),
-        ],
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (loading) ...[
-            const SizedBox(
-              width: 14,
-              height: 14,
-              child: CircularProgressIndicator(
-                strokeWidth: 2,
-                valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-              ),
-            ),
-            const SizedBox(width: 6),
-          ] else ...[
-            const Icon(Icons.bolt, size: 16, color: Colors.white),
-            const SizedBox(width: 6),
-          ],
-          Text(
-            label,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 12,
-              fontWeight: FontWeight.w700,
-              letterSpacing: 0.3,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildBottomPanel(BuildContext context) {
-    final bool isListening = _isListening;
-    final bool isCalculating = _isCalculatingRoute;
-    final activeNav = IntegratedNavigationService.instance.activeNavigation;
-    
-    // Mantener navegación activa visible incluso si isComplete == true
-    // Esto permite que el usuario vea la ruta después de llegar al destino
-    // y pueda iniciar una nueva navegación desde allí
-    final bool hasActiveNav = activeNav != null;
-
-    // INTERFAZ MINIMAL durante navegación activa
-    if (hasActiveNav && !isCalculating) {
-      return _buildMinimalNavigationPanel(context, isListening, activeNav);
-    }
-
-    // INTERFAZ COMPLETA cuando NO hay navegación
-    return _buildFullBottomPanel(context, isListening, isCalculating);
-  }
-
-  /// Interfaz minimal durante navegación: solo micrófono + info de ruta
-  Widget _buildMinimalNavigationPanel(BuildContext context, bool isListening, dynamic activeNav) {
-    final currentStep = activeNav.currentStep;
-    
-    // PANEL ESPECIAL para wait_bus: Solo micrófono y tiempo de llegada
-    if (currentStep?.type == 'wait_bus') {
-      final busRoute = currentStep.busRoute ?? '';
-      // NOTA: Tiempo real de llegada se integrará cuando API RED lo soporte
-      final arrivalTime = currentStep.estimatedDuration; // Usar estimación por ahora
-      
-      return SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(28),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.1),
-                  blurRadius: 20,
-                  offset: const Offset(0, 8),
-                ),
-              ],
-            ),
-            child: Row(
-              children: [
-                // Lado izquierdo: Icono y número del bus
-                Expanded(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        Icons.directions_bus,
-                        size: 32,
-                        color: const Color(0xFFE30613),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        busRoute,
-                        style: const TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w900,
-                          color: Color(0xFF0F172A),
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      const Text(
-                        'Bus',
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: Color(0xFF64748B),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                // Centro: Botón de micrófono
-                GestureDetector(
-                  onTap: isListening ? _stopListening : _startListening,
-                  child: Container(
-                    width: 70,
-                    height: 70,
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF0F172A),
-                      shape: BoxShape.circle,
-                      border: Border.all(
-                        color: isListening ? const Color(0xFFEF4444) : const Color(0xFF0F172A),
-                        width: 3,
-                      ),
-                    ),
-                    child: Icon(
-                      isListening ? Icons.mic : Icons.mic_none,
-                      color: Colors.white,
-                      size: 32,
-                    ),
-                  ),
-                ),
-                // Lado derecho: Tiempo de llegada
-                Expanded(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        Icons.access_time,
-                        size: 32,
-                        color: const Color(0xFF2563EB),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        '${arrivalTime}min',
-                        style: const TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w900,
-                          color: Color(0xFF0F172A),
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      const Text(
-                        'Llegada',
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: Color(0xFF64748B),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      );
-    }
-    
-    // PANEL ESPECIAL para ride_bus: Muestra progreso del viaje en bus
-    if (currentStep?.type == 'ride_bus') {
-      final busRoute = currentStep.busRoute ?? '';
-      final stopName = currentStep.stopName ?? 'Destino';
-      final totalStops = currentStep.totalStops ?? 0;
-      final currentStopIndex = _currentSimulatedBusStopIndex >= 0 ? _currentSimulatedBusStopIndex : 0;
-      final remainingStops = totalStops > currentStopIndex ? totalStops - currentStopIndex : 0;
-      
-      return SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // Panel principal del bus con información
-              Container(
-                padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(
-                  gradient: const LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [Color(0xFFE30613), Color(0xFFB71C1C)],
-                  ),
-                  borderRadius: BorderRadius.circular(28),
-                  boxShadow: [
-                    BoxShadow(
-                      color: const Color(0xFFE30613).withValues(alpha: 0.3),
-                      blurRadius: 20,
-                      offset: const Offset(0, 8),
-                    ),
-                  ],
-                ),
-                child: Column(
-                  children: [
-                    // Fila superior: Número del bus y destino
-                    Row(
-                      children: [
-                        // Icono y número del bus
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(16),
-                          ),
-                          child: Row(
-                            children: [
-                              const Icon(
-                                Icons.directions_bus,
-                                color: Color(0xFFE30613),
-                                size: 24,
-                              ),
-                              const SizedBox(width: 8),
-                              Text(
-                                busRoute,
-                                style: const TextStyle(
-                                  fontSize: 20,
-                                  fontWeight: FontWeight.w900,
-                                  color: Color(0xFF0F172A),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        // Destino
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Text(
-                                'Hacia',
-                                style: TextStyle(
-                                  color: Colors.white70,
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                              Text(
-                                stopName,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w700,
-                                ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-                    // Fila inferior: Progreso de paradas
-                    Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: 0.2),
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceAround,
-                        children: [
-                          // Parada actual
-                          Column(
-                            children: [
-                              const Text(
-                                'Parada',
-                                style: TextStyle(
-                                  color: Colors.white70,
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                '${currentStopIndex + 1}',
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 22,
-                                  fontWeight: FontWeight.w900,
-                                ),
-                              ),
-                            ],
-                          ),
-                          // Separador
-                          Container(
-                            width: 1,
-                            height: 30,
-                            color: Colors.white30,
-                          ),
-                          // Total de paradas
-                          Column(
-                            children: [
-                              const Text(
-                                'Total',
-                                style: TextStyle(
-                                  color: Colors.white70,
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                '$totalStops',
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 22,
-                                  fontWeight: FontWeight.w900,
-                                ),
-                              ),
-                            ],
-                          ),
-                          // Separador
-                          Container(
-                            width: 1,
-                            height: 30,
-                            color: Colors.white30,
-                          ),
-                          // Paradas restantes
-                          Column(
-                            children: [
-                              const Text(
-                                'Faltan',
-                                style: TextStyle(
-                                  color: Colors.white70,
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                '$remainingStops',
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 22,
-                                  fontWeight: FontWeight.w900,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 12),
-              // Botón de micrófono flotante
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  GestureDetector(
-                    onTap: isListening ? _stopListening : _startListening,
-                    child: Container(
-                      width: 70,
-                      height: 70,
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF0F172A),
-                        shape: BoxShape.circle,
-                        border: Border.all(
-                          color: isListening ? const Color(0xFFEF4444) : const Color(0xFF0F172A),
-                          width: 3,
-                        ),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.3),
-                            blurRadius: 15,
-                            offset: const Offset(0, 5),
-                          ),
-                        ],
-                      ),
-                      child: Icon(
-                        isListening ? Icons.mic : Icons.mic_none,
-                        color: Colors.white,
-                        size: 32,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 16),
-                  // Botón de simulación (discreto)
-                  TextButton.icon(
-                    onPressed: _simulateArrivalAtStop,
-                    icon: const Icon(Icons.bug_report, size: 16),
-                    label: Text(
-                      _getSimulationButtonLabel(),
-                      style: const TextStyle(fontSize: 12),
-                    ),
-                    style: TextButton.styleFrom(
-                      foregroundColor: const Color(0xFF64748B),
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-    
-    // PANEL NORMAL para otros casos
-    // Calcular tiempo y distancia de forma segura
-    final int durationMin = activeNav.estimatedDuration; // Ya está en minutos
-    double distanceKm = 0.0;
-    for (var leg in activeNav.itinerary.legs) {
-      distanceKm += leg.distanceKm;
-    }
-    
-    // Determinar el tipo de actividad actual (walk o bus)
-    final isWalking = currentStep?.type == 'walk';
-    final isBusRelated = currentStep?.type == 'wait_bus' || currentStep?.type == 'ride_bus';
-
-    return SafeArea(
-      top: false,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 0, 16, 24), // Panel cerca del borde inferior
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // Panel minimal con micrófono
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(28),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.1),
-                    blurRadius: 20,
-                    offset: const Offset(0, 8),
-                  ),
-                ],
-              ),
-              child: Row(
-                children: [
-                  // Lado izquierdo: Tiempo con ícono contextual
-                  Expanded(
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(
-                          isWalking ? Icons.directions_walk : isBusRelated ? Icons.directions_bus : Icons.access_time,
-                          size: 20,
-                          color: const Color(0xFF64748B),
-                        ),
-                        const SizedBox(width: 6),
-                        Text(
-                          '${durationMin}min',
-                          style: const TextStyle(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w700,
-                            color: Color(0xFF0F172A),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  // Centro: Botón de micrófono
-                  GestureDetector(
-                    onTap: isListening ? _stopListening : _startListening,
-                    child: Container(
-                      width: 60,
-                      height: 60,
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF0F172A),
-                        shape: BoxShape.circle,
-                        border: Border.all(
-                          color: isListening ? const Color(0xFFEF4444) : const Color(0xFF0F172A),
-                          width: 3,
-                        ),
-                      ),
-                      child: Icon(
-                        isListening ? Icons.mic : Icons.mic_none,
-                        color: Colors.white,
-                        size: 28,
-                      ),
-                    ),
-                  ),
-                  // Lado derecho: Distancia
-                  Expanded(
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        const Icon(Icons.straighten, size: 18, color: Color(0xFF64748B)),
-                        const SizedBox(width: 6),
-                        Text(
-                          '${distanceKm.toStringAsFixed(1)}km',
-                          style: const TextStyle(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w700,
-                            color: Color(0xFF0F172A),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 8),
-            // Botón debug para desarrolladores (discreto)
-            Align(
-              alignment: Alignment.centerRight,
-              child: TextButton.icon(
-                onPressed: _simulateArrivalAtStop,
-                icon: const Icon(Icons.bug_report, size: 16),
-                label: const Text(
-                  'Simular',
-                  style: TextStyle(fontSize: 12),
-                ),
-                style: TextButton.styleFrom(
-                  foregroundColor: const Color(0xFF64748B),
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// Interfaz completa cuando NO hay navegación activa
-  Widget _buildFullBottomPanel(BuildContext context, bool isListening, bool isCalculating) {
-    final List<Color> micGradient = isCalculating
-        ? const [Color(0xFF2563EB), Color(0xFF1D4ED8)]
-        : isListening
-        ? const [Color(0xFFE53935), Color(0xFFB71C1C)]
-        : const [Color(0xFF111827), Color(0xFF1F2937)];
-
-    final Color micShadowColor = isCalculating
-        ? const Color(0xFF1D4ED8)
-        : isListening
-        ? const Color(0xFFB71C1C)
-        : Colors.black;
-
-    return SafeArea(
-      top: false,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 640),
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [Colors.white, Color(0xFFF2F4F8)],
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                ),
-                borderRadius: BorderRadius.circular(24),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.06),
-                    blurRadius: 16,
-                    offset: const Offset(0, 6),
-                  ),
-                ],
-              ),
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    if (_isProcessingCommand)
-                      const Padding(
-                        padding: EdgeInsets.only(top: 10),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            SizedBox(
-                              width: 18,
-                              height: 18,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            ),
-                            SizedBox(width: 8),
-                            Text(
-                              'Procesando comando...',
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: Color(0xFF2563EB),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    const SizedBox(height: 18),
-                    Semantics(
-                      label: isListening
-                          ? 'Botón micrófono, escuchando'
-                          : 'Botón micrófono, no escuchando',
-                      hint: isListening
-                          ? 'Toca para detener'
-                          : 'Toca para iniciar',
-                      button: true,
-                      enabled: true,
-                      child: GestureDetector(
-                        onTap: _toggleMicrophone,
-                        onLongPress: _showWalkingInstructions,
-                        child: AnimatedContainer(
-                          duration: const Duration(milliseconds: 320),
-                          curve: Curves.easeInOut,
-                          width: double.infinity,
-                          height: 85,
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              colors: micGradient,
-                              begin: Alignment.topLeft,
-                              end: Alignment.bottomRight,
-                            ),
-                            borderRadius: BorderRadius.circular(20),
-                            boxShadow: [
-                              BoxShadow(
-                                color: micShadowColor.withValues(alpha: 0.25),
-                                blurRadius: 16,
-                                offset: const Offset(0, 6),
-                              ),
-                            ],
-                          ),
-                          child: _buildMicrophoneContent(),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 18),
-                    BottomNavBar(
-                      currentIndex: 0,
-                      onTap: (index) {
-                        switch (index) {
-                          case 0:
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text('Explorar')),
-                            );
-                            break;
-                          case 1:
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text('Guardados (no implementado)'),
-                              ),
-                            );
-                            break;
-                          // Eliminado case 2: ContributeScreen (pantalla eliminada)
-                          case 2:
-                            Navigator.pushNamed(
-                              context,
-                              SettingsScreen.routeName,
-                            );
-                            break;
-                        }
-                      },
-                    ),
-                    const SizedBox(height: 8),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  /// Simplifica nombres de paraderos para TTS
-  /// Convierte "PA1234 / Av. Providencia" en "Paradero" cuando es destino
-  /// o simplemente remueve el código manteniendo la calle
-
-  // ============================================================================
-  // SIMULACIÓN REALISTA CON DESVIACIONES
-  // ============================================================================
-
-  /// Planifica una desviación aleatoria en la simulación de caminata
-  /// Genera un punto de desviación y una ruta de regreso
-  void _planSimulationDeviation(List<LatLng> originalGeometry) {
-    if (!_simulationDeviationEnabled || originalGeometry.length < 20) {
-      _simulationDeviationStep = -1;
-      _simulationDeviationRoute = null;
-      return;
-    }
-
-    final random = math.Random();
-    
-    // 40% de probabilidad de desviarse durante la simulación
-    if (random.nextDouble() > 0.4) {
-      _simulationDeviationStep = -1;
-      _simulationDeviationRoute = null;
-      return;
-    }
-
-    // Desviarse entre el 30% y 70% del recorrido
-    final minIndex = (originalGeometry.length * 0.3).toInt();
-    final maxIndex = (originalGeometry.length * 0.7).toInt();
-    _simulationDeviationStep = minIndex + random.nextInt(maxIndex - minIndex);
-
-    // Generar ruta de desviación (perpendicular a la ruta correcta)
-    final deviationPoint = originalGeometry[_simulationDeviationStep];
-    final nextPoint = _simulationDeviationStep < originalGeometry.length - 1
-        ? originalGeometry[_simulationDeviationStep + 1]
-        : originalGeometry[_simulationDeviationStep - 1];
-
-    // Calcular vector perpendicular
-    final dx = nextPoint.longitude - deviationPoint.longitude;
-    final dy = nextPoint.latitude - deviationPoint.latitude;
-    
-    // Vector perpendicular (rotar 90 grados)
-    final perpDx = -dy;
-    final perpDy = dx;
-    
-    // Normalizar y escalar (desviación de 60-80 metros)
-    final length = math.sqrt(perpDx * perpDx + perpDy * perpDy);
-    final deviationDistance = 0.0006 + random.nextDouble() * 0.0002; // ~60-80m
-    final normDx = (perpDx / length) * deviationDistance;
-    final normDy = (perpDy / length) * deviationDistance;
-
-    // Punto de máxima desviación
-    final maxDeviationPoint = LatLng(
-      deviationPoint.latitude + normDy,
-      deviationPoint.longitude + normDx,
-    );
-
-    // Crear ruta de desviación: salida gradual (4 puntos) + regreso gradual (5 puntos)
-    _simulationDeviationRoute = [
-      // Salida gradual de la ruta
-      LatLng(
-        deviationPoint.latitude + normDy * 0.25,
-        deviationPoint.longitude + normDx * 0.25,
-      ),
-      LatLng(
-        deviationPoint.latitude + normDy * 0.5,
-        deviationPoint.longitude + normDx * 0.5,
-      ),
-      LatLng(
-        deviationPoint.latitude + normDy * 0.75,
-        deviationPoint.longitude + normDx * 0.75,
-      ),
-      maxDeviationPoint,
-      // Regreso gradual a la ruta
-      LatLng(
-        deviationPoint.latitude + normDy * 0.75,
-        deviationPoint.longitude + normDx * 0.75,
-      ),
-      LatLng(
-        deviationPoint.latitude + normDy * 0.5,
-        deviationPoint.longitude + normDx * 0.5,
-      ),
-      LatLng(
-        deviationPoint.latitude + normDy * 0.25,
-        deviationPoint.longitude + normDx * 0.25,
-      ),
-      // Punto de regreso (siguiente en la ruta original)
-      _simulationDeviationStep < originalGeometry.length - 5
-          ? originalGeometry[_simulationDeviationStep + 5]
-          : originalGeometry.last,
-    ];
-
-    _log('🎲 [SIMULACIÓN] Desviación planificada en punto $_simulationDeviationStep/${originalGeometry.length}');
-    _log('   Distancia de desviación: ~${(deviationDistance * 111000).toInt()}m');
-  }
-
-  /// Obtiene el siguiente punto GPS para la simulación (con o sin desviación)
-  LatLng _getNextSimulationPoint(List<LatLng> originalGeometry, int currentIndex) {
-    // Si estamos en el punto de desviación, comenzar a seguir la ruta de desviación
-    if (currentIndex == _simulationDeviationStep && _simulationDeviationRoute != null && !_isCurrentlyDeviated) {
-      _isCurrentlyDeviated = true;
-      _log('⚠️ [SIMULACIÓN] Iniciando desviación de ruta...');
-      return _simulationDeviationRoute!.first;
-    }
-
-    // Si estamos desviados, seguir la ruta de desviación
-    if (_isCurrentlyDeviated && _simulationDeviationRoute != null) {
-      final deviationIndex = currentIndex - _simulationDeviationStep;
-      
-      if (deviationIndex < _simulationDeviationRoute!.length) {
-        final deviationPoint = _simulationDeviationRoute![deviationIndex];
-        
-        // Último punto de desviación = regreso a la ruta
-        if (deviationIndex == _simulationDeviationRoute!.length - 1) {
-          _log('✅ [SIMULACIÓN] Regresando a la ruta correcta...');
-          _isCurrentlyDeviated = false;
-        }
-        
-        return deviationPoint;
-      } else {
-        // Terminar desviación y continuar con ruta original
-        _isCurrentlyDeviated = false;
-        final newIndex = _simulationDeviationStep + _simulationDeviationRoute!.length;
-        return newIndex < originalGeometry.length 
-            ? originalGeometry[newIndex]
-            : originalGeometry.last;
-      }
-    }
-
-    // Navegación normal por la ruta original
-    return currentIndex < originalGeometry.length 
-        ? originalGeometry[currentIndex]
-        : originalGeometry.last;
-  }
-
-  /// Resetea el estado de desviación al iniciar nueva simulación
-  void _resetSimulationDeviation() {
-    _simulationDeviationStep = -1;
-    _simulationDeviationRoute = null;
-    _isCurrentlyDeviated = false;
-  }
 }
 
 /// Widget optimizado para el marcador de ubicación del usuario
@@ -5049,11 +3904,11 @@ class _PinTipPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final paint = Paint()
+    final paint = ui.Paint()
       ..color = color
-      ..style = PaintingStyle.fill;
+      ..style = ui.PaintingStyle.fill;
 
-    final path = Path()
+    final path = ui.Path()
       ..moveTo(size.width / 2, size.height) // Punta del triángulo (abajo centro)
       ..lineTo(0, 0) // Esquina superior izquierda
       ..lineTo(size.width, 0) // Esquina superior derecha

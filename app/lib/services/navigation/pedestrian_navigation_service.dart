@@ -11,8 +11,8 @@
 import 'dart:async';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
-import 'package:vibration/vibration.dart';
 import '../device/tts_service.dart';
+import '../device/vibration_service.dart';
 
 enum TurnDirection {
   straight,
@@ -180,10 +180,7 @@ class PedestrianNavigationService {
     );
 
     // Vibración de inicio
-    final hasVibrator = await Vibration.hasVibrator();
-    if (hasVibrator) {
-      Vibration.vibrate(duration: 200);
-    }
+    await VibrationService.instance.confirmation();
 
     // Iniciar monitoreo de posición
     _startPositionMonitoring();
@@ -337,7 +334,7 @@ class PedestrianNavigationService {
     onInstructionTriggered?.call(nextInstruction);
   }
 
-  void _checkDestinationReached() {
+  Future<void> _checkDestinationReached() async {
     if (_currentPosition == null || _destination == null) return;
 
     final distanceToDestination = _distance.as(
@@ -351,48 +348,45 @@ class PedestrianNavigationService {
 
     // Verificar si llegó
     if (distanceToDestination < 10) {
-      TtsService.instance.speak('¡Has llegado a tu destino!');
-      Vibration.vibrate(pattern: [0, 200, 100, 200, 100, 200]);
+      await TtsService.instance.speak('¡Has llegado a tu destino!');
+      await VibrationService.instance.tripleVibration();
       onDestinationReached?.call();
       stopNavigation();
     }
   }
 
-  void _handleOffRoute() {
-    TtsService.instance.speak('Te has desviado de la ruta. Recalculando...');
-    Vibration.vibrate(pattern: [0, 100, 100, 100]);
+  Future<void> _handleOffRoute() async {
+    await TtsService.instance.speak('Te has desviado de la ruta. Recalculando...');
+    await VibrationService.instance.custom(pattern: [0, 100, 100, 100]);
     // Aquí se podría integrar con el servicio de routing para recalcular
   }
 
-  void _alertObstacle(ObstacleType obstacle) {
+  Future<void> _alertObstacle(ObstacleType obstacle) async {
     final instruction = _instructions[_currentInstructionIndex];
-    TtsService.instance.speak(instruction.obstacleText);
-    Vibration.vibrate(pattern: [0, 300, 200, 300]);
+    await TtsService.instance.speak(instruction.obstacleText);
+    await VibrationService.instance.custom(pattern: [0, 300, 200, 300]);
     onObstacleDetected?.call(obstacle);
   }
 
   void _vibrateForDirection(TurnDirection direction) async {
-    final hasVibrator = await Vibration.hasVibrator();
-    if (!hasVibrator) return;
-
     switch (direction) {
       case TurnDirection.straight:
-        Vibration.vibrate(duration: 100);
+        await VibrationService.instance.confirmation();
         break;
       case TurnDirection.slightLeft:
       case TurnDirection.slightRight:
-        Vibration.vibrate(pattern: [0, 100, 50, 100]);
+        await VibrationService.instance.custom(pattern: [0, 100, 50, 100]);
         break;
       case TurnDirection.left:
       case TurnDirection.right:
-        Vibration.vibrate(pattern: [0, 150, 100, 150]);
+        await VibrationService.instance.doubleVibration();
         break;
       case TurnDirection.sharpLeft:
       case TurnDirection.sharpRight:
-        Vibration.vibrate(pattern: [0, 200, 100, 200, 100, 200]);
+        await VibrationService.instance.tripleVibration();
         break;
       case TurnDirection.uTurn:
-        Vibration.vibrate(pattern: [0, 300, 100, 300, 100, 300]);
+        await VibrationService.instance.custom(pattern: [0, 300, 100, 300, 100, 300]);
         break;
     }
   }
@@ -500,5 +494,13 @@ class PedestrianNavigationService {
   String _getStreetName(int index) {
     // TODO: Integrar con API de OSM/Overpass para obtener nombres reales
     return 'Calle ${index + 1}';
+  }
+
+  /// Limpia recursos del servicio
+  void dispose() {
+    _positionSubscription?.cancel();
+    _positionSubscription = null;
+    _checkTimer?.cancel();
+    _checkTimer = null;
   }
 }

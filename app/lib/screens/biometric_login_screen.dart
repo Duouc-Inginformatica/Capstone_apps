@@ -37,7 +37,7 @@ class _BiometricLoginScreenState extends State<BiometricLoginScreen> {
   final _biometricAuth = BiometricAuthService.instance;
   final _tts = TtsService.instance;
   final _speech = SpeechToText();
-  final ApiClient _apiClient = ApiClient();
+  final _apiClient = ApiClient();
 
   bool _isInitializing = true;
   bool _hasRegisteredUser = false;

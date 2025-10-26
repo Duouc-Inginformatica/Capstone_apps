@@ -199,8 +199,8 @@ class BusArrivalsService {
     _currentStopCode = stopCode;
     _currentRouteNumber = routeNumber;
     onArrivalsUpdated = onUpdate;
-    this.onBusPassed = onBusPassed;
-    this.onBusApproaching = onApproaching;
+    onBusPassed = onBusPassed;
+    onBusApproaching = onApproaching;
 
     // Primera consulta inmediata
     _pollArrivals();
@@ -221,8 +221,8 @@ class BusArrivalsService {
       _currentRouteNumber = null;
       _lastArrivals = null;
       onArrivalsUpdated = null;
-      this.onBusPassed = null;
-      this.onBusApproaching = null;
+      onBusPassed = null;
+      onBusApproaching = null;
     }
   }
 

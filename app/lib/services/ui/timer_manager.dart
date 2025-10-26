@@ -1,7 +1,9 @@
 import 'dart:async';
-import 'package:flutter/material.dart';
+import 'package:flutter/widgets.dart';
+import '../debug_logger.dart';
 
 /// Gestor centralizado de timers para evitar memory leaks
+/// y facilitar el debugging de timers activos.
 /// 
 /// Uso:
 /// ```dart
@@ -172,12 +174,12 @@ mixin TimerManagerMixin<T extends StatefulWidget> on State<T> {
   /// Obtiene estadísticas de timers activos (debug)
   void debugTimerStats() {
     if (_timerManager.activeTimersCount > 0) {
-      print('⏰ Timers activos: ${_timerManager.activeTimersCount}');
-      print('   Nombres: ${_timerManager.activeTimerNames}');
+      DebugLogger.info('⏰ Timers activos: ${_timerManager.activeTimersCount}');
+      DebugLogger.info('   Nombres: ${_timerManager.activeTimerNames}');
     }
     if (_timerManager.activeSubscriptionsCount > 0) {
-      print('📡 Subscriptions activas: ${_timerManager.activeSubscriptionsCount}');
-      print('   Nombres: ${_timerManager.activeSubscriptionNames}');
+      DebugLogger.info('📡 Subscriptions activas: ${_timerManager.activeSubscriptionsCount}');
+      DebugLogger.info('   Nombres: ${_timerManager.activeSubscriptionNames}');
     }
   }
 

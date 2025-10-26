@@ -1,8 +1,8 @@
 import 'dart:async';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
-import 'package:vibration/vibration.dart';
 import '../device/tts_service.dart';
+import '../device/vibration_service.dart';
 
 /// CAP-30: Seguimiento en tiempo real del usuario durante el viaje
 /// CAP-20: Recalcular ruta si me desvío
@@ -115,7 +115,7 @@ class RouteTrackingService {
 
   /// CAP-20: Manejar desviación de la ruta
   void _handleDeviation(double distanceToRoute) {
-    Vibration.vibrate(pattern: [0, 200, 100, 200]); // Patrón de vibración
+    VibrationService.instance.custom(pattern: [0, 200, 100, 200]); // Patrón de vibración
 
     TtsService.instance.speak(
       'Te has desviado ${distanceToRoute.round()} metros de la ruta planificada. '
@@ -127,7 +127,7 @@ class RouteTrackingService {
 
   /// CAP-30: Notificar llegada al destino
   void _handleArrival() {
-    Vibration.vibrate(pattern: [0, 500, 200, 500, 200, 500]); // Celebración
+    VibrationService.instance.custom(pattern: [0, 500, 200, 500, 200, 500]); // Celebración
 
     TtsService.instance.speak(
       '¡Has llegado a $_destinationName! Viaje completado exitosamente.',

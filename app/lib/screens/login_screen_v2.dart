@@ -23,7 +23,7 @@ class LoginScreenV2 extends StatefulWidget {
 class _LoginScreenV2State extends State<LoginScreenV2>
     with TickerProviderStateMixin {
   final BiometricAuthService _biometricService = BiometricAuthService.instance;
-  final TtsService _ttsService = TtsService();
+  final TtsService _ttsService = TtsService.instance;
   final ApiClient _apiClient = ApiClient();
 
   bool _isLoading = true;

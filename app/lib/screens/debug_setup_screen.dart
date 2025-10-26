@@ -301,7 +301,7 @@ class _DebugSetupScreenState extends State<DebugSetupScreen> {
                       if (debug) {
                         DebugLogger.success('✅ Logs habilitados - Todos los mensajes se mostrarán en consola');
                       } else {
-                        print('🔇 Logs deshabilitados');
+                        DebugLogger.warning('🔇 Logs deshabilitados');
                       }
                     });
                   },
