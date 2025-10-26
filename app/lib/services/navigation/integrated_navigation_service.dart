@@ -847,19 +847,32 @@ class IntegratedNavigationService {
     return steps;
   }
 
-  // /// Obtiene información del paradero desde GTFS por nombre
-  // Future<Map<String, dynamic>?> _getStopInfoFromGTFS(String stopName) async {
-  //   // TODO: Implementar cuando ApiClient tenga método get()
-  //   // final response = await ApiClient.instance.get('/api/stops/search?name=$stopName');
-  //   return null;
-  // }
+  // ============================================================================
+  // FUNCIONALIDADES DESBLOQUEADAS - MEJORA #1
+  // ============================================================================
+  // Métodos ahora funcionales gracias a ApiClient.get() genérico
+  // ============================================================================
 
-  // /// Obtiene lista de buses que pasan por un paradero
-  // Future<List<String>> _getBusesAtStop(String stopId) async {
-  //   // TODO: Implementar cuando ApiClient tenga método get()
-  //   // final response = await ApiClient.instance.get('/api/stops/$stopId/routes');
-  //   return [];
-  // }
+  /// Busca paraderos por nombre usando el backend
+  Future<List<RedBusStop>> searchStopsByName(String stopName) async {
+    try {
+      final stops = await ApiClient.instance.searchStops(stopName);
+      return stops.map((s) => RedBusStop.fromJson(s)).toList();
+    } catch (e) {
+      _navLog('❌ Error buscando paraderos: $e');
+      return [];
+    }
+  }
+
+  /// Obtiene lista de rutas que pasan por un paradero
+  Future<List<String>> getRoutesByStop(String stopCode) async {
+    try {
+      return await ApiClient.instance.getRoutesByStop(stopCode);
+    } catch (e) {
+      _navLog('❌ Error obteniendo rutas del paradero: $e');
+      return [];
+    }
+  }
 
   /// Construye la geometría completa de la ruta
   Future<List<LatLng>> _buildCompleteRouteGeometry(
@@ -1485,35 +1498,42 @@ Te iré guiando paso a paso.
     }
   }
 
-  // /// Detecta buses cercanos usando datos de tiempo real
-  // Future<void> _detectNearbyBuses(
-  //   NavigationStep step,
-  //   LatLng userLocation,
-  // ) async {
-  //   if (step.stopId == null) return;
+  /// Detecta buses cercanos usando datos de tiempo real
+  /// DESBLOQUEADO - MEJORA #1
+  Future<void> _detectNearbyBuses(
+    NavigationStep step,
+    LatLng userLocation,
+  ) async {
+    if (step.stopId == null) return;
 
-  //   // TODO: Implementar cuando ApiClient tenga método getBusArrivals()
-  //   /*
-  //   try {
-  //     // Consultar API de tiempo real para obtener llegadas próximas
-  //     final arrivals = await ApiClient.instance.getBusArrivals(step.stopId!);
-  //     
-  //     if (arrivals.isNotEmpty) {
-  //       final nextBus = arrivals.first;
-  //       final routeShortName = nextBus['route_short_name'] ?? '';
-  //       final etaMinutes = nextBus['eta_minutes'] ?? 0;
-  //       
-  //       if (etaMinutes <= 5) {
-  //         TtsService.instance.speak(
-  //           'El bus $routeShortName llegará en $etaMinutes minutos.',
-  //         );
-  //       }
-  //     }
-  //   } catch (e) {
-  //     _navLog('⚠️ [BUS_DETECTION] Error detectando buses cercanos: $e');
-  //   }
-  //   */
-  // }
+    try {
+      // Consultar API de tiempo real para obtener llegadas próximas
+      final arrivalsData = await ApiClient.instance.getBusArrivals(step.stopId!);
+      
+      if (arrivalsData == null) return;
+      
+      final arrivals = arrivalsData['arrivals'] as List<dynamic>? ?? [];
+      
+      if (arrivals.isNotEmpty) {
+        final nextBus = arrivals.first as Map<String, dynamic>;
+        final routeNumber = nextBus['route_number'] ?? '';
+        final distanceKm = (nextBus['distance_km'] as num?)?.toDouble() ?? 0.0;
+        
+        // Estimar minutos (asumiendo 15 km/h promedio en ciudad)
+        final etaMinutes = (distanceKm / 0.25).ceil();
+        
+        if (etaMinutes <= 5 && etaMinutes > 0) {
+          _navLog('🚌 Bus $routeNumber llegará en $etaMinutes minutos');
+          TtsService.instance.speak(
+            'El bus $routeNumber llegará en $etaMinutes minutos.',
+          );
+          onBusDetected?.call(routeNumber);
+        }
+      }
+    } catch (e) {
+      _navLog('⚠️ [BUS_DETECTION] Error detectando buses cercanos: $e');
+    }
+  }
 
   /// Verifica progreso a través de paradas de bus durante viaje en bus
   /// Anuncia cada parada cuando el usuario pasa cerca
