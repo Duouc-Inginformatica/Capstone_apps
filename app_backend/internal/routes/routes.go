@@ -96,6 +96,14 @@ func Register(app *fiber.App, db *sql.DB) {
 	// Paradas cercanas con distancia REAL (no euclidiana)
 	
 	// ────────────────────────────────────────────────────────────────────────
+	// GEOMETRÍA DE BUSES - SEGMENTOS ESPECÍFICOS
+	// ────────────────────────────────────────────────────────────────────────
+	api.Post("/bus/geometry/segment", handlers.GetBusRouteSegment)
+	// POST /api/bus/geometry/segment
+	// Body: {route_number, from_stop_code, to_stop_code, from_lat, from_lon, to_lat, to_lon}
+	// Obtiene geometría EXACTA entre dos paraderos usando GTFS shapes + GraphHopper fallback
+	
+	// ────────────────────────────────────────────────────────────────────────
 	// CÁLCULOS BATCH Y AVANZADOS
 	// ────────────────────────────────────────────────────────────────────────
 	geometry.Post("/batch/walking-times", handlers.GetBatchWalkingTimes)

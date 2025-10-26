@@ -55,11 +55,23 @@
     enabled: true
     walk_speed: 4.0
     max_transfers: 4
+    # OPTIMIZACIONES PARA RED TRANSANTIAGO
+    max_walk_distance_per_leg: 1000  # Máximo 1km de caminata por tramo
+    max_visited_nodes: 500000  # Reducir para respuestas más rápidas
+    limit_solutions: 5  # Máximo 5 alternativas
+    # Priorizar rutas con menos trasbordos
+    transfer_penalty: 120  # Penalizar trasbordos (2 minutos extra por trasbordo)
 
   # Fuente GTFS oficial (WayFindCL sincroniza el mismo feed en DB)
   gtfs:
     file: data/gtfs-santiago.zip
     use_transfers_txt: true
+    # NUEVO: Usar shapes exactos de GTFS para rutas de bus
+    use_shapes: true
+    # Configuración específica para Red Transantiago
+    feed_id: red_transantiago
+    # Preferir rutas de la Red sobre otras
+    prefer_feed: true
 
   # Optimizaciones
   prepare:

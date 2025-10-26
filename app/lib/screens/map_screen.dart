@@ -13,6 +13,7 @@ import '../services/device/tts_service.dart';
 import '../services/backend/api_client.dart';
 import '../services/backend/address_validation_service.dart';
 import '../services/backend/bus_arrivals_service.dart';
+import '../services/backend/bus_geometry_service.dart';
 import '../services/navigation/route_tracking_service.dart';
 import '../services/navigation/transit_boarding_service.dart';
 import '../services/navigation/integrated_navigation_service.dart';
@@ -774,109 +775,128 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
         final nextStep = activeNav.steps[activeNav.currentStepIndex + 1];
         
         if (nextStep.type == 'ride_bus') {
-          // Dibujar la geometría del bus
-          try {
-            final busLeg = activeNav.itinerary.legs.firstWhere(
-              (leg) => leg.type == 'bus' && leg.isRedBus,
-              orElse: () => throw Exception('No bus leg found'),
+          // ✅ NUEVA ESTRATEGIA: Usar servicio del backend para geometría exacta
+          _log('🚌 [BUS] Solicitando geometría exacta desde backend...');
+          
+          final busRoute = nextStep.busRoute;
+          final fromStopId = currentStep.stopId; // Paradero de subida
+          final toStopId = nextStep.stopId; // Paradero de bajada
+          
+          List<LatLng> busGeometry = [];
+          
+          // Intentar obtener geometría exacta del backend (GTFS shapes)
+          if (busRoute != null && fromStopId != null && toStopId != null) {
+            _log('🚌 [BUS] Llamando servicio: Ruta $busRoute desde $fromStopId hasta $toStopId');
+            
+            final geometryResult = await BusGeometryService.instance.getBusSegmentGeometry(
+              routeNumber: busRoute,
+              fromStopCode: fromStopId,
+              toStopCode: toStopId,
+              fromLat: currentStep.location?.latitude,
+              fromLon: currentStep.location?.longitude,
+              toLat: nextStep.location?.latitude,
+              toLon: nextStep.location?.longitude,
             );
             
-            List<LatLng> busGeometry = busLeg.geometry ?? [];
-            
-            if (busGeometry.isNotEmpty) {
-              // ✅ RECORTAR geometría del bus para que RESPETE origen y destino
-              // Origen: Paradero de subida (wait_bus - currentStep.location)
-              // Destino: Paradero de bajada (ride_bus - nextStep.location)
-              
-              final originLocation = currentStep.location; // wait_bus location = paradero de subida
-              final destinationLocation = nextStep.location; // ride_bus location = paradero de bajada
-              
-              _log('🚌 [BUS] Buscando recorte de geometría:');
-              _log('🚌 [BUS]   Origen (wait_bus): $originLocation');
-              _log('🚌 [BUS]   Destino (ride_bus): $destinationLocation');
-              
-              if (originLocation != null && destinationLocation != null) {
-                
-                // Encontrar punto más cercano al origen
-                int startIndex = 0;
-                double minStartDist = double.infinity;
-                for (int i = 0; i < busGeometry.length; i++) {
-                  final dist = Geolocator.distanceBetween(
-                    originLocation.latitude,
-                    originLocation.longitude,
-                    busGeometry[i].latitude,
-                    busGeometry[i].longitude,
-                  );
-                  if (dist < minStartDist) {
-                    minStartDist = dist;
-                    startIndex = i;
-                  }
-                }
-                
-                _log('🚌 [BUS] Punto de origen más cercano:');
-                _log('🚌 [BUS]   Índice: $startIndex/${busGeometry.length}');
-                _log('🚌 [BUS]   Distancia: ${minStartDist.toStringAsFixed(0)}m');
-                _log('🚌 [BUS]   Coordenada geometría: ${busGeometry[startIndex]}');
-                
-                // Encontrar punto más cercano al destino (DESDE el punto de origen hacia adelante)
-                int endIndex = busGeometry.length - 1;
-                double minEndDist = double.infinity;
-                for (int i = startIndex; i < busGeometry.length; i++) {
-                  final dist = Geolocator.distanceBetween(
-                    destinationLocation.latitude,
-                    destinationLocation.longitude,
-                    busGeometry[i].latitude,
-                    busGeometry[i].longitude,
-                  );
-                  if (dist < minEndDist) {
-                    minEndDist = dist;
-                    endIndex = i;
-                  }
-                }
-                
-                _log('🚌 [BUS] Punto de destino más cercano:');
-                _log('🚌 [BUS]   Índice: $endIndex/${busGeometry.length}');
-                _log('🚌 [BUS]   Distancia: ${minEndDist.toStringAsFixed(0)}m');
-                _log('🚌 [BUS]   Coordenada geometría: ${busGeometry[endIndex]}');
-                
-                // ✅ VALIDACIÓN: Asegurar que el recorte tiene sentido
-                if (startIndex >= endIndex) {
-                  _log('⚠️ [BUS] ERROR: startIndex ($startIndex) >= endIndex ($endIndex)');
-                  _log('⚠️ [BUS] Esto significa que el destino está ANTES del origen en la geometría');
-                  _log('⚠️ [BUS] Usando geometría completa como fallback');
-                } else if (minStartDist > 500 || minEndDist > 500) {
-                  _log('⚠️ [BUS] ADVERTENCIA: Distancias muy grandes (>500m)');
-                  _log('⚠️ [BUS] Origen a geometría: ${minStartDist.toStringAsFixed(0)}m');
-                  _log('⚠️ [BUS] Destino a geometría: ${minEndDist.toStringAsFixed(0)}m');
-                  _log('⚠️ [BUS] Los paraderos podrían no coincidir con la geometría');
-                } else {
-                  // Recortar geometría SOLO si las validaciones pasaron
-                  busGeometry = busGeometry.sublist(startIndex, endIndex + 1);
-                  _log('✅ [BUS] Geometría recortada correctamente: ${busGeometry.length} puntos');
-                  _log('✅ [BUS] Desde índice $startIndex hasta $endIndex');
-                  _log('✅ [BUS] Primera coordenada: ${busGeometry.first}');
-                  _log('✅ [BUS] Última coordenada: ${busGeometry.last}');
-                }
-              } else {
-                _log('⚠️ [BUS] No se pudo recortar: origin=$originLocation, dest=$destinationLocation');
-              }
-              
-              _log('🚌 [BUS] Dibujando ruta del bus: ${busGeometry.length} puntos');
-              
-              setState(() {
-                _polylines = [
-                  Polyline(
-                    points: busGeometry,
-                    color: const Color(0xFFE30613), // ROJO para ruta de bus
-                    strokeWidth: 5.0,
-                  ),
-                ];
-                // Actualizar marcadores para mostrar todos los paraderos
-                _updateNavigationMarkers(nextStep, activeNav);
-              });
+            if (geometryResult != null && 
+                BusGeometryService.instance.isValidGeometry(geometryResult.geometry)) {
+              busGeometry = geometryResult.geometry;
+              _log('✅ [BUS] Geometría obtenida desde backend (${geometryResult.source})');
+              _log('✅ [BUS] ${busGeometry.length} puntos, ${geometryResult.distanceMeters.toStringAsFixed(0)}m');
+              _log('✅ [BUS] ${geometryResult.numStops} paradas intermedias');
+            } else {
+              _log('⚠️ [BUS] Backend no retornó geometría válida, usando fallback');
             }
-          } catch (e) {
-            _log('⚠️ [BUS] Error dibujando geometría: $e');
+          }
+          
+          // FALLBACK: Si backend falla, usar geometría del itinerario
+          if (busGeometry.isEmpty) {
+            _log('🔄 [BUS] Usando geometría del itinerario como fallback');
+            
+            try {
+              final busLeg = activeNav.itinerary.legs.firstWhere(
+                (leg) => leg.type == 'bus' && leg.isRedBus,
+                orElse: () => throw Exception('No bus leg found'),
+              );
+              
+              busGeometry = busLeg.geometry ?? [];
+              
+              if (busGeometry.isNotEmpty) {
+                _log('✅ [BUS] Geometría del itinerario: ${busGeometry.length} puntos');
+                
+                // Aplicar recorte manual solo como último recurso
+                final originLocation = currentStep.location;
+                final destinationLocation = nextStep.location;
+                
+                if (originLocation != null && destinationLocation != null) {
+                  // Encontrar punto más cercano al origen
+                  int startIndex = 0;
+                  double minStartDist = double.infinity;
+                  for (int i = 0; i < busGeometry.length; i++) {
+                    final dist = Geolocator.distanceBetween(
+                      originLocation.latitude,
+                      originLocation.longitude,
+                      busGeometry[i].latitude,
+                      busGeometry[i].longitude,
+                    );
+                    if (dist < minStartDist) {
+                      minStartDist = dist;
+                      startIndex = i;
+                    }
+                  }
+                  
+                  // Encontrar punto más cercano al destino
+                  int endIndex = busGeometry.length - 1;
+                  double minEndDist = double.infinity;
+                  for (int i = startIndex; i < busGeometry.length; i++) {
+                    final dist = Geolocator.distanceBetween(
+                      destinationLocation.latitude,
+                      destinationLocation.longitude,
+                      busGeometry[i].latitude,
+                      busGeometry[i].longitude,
+                    );
+                    if (dist < minEndDist) {
+                      minEndDist = dist;
+                      endIndex = i;
+                    }
+                  }
+                  
+                  // Validar y recortar solo si tiene sentido
+                  if (startIndex < endIndex && minStartDist < 500 && minEndDist < 500) {
+                    busGeometry = busGeometry.sublist(startIndex, endIndex + 1);
+                    _log('✅ [BUS] Geometría recortada: ${busGeometry.length} puntos');
+                  } else {
+                    _log('⚠️ [BUS] Recorte no válido, usando geometría completa');
+                  }
+                }
+              }
+            } catch (e) {
+              _log('⚠️ [BUS] Error obteniendo geometría del itinerario: $e');
+            }
+          }
+          
+          // Dibujar la geometría final (si existe)
+          if (busGeometry.isNotEmpty) {
+            _log('🚌 [BUS] Dibujando ruta del bus: ${busGeometry.length} puntos');
+            
+            setState(() {
+              _polylines = [
+                Polyline(
+                  points: busGeometry,
+                  color: const Color(0xFFE30613), // ROJO para ruta de bus
+                  strokeWidth: 5.0,
+                ),
+              ];
+              // Actualizar marcadores para mostrar todos los paraderos
+              _updateNavigationMarkers(nextStep, activeNav);
+            });
+          } else {
+            _log('❌ [BUS] No se pudo obtener geometría del bus');
+            // Limpiar polilínea si no hay geometría
+            setState(() {
+              _polylines = [];
+              _updateNavigationMarkers(nextStep, activeNav);
+            });
           }
           
           // Vibración de confirmación
@@ -974,23 +994,37 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
           // Detectar si es el destino final o un paradero intermedio
           final isLastStep = activeNav.currentStepIndex >= activeNav.steps.length - 1;
           if (isLastStep) {
-            // ═══════════════════════════════════════════════════════════════
-            // DESTINO FINAL - Mantener polilínea visible
-            // ═══════════════════════════════════════════════════════════════
+          // ═══════════════════════════════════════════════════════════════
+          // DESTINO FINAL - Mantener polilínea visible
+          // ═══════════════════════════════════════════════════════════════
             await TtsService.instance.speak('Has llegado a tu destino, ${currentStep.stopName}', urgent: true);
             
-            // Mantener la última polilínea visible (no borrarla)
+            // ✅ FIX: Mantener la polilínea completa visible (no solo último punto)
+            // Una polilínea necesita al menos 2 puntos para dibujarse
             setState(() {
-              _polylines = [
-                Polyline(
-                  points: [geometry.last], // Solo punto final
-                  color: const Color(0xFF10B981), // Verde para destino
-                  strokeWidth: 6.0,
-                ),
-              ];
-            });
-            
-            // Finalizar navegación después de un delay
+              if (geometry.length >= 2) {
+                // Mostrar toda la ruta recorrida en verde
+                _polylines = [
+                  Polyline(
+                    points: geometry,
+                    color: const Color(0xFF10B981), // Verde para destino completado
+                    strokeWidth: 5.0,
+                  ),
+                ];
+              } else if (geometry.isNotEmpty && _currentPosition != null) {
+                // Fallback: crear línea desde posición actual al destino
+                _polylines = [
+                  Polyline(
+                    points: [
+                      LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
+                      geometry.last
+                    ],
+                    color: const Color(0xFF10B981),
+                    strokeWidth: 5.0,
+                  ),
+                ];
+              }
+            });            // Finalizar navegación después de un delay
             await Future.delayed(const Duration(seconds: 2));
             IntegratedNavigationService.instance.stopNavigation();
           } else {
