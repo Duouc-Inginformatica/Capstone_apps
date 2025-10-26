@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'dart:async';
 import 'dart:developer' as developer;
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 import 'package:speech_to_text/speech_to_text.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -264,8 +265,8 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
       _log('Error inicializando Speech: $e', error: e, stackTrace: st);
     });
 
-    // Iniciar ubicación con pequeño retraso para dar tiempo al UI a estabilizarse
-    Future.delayed(const Duration(milliseconds: 250), () {
+    // Iniciar ubicación con delay mínimo optimizado (100ms en vez de 250ms)
+    Future.delayed(const Duration(milliseconds: 100), () {
       _initLocation().catchError((e, st) {
         _log('Error inicializando Location: $e', error: e, stackTrace: st);
       });
@@ -547,8 +548,9 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
         ? totalInstructions - 1
         : _instructionFocusIndex;
 
+    // Si no hay instrucciones, no mostrar el preview de texto
     final String preview = totalInstructions == 0
-        ? 'Inicia una navegación para ver instrucciones detalladas.'
+        ? '' // Vacío en vez de mensaje de "inicia navegación"
         : instructions![focusIndex];
 
     final List<Widget> actionButtons = [];
@@ -666,66 +668,7 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // ============================================================
-          // TOGGLE PARA DESVIACIONES EN SIMULACIÓN (SOLO DESARROLLO)
-          // ============================================================
-          // Este toggle controla si la SIMULACIÓN (botón debug) incluye
-          // desviaciones aleatorias para testing del sistema de corrección.
-          // Los USUARIOS FINALES no ven este botón - usan GPS real que
-          // detecta desviaciones automáticamente sin configuración.
-          // ============================================================
-          GestureDetector(
-            onTap: () {
-              setState(() {
-                _simulationDeviationEnabled = !_simulationDeviationEnabled;
-              });
-              _showSuccessNotification(
-                _simulationDeviationEnabled 
-                    ? '🎲 Desviaciones activadas (simulación)' 
-                    : '📍 Desviaciones desactivadas (simulación)'
-              );
-            },
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-              decoration: BoxDecoration(
-                color: _simulationDeviationEnabled 
-                    ? const Color(0xFFFF8C42)
-                    : Colors.grey.shade400,
-                borderRadius: BorderRadius.circular(12),
-                boxShadow: [
-                  BoxShadow(
-                    color: (_simulationDeviationEnabled 
-                        ? const Color(0xFFFF8C42)
-                        : Colors.grey.shade400).withValues(alpha: 0.3),
-                    blurRadius: 8,
-                    offset: const Offset(0, 4),
-                  ),
-                ],
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    _simulationDeviationEnabled 
-                        ? Icons.shuffle_rounded
-                        : Icons.trending_flat_rounded,
-                    color: Colors.white,
-                    size: 16,
-                  ),
-                  const SizedBox(width: 4),
-                  Text(
-                    _simulationDeviationEnabled ? 'Desviación ON' : 'Desviación OFF',
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 12),
+          // Botón de simulación (sin el toggle de desviación)
           Tooltip(
             message: label,
             child: GestureDetector(
@@ -1805,16 +1748,29 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
         return;
       }
 
-      // Get current location
+      // ⚡ OPTIMIZACIÓN 1: Usar última posición conocida para centrar inmediatamente
+      final lastKnownPosition = await Geolocator.getLastKnownPosition();
+      if (lastKnownPosition != null && mounted) {
+        _currentPosition = lastKnownPosition;
+        _updateCurrentLocationMarker();
+        _moveMap(
+          LatLng(lastKnownPosition.latitude, lastKnownPosition.longitude),
+          14.0,
+        );
+        _log('⚡ [GPS RÁPIDO] Centrado con última posición conocida');
+      }
+
+      // ⚡ OPTIMIZACIÓN 2: Obtener posición actual con precisión media primero (más rápido)
       _currentPosition = await Geolocator.getCurrentPosition(
         locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.high,
+          accuracy: LocationAccuracy.medium, // Cambio: medium es más rápido que high
+          timeLimit: Duration(seconds: 5), // Timeout de 5 segundos
         ),
       );
 
       if (!mounted) return;
 
-      // Solo mostrar ubicación actual inicialmente (no cargar paradas automáticamente)
+      // Actualizar con la nueva posición
       _updateCurrentLocationMarker();
 
       // Move camera to current location if map is ready
@@ -1823,21 +1779,25 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
           LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
           14.0,
         );
+        _log('📍 [GPS] Centrado con posición actual (precisión media)');
       }
 
-      // Configurar listener de GPS en tiempo real
+      // Configurar listener de GPS en tiempo real (con alta precisión)
       _setupGPSListener();
     } catch (e) {
       if (!mounted) return;
+      _log('⚠️ [GPS] Error obteniendo ubicación: $e', error: e);
       TtsService.instance.speak('Error obteniendo ubicación');
     }
   }
 
   /// Configura el listener de GPS para navegación en tiempo real
   void _setupGPSListener() {
+    // ⚡ OPTIMIZACIÓN: Configuración balanceada para rendimiento y precisión
     const locationSettings = LocationSettings(
-      accuracy: LocationAccuracy.high,
-      distanceFilter: 10, // Optimizado: Actualizar cada 10 metros (reduce carga)
+      accuracy: LocationAccuracy.high, // Alta precisión para navegación
+      distanceFilter: 5, // Actualizar cada 5 metros (más reactivo que 10m)
+      timeLimit: Duration(seconds: 30), // Timeout para actualizaciones
     );
 
     Geolocator.getPositionStream(locationSettings: locationSettings).listen(
@@ -2283,18 +2243,28 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
       return;
     }
 
-    final destName = activeNav.destinationName ?? 'destino';
+    final destName = activeNav.destination;
 
     setState(() => _isCalculatingRoute = true);
     
     await TtsService.instance.speak('Recalculando ruta a $destName');
 
     try {
+      // Obtener coordenadas del destino desde el último paso
+      final lastStep = activeNav.steps.last;
+      final destLocation = lastStep.location;
+      
+      if (destLocation == null) {
+        _showWarningNotification('No se pudo obtener ubicación del destino');
+        setState(() => _isCalculatingRoute = false);
+        return;
+      }
+      
       // Usar IntegratedNavigationService para recalcular
       await _startIntegratedMoovitNavigation(
         destName,
-        activeNav.destination.latitude,
-        activeNav.destination.longitude,
+        destLocation.latitude,
+        destLocation.longitude,
       );
 
       _showSuccessNotification('Ruta recalculada exitosamente');
@@ -3136,8 +3106,8 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
         final List<int> visibleStopIndices = [];
         
         if (isWalking) {
-          // CAMINANDO: NO mostrar paraderos aquí
-          // El paradero destino se mostrará con un marcador especial más abajo
+          // CAMINANDO: NO mostrar paraderos de la lista del bus
+          // El marcador especial del paradero destino se muestra más abajo
           _log('🚶 [MARKERS] Modo CAMINATA: NO mostrar paraderos del busLeg');
         } else if (isWaitingBus) {
           // ESPERANDO: Mostrar SUBIDA y BAJADA
@@ -5201,7 +5171,7 @@ class _PinTipPainter extends CustomPainter {
       ..color = color
       ..style = PaintingStyle.fill;
 
-    final path = Path()
+    final path = ui.Path()
       ..moveTo(size.width / 2, size.height) // Punta del triángulo (abajo centro)
       ..lineTo(0, 0) // Esquina superior izquierda
       ..lineTo(size.width, 0) // Esquina superior derecha
