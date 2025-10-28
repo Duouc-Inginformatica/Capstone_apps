@@ -50,6 +50,20 @@
           - if: true
             limit_to: 80  # Velocidad maxima para buses/metro
 
+    - name: metro
+      transport_mode: car  # Usar car para seguir vías específicas (líneas de metro)
+      weighting: custom
+      custom_model:
+        speed:
+          - if: true
+            limit_to: 40  # Velocidad promedio del Metro de Santiago (~40 km/h)
+        priority:
+          - if: road_class == MOTORWAY || road_class == TRUNK
+            multiply_by: 0.1  # Evitar autopistas (metro usa túneles/vías dedicadas)
+          - if: road_class == PRIMARY
+            multiply_by: 1.5  # Preferir vías principales (aproximación a líneas metro)
+        distance_influence: 20  # Priorizar velocidad sobre distancia (metro es más directo)
+
   # Ajustes del motor de transporte publico
   pt:
     enabled: true

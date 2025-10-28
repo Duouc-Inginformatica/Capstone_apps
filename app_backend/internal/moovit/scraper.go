@@ -124,6 +124,7 @@ type Scraper struct {
 type GeometryService interface {
 	GetWalkingRoute(fromLat, fromLon, toLat, toLon float64, detailed bool) (RouteGeometry, error)
 	GetVehicleRoute(fromLat, fromLon, toLat, toLon float64) (RouteGeometry, error)
+	GetMetroRoute(fromLat, fromLon, toLat, toLon float64) (RouteGeometry, error)
 }
 
 // RouteGeometry representa una geometría de ruta (compatible con geometry.RouteGeometry)
@@ -1866,29 +1867,78 @@ func (s *Scraper) buildMetroOnlyItinerary(metroLines []string, duration int, ori
 		TotalDuration: duration,
 	}
 	
-	// PIERNA 1: Caminata al metro
+	// PIERNA 1: Caminata al metro (usar geometría real si está disponible)
+	var walkToMetroGeometry [][]float64
+	var walkToMetroDuration int
+	var walkToMetroDistance float64
+
+	if s.geometryService != nil {
+		// Usar GraphHopper para geometría real de caminata
+		// Estimar coordenadas de estación de metro cercana (simplificado)
+		walkRoute, err := s.geometryService.GetWalkingRoute(originLat, originLon, originLat+0.002, originLon+0.002, true)
+		if err == nil && len(walkRoute.MainGeometry) > 0 {
+			walkToMetroGeometry = walkRoute.MainGeometry
+			walkToMetroDuration = walkRoute.TotalDuration / 60
+			walkToMetroDistance = walkRoute.TotalDistance / 1000
+			log.Printf("✅ [METRO-WALK] Geometría real para caminata al metro: %.0fm", walkRoute.TotalDistance)
+		} else {
+			walkToMetroGeometry = s.generateStraightLineGeometry(originLat, originLon, originLat+0.002, originLon+0.002, 3)
+			walkToMetroDuration = 5
+			walkToMetroDistance = 0.3
+		}
+	} else {
+		walkToMetroGeometry = s.generateStraightLineGeometry(originLat, originLon, originLat+0.002, originLon+0.002, 3)
+		walkToMetroDuration = 5
+		walkToMetroDistance = 0.3
+	}
+
 	walkToMetroLeg := TripLeg{
 		Type:        "walk",
 		Mode:        "walk",
-		Duration:    5, // Estimado
-		Distance:    0.3, // Estimado 300m
+		Duration:    walkToMetroDuration,
+		Distance:    walkToMetroDistance,
 		Instruction: "Camina hacia la estación de metro más cercana",
-		Geometry:    s.generateStraightLineGeometry(originLat, originLon, originLat, originLon, 2),
+		Geometry:    walkToMetroGeometry,
 	}
 	itinerary.Legs = append(itinerary.Legs, walkToMetroLeg)
 	
-	// PIERNA 2: Viaje en metro
+	// PIERNA 2: Viaje en metro (con geometría mejorada usando perfil metro)
 	for i, metroLine := range metroLines {
+		var metroGeometry [][]float64
+		var metroDuration int
+		var metroDistance float64
+
+		// Usar geometría real de GraphHopper con perfil metro si está disponible
+		if s.geometryService != nil {
+			metroRoute, err := s.geometryService.GetMetroRoute(originLat, originLon, destLat, destLon)
+			if err == nil && len(metroRoute.MainGeometry) > 0 {
+				metroGeometry = metroRoute.MainGeometry
+				metroDuration = metroRoute.TotalDuration / 60
+				metroDistance = metroRoute.TotalDistance / 1000
+				log.Printf("✅ [METRO-ROUTE] Geometría real para Metro %s: %.1fkm, %dmin", metroLine, metroDistance, metroDuration)
+			} else {
+				// Fallback a línea interpolada
+				metroGeometry = s.generateStraightLineGeometry(originLat, originLon, destLat, destLon, 15)
+				metroDuration = duration - 10
+				metroDistance = 5.0
+				log.Printf("⚠️ [METRO-ROUTE] Usando geometría simplificada para Metro %s: %v", metroLine, err)
+			}
+		} else {
+			metroGeometry = s.generateStraightLineGeometry(originLat, originLon, destLat, destLon, 15)
+			metroDuration = duration - 10
+			metroDistance = 5.0
+		}
+
 		metroLeg := TripLeg{
 			Type:        "metro",
 			Mode:        "Metro",
 			RouteNumber: metroLine,
 			From:        fmt.Sprintf("Estación origen %s", metroLine),
 			To:          fmt.Sprintf("Estación destino %s", metroLine),
-			Duration:    duration - 10, // Restar tiempo de caminatas
-			Distance:    5.0, // Estimado 5km
+			Duration:    metroDuration,
+			Distance:    metroDistance,
 			Instruction: fmt.Sprintf("Toma el Metro Línea %s", metroLine),
-			Geometry:    s.generateStraightLineGeometry(originLat, originLon, destLat, destLon, 10),
+			Geometry:    metroGeometry,
 		}
 		
 		if i > 0 {
@@ -1901,19 +1951,43 @@ func (s *Scraper) buildMetroOnlyItinerary(metroLines []string, duration int, ori
 		itinerary.TotalDistance += metroLeg.Distance
 	}
 	
-	// PIERNA 3: Caminata desde metro al destino
+	// PIERNA 3: Caminata desde metro al destino (geometría real)
+	var walkFromMetroGeometry [][]float64
+	var walkFromMetroDuration int
+	var walkFromMetroDistance float64
+
+	if s.geometryService != nil {
+		walkRoute, err := s.geometryService.GetWalkingRoute(destLat-0.002, destLon-0.002, destLat, destLon, true)
+		if err == nil && len(walkRoute.MainGeometry) > 0 {
+			walkFromMetroGeometry = walkRoute.MainGeometry
+			walkFromMetroDuration = walkRoute.TotalDuration / 60
+			walkFromMetroDistance = walkRoute.TotalDistance / 1000
+			log.Printf("✅ [METRO-WALK] Geometría real para caminata desde metro: %.0fm", walkRoute.TotalDistance)
+		} else {
+			walkFromMetroGeometry = s.generateStraightLineGeometry(destLat-0.002, destLon-0.002, destLat, destLon, 3)
+			walkFromMetroDuration = 5
+			walkFromMetroDistance = 0.3
+		}
+	} else {
+		walkFromMetroGeometry = s.generateStraightLineGeometry(destLat-0.002, destLon-0.002, destLat, destLon, 3)
+		walkFromMetroDuration = 5
+		walkFromMetroDistance = 0.3
+	}
+
 	walkFromMetroLeg := TripLeg{
 		Type:        "walk",
 		Mode:        "walk",
-		Duration:    5, // Estimado
-		Distance:    0.3, // Estimado 300m
+		Duration:    walkFromMetroDuration,
+		Distance:    walkFromMetroDistance,
 		Instruction: "Camina desde la estación de metro hacia tu destino",
-		Geometry:    s.generateStraightLineGeometry(destLat, destLon, destLat, destLon, 2),
+		Geometry:    walkFromMetroGeometry,
 	}
 	itinerary.Legs = append(itinerary.Legs, walkFromMetroLeg)
-	itinerary.TotalDistance += 0.6 // Suma de caminatas
+	itinerary.TotalDistance += walkToMetroDistance + walkFromMetroDistance
 	
 	log.Printf("✅ [METRO-ONLY] Itinerario creado con %d líneas de metro y %d legs", len(metroLines), len(itinerary.Legs))
+	log.Printf("   Total: %.2fkm, %dmin, %d puntos de geometría", 
+		itinerary.TotalDistance, itinerary.TotalDuration, s.countGeometryPoints(itinerary))
 	
 	return itinerary
 }

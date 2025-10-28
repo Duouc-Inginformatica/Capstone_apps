@@ -100,7 +100,7 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
   // El sistema de detección de desviación funciona AUTOMÁTICAMENTE con GPS real
   // en IntegratedNavigationService._onLocationUpdate()
   // ============================================================================
-  bool _simulationDeviationEnabled = true; // Habilitar desviaciones aleatorias en simulación
+  final bool _simulationDeviationEnabled = true; // Habilitar desviaciones aleatorias en simulación
   int _simulationDeviationStep = -1; // En qué punto índice se desviará (simulación)
   List<LatLng>? _simulationDeviationRoute; // Ruta de desviación temporal (simulación)
   bool _isCurrentlyDeviated = false; // Si está actualmente desviado (simulación)
@@ -113,7 +113,7 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
   // TRACKING DE LLEGADAS EN TIEMPO REAL
   // ============================================================================
   StopArrivals? _currentArrivals; // Últimas llegadas recibidas
-  bool _isWaitingForBus = false; // Si está esperando el bus en el paradero
+  final bool _isWaitingForBus = false; // Si está esperando el bus en el paradero
   bool _needsRouteRecalculation = false; // Si el bus pasó y necesita recalcular
 
   // Notification system
@@ -4035,8 +4035,8 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
   }) {
     // Redondear coordenadas a 4 decimales (aprox. 11m de precisión)
     // para agrupar rutas similares
-    final origin = '${originLat}_${originLon}';
-    final dest = '${destLat}_${destLon}';
+    final origin = '${originLat}_$originLon';
+    final dest = '${destLat}_$destLon';
     final step = stepIndex != null ? '${stepType}_$stepIndex' : stepType;
     
     return 'route_${origin}_to_${dest}_$step';

@@ -188,6 +188,12 @@ func (s *Service) GetVehicleRoute(fromLat, fromLon, toLat, toLon float64) (*Rout
 	return s.getRouteGeometry("bus", "driving", "drive", fromLat, fromLon, toLat, toLon)
 }
 
+// GetMetroRoute obtiene geometría específica para rutas de metro (perfil "metro")
+// Usa el nuevo perfil metro de GraphHopper optimizado para velocidad y líneas directas
+func (s *Service) GetMetroRoute(fromLat, fromLon, toLat, toLon float64) (*RouteGeometry, error) {
+	return s.getRouteGeometry("metro", "metro", "metro_ride", fromLat, fromLon, toLat, toLon)
+}
+
 // GetTransitRoute obtiene ruta completa con transporte público
 // CENTRALIZA: GTFS (DB) + GraphHopper + Geometrías
 func (s *Service) GetTransitRoute(fromLat, fromLon, toLat, toLon float64, departureTime time.Time) (*RouteGeometry, error) {
