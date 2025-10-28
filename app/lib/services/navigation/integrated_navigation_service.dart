@@ -506,6 +506,9 @@ class IntegratedNavigationService {
   // Control de paradas visitadas durante viaje en bus
   final Set<String> _announcedStops = {}; // IDs de paradas ya anunciadas
   int _currentBusStopIndex = 0; // Índice de la parada actual en el viaje
+  
+  // ✅ Getter público para acceder al índice de parada actual desde MapScreen
+  int get currentBusStopIndex => _currentBusStopIndex;
 
   // Detección de desviación de ruta
   static const double maxDistanceFromRoute = 50.0; // 50m máximo de desviación
@@ -767,9 +770,53 @@ class IntegratedNavigationService {
         );
 
         // Convertir stops a formato simple para el NavigationStep
+        // ✅ CRÍTICO: Recortar solo las paradas del VIAJE DEL USUARIO (origen → destino)
         List<Map<String, dynamic>>? busStops;
         if (leg.stops != null && leg.stops!.isNotEmpty) {
-          busStops = leg.stops!.map((stop) {
+          final allStops = leg.stops!;
+          
+          // Encontrar índices de las paradas de origen y destino
+          int startIndex = 0;
+          int endIndex = allStops.length - 1;
+          
+          // Buscar paradero de origen (departStop)
+          if (leg.departStop != null) {
+            double minDistance = double.infinity;
+            for (int i = 0; i < allStops.length; i++) {
+              final distance = _distance.as(
+                LengthUnit.Meter,
+                leg.departStop!.location,
+                allStops[i].location,
+              );
+              if (distance < minDistance) {
+                minDistance = distance;
+                startIndex = i;
+              }
+            }
+            _navLog('🚌 Paradero de origen encontrado: ${allStops[startIndex].name} (índice $startIndex)');
+          }
+          
+          // Buscar paradero de destino (arriveStop)
+          if (leg.arriveStop != null) {
+            double minDistance = double.infinity;
+            for (int i = startIndex; i < allStops.length; i++) {
+              final distance = _distance.as(
+                LengthUnit.Meter,
+                leg.arriveStop!.location,
+                allStops[i].location,
+              );
+              if (distance < minDistance) {
+                minDistance = distance;
+                endIndex = i;
+              }
+            }
+            _navLog('🚌 Paradero de destino encontrado: ${allStops[endIndex].name} (índice $endIndex)');
+          }
+          
+          // ✅ RECORTAR solo las paradas del viaje del usuario
+          final userTripStops = allStops.sublist(startIndex, endIndex + 1);
+          
+          busStops = userTripStops.map((stop) {
             return {
               'name': stop.name,
               'code': stop.code,
@@ -779,7 +826,7 @@ class IntegratedNavigationService {
           }).toList();
 
           _navLog(
-            '🚌 Paradas convertidas: ${busStops.length} paradas',
+            '🚌 Paradas del VIAJE DEL USUARIO: ${busStops.length} paradas (de $startIndex a $endIndex)',
           );
           _navLog(
             '   Primera: ${busStops.first['name']} [${busStops.first['code']}]',
@@ -1381,16 +1428,19 @@ Te iré guiando paso a paso.
         }
         onArrivalAtStop?.call(step.stopId ?? '');
         
-        // Verificar si el siguiente paso es un bus
+        // ✅ WALK siempre avanza automáticamente al siguiente paso
+        // No importa si es wait_bus, walk, o arrival
+        shouldAutoAdvance = true;
+        
+        // Verificar si el siguiente paso es esperar bus para iniciar tracking
         final currentIndex = _activeNavigation!.currentStepIndex;
         final allSteps = _activeNavigation!.steps;
         if (currentIndex < allSteps.length - 1) {
           final nextStep = allSteps[currentIndex + 1];
-          if (nextStep.type == 'bus') {
-            // NO avanzar automáticamente cuando el siguiente paso es bus
-            // El usuario debe confirmar que subió usando el botón "Simular"
-            shouldAutoAdvance = false;
-            _navLog('⏸️ Esperando confirmación del usuario para subir al bus');
+          
+          // Si el siguiente paso es wait_bus, iniciar tracking de llegadas
+          if (nextStep.type == 'wait_bus') {
+            _navLog('🚌 Siguiente paso es wait_bus - preparando tracking de llegadas');
             
             // ===================================================================
             // INICIAR TRACKING DE LLEGADAS EN TIEMPO REAL
@@ -1449,46 +1499,130 @@ Te iré guiando paso a paso.
 
     // Solo avanzar automáticamente si corresponde
     if (shouldAutoAdvance) {
-      // Avanzar al siguiente paso
-      _activeNavigation!.advanceToNextStep();
-
-      // Resetear control de anuncios de progreso para el nuevo paso
-      _lastProgressAnnouncement = null;
-      _lastAnnouncedDistance = null;
-
-      final nextStep = _activeNavigation!.currentStep;
-      onStepChanged?.call(nextStep ?? step);
-
       // Combinar anuncio actual con el siguiente paso
       String fullAnnouncement = announcement;
 
       if (!_activeNavigation!.isComplete && fullAnnouncement.isNotEmpty) {
-        final nextStep = _activeNavigation!.currentStep!;
+        // ⚠️ IMPORTANTE: Calcular siguiente paso ANTES de avanzar
+        final currentIndex = _activeNavigation!.currentStepIndex;
+        final allSteps = _activeNavigation!.steps;
         
-        // Generar instrucción apropiada según el tipo y posición del paso
-        String nextInstruction = '';
-        if (nextStep.type == 'walk') {
-          // Detectar si es el último paso antes del destino final
-          final currentIndex = _activeNavigation!.currentStepIndex;
-          final isLastStep = currentIndex >= _activeNavigation!.steps.length - 1;
+        if (currentIndex < allSteps.length - 1) {
+          final nextStep = allSteps[currentIndex + 1];
           
-          if (isLastStep) {
-            // Último paso - hacia el destino
-            nextInstruction = 'Dirígete caminando hacia tu destino, ${nextStep.stopName}';
-          } else {
-            // Paso intermedio - hacia el paradero
-            nextInstruction = 'Dirígete caminando hacia el paradero ${nextStep.stopName}';
+          // Generar instrucción apropiada según el tipo y posición del paso
+          String nextInstruction = '';
+          
+          switch (nextStep.type) {
+            case 'walk':
+              // Detectar si es el último paso antes del destino final
+              final isLastStep = (currentIndex + 1) >= allSteps.length - 1;
+              
+              if (isLastStep) {
+                // Último paso - hacia el destino
+                final simplifiedDestName = _simplifyStopNameForTTS(
+                  nextStep.stopName,
+                  isDestination: true,
+                );
+                nextInstruction = 'Dirígete caminando hacia tu destino, $simplifiedDestName';
+              } else {
+                // Paso intermedio - hacia el paradero
+                final simplifiedStopName = _simplifyStopNameForTTS(
+                  nextStep.stopName,
+                  isDestination: false,
+                );
+                nextInstruction = 'Dirígete caminando hacia el paradero $simplifiedStopName';
+              }
+              break;
+              
+            case 'wait_bus':
+              // Esperar el bus en el paradero
+              final busRoute = nextStep.busRoute ?? '';
+              nextInstruction = 'Ahora espera el bus Red $busRoute';
+              break;
+              
+            case 'ride_bus':
+              // Viajar en el bus
+              final busRoute = nextStep.busRoute ?? '';
+              final totalStops = nextStep.totalStops ?? 0;
+              final simplifiedDestName = _simplifyStopNameForTTS(
+                nextStep.stopName,
+                isDestination: false,
+              );
+              
+              if (totalStops > 0) {
+                nextInstruction = 'Viaja en el bus Red $busRoute durante $totalStops paradas hasta $simplifiedDestName';
+              } else {
+                nextInstruction = 'Viaja en el bus Red $busRoute hasta $simplifiedDestName';
+              }
+              break;
+              
+            case 'arrival':
+              nextInstruction = 'Llegando a tu destino';
+              break;
+              
+            default:
+              // Para otros tipos, usar la instrucción original
+              nextInstruction = nextStep.instruction;
           }
-        } else {
-          // Para otros tipos, usar la instrucción original
-          nextInstruction = nextStep.instruction;
+          
+          if (nextInstruction.isNotEmpty) {
+            fullAnnouncement += ' $nextInstruction';
+          }
         }
-        
-        fullAnnouncement += ' Ahora, $nextInstruction';
       }
 
+      // ✅ SOLUCIÓN: Hablar PRIMERO, luego avanzar DESPUÉS de un delay
       if (fullAnnouncement.isNotEmpty) {
         TtsService.instance.speak(fullAnnouncement);
+        
+        // Esperar 2 segundos para que el TTS comience a hablar antes de cambiar el paso
+        Future.delayed(const Duration(seconds: 2), () {
+          if (_activeNavigation == null) return;
+          
+          // CRÍTICO: Si estamos avanzando a ride_bus, resetear índice de paradas
+          final currentIndex = _activeNavigation!.currentStepIndex;
+          final allSteps = _activeNavigation!.steps;
+          if (currentIndex < allSteps.length - 1) {
+            final nextStepType = allSteps[currentIndex + 1].type;
+            if (nextStepType == 'ride_bus') {
+              _navLog('🚌 [BUS_STOPS] INICIANDO viaje en bus - Reseteando índice de paradas a 0');
+              _currentBusStopIndex = 0; // Empezar desde el paradero de origen
+              _announcedStops.clear(); // Limpiar paradas anunciadas
+            }
+          }
+          
+          // Avanzar al siguiente paso
+          _activeNavigation!.advanceToNextStep();
+
+          // Resetear control de anuncios de progreso para el nuevo paso
+          _lastProgressAnnouncement = null;
+          _lastAnnouncedDistance = null;
+
+          final nextStep = _activeNavigation!.currentStep;
+          onStepChanged?.call(nextStep ?? step);
+          
+          _navLog('📍 [STEP] Avanzado a paso ${_activeNavigation!.currentStepIndex}: ${nextStep?.type}');
+        });
+      } else {
+        // Si no hay anuncio, avanzar inmediatamente
+        // CRÍTICO: Si estamos avanzando a ride_bus, resetear índice de paradas
+        final currentIndex = _activeNavigation!.currentStepIndex;
+        final allSteps = _activeNavigation!.steps;
+        if (currentIndex < allSteps.length - 1) {
+          final nextStepType = allSteps[currentIndex + 1].type;
+          if (nextStepType == 'ride_bus') {
+            _navLog('🚌 [BUS_STOPS] INICIANDO viaje en bus - Reseteando índice de paradas a 0');
+            _currentBusStopIndex = 0; // Empezar desde el paradero de origen
+            _announcedStops.clear(); // Limpiar paradas anunciadas
+          }
+        }
+        
+        _activeNavigation!.advanceToNextStep();
+        _lastProgressAnnouncement = null;
+        _lastAnnouncedDistance = null;
+        final nextStep = _activeNavigation!.currentStep;
+        onStepChanged?.call(nextStep ?? step);
       }
     } else {
       // Solo anunciar la llegada, sin avanzar al siguiente paso
@@ -1997,7 +2131,7 @@ Te iré guiando paso a paso.
   }
 
   /// Simplifica nombres de paraderos para TTS
-  /// Convierte "PC1237-Raúl Labbé / esq. Av. La Dehesa" en "Paradero"
+  /// Convierte "PC1237-Raúl Labbé / esq. Av. La Dehesa" en "Raúl Labbé"
   String _simplifyStopNameForTTS(
     String? stopName, {
     bool isDestination = false,
@@ -2006,14 +2140,6 @@ Te iré guiando paso a paso.
       return 'el destino';
     }
 
-    // Si es el destino final o contiene "paradero", simplificar a solo "Paradero"
-    if (isDestination ||
-        stopName.toLowerCase().contains('paradero') ||
-        stopName.toLowerCase().contains('parada')) {
-      return 'Paradero';
-    }
-
-    // Para otros casos, remover códigos pero mantener la calle
     String cleaned = stopName;
 
     // Remover código de paradero (PC/PA/PB seguido de números)
@@ -2022,6 +2148,34 @@ Te iré guiando paso a paso.
     // Remover "Paradero" o "Parada" seguido de números
     cleaned = cleaned.replaceAll(RegExp(r'Paradero\s+\d+\s*[-/]\s*'), '');
     cleaned = cleaned.replaceAll(RegExp(r'Parada\s+\d+\s*[-/]\s*'), '');
+
+    // ✅ Simplificar nombres largos con "esquina" o "esq."
+    if (cleaned.contains(' / esq. ') || cleaned.contains(' esquina ')) {
+      // Tomar solo la PRIMERA calle (antes del " / esq.")
+      final parts = cleaned.split(RegExp(r'\s+/\s+esq\.?\s+|\s+esquina\s+'));
+      if (parts.isNotEmpty && parts[0].isNotEmpty) {
+        cleaned = parts[0].trim();
+      }
+    }
+    
+    // ✅ Simplificar si tiene múltiples segmentos con "/"
+    if (cleaned.contains(' / ')) {
+      final parts = cleaned.split(' / ');
+      if (parts.isNotEmpty && parts[0].isNotEmpty) {
+        cleaned = parts[0].trim();
+      }
+    }
+    
+    // ✅ Limitar longitud máxima (máximo 40 caracteres para TTS)
+    if (cleaned.length > 40) {
+      // Buscar última palabra completa antes de los 40 caracteres
+      int cutIndex = cleaned.lastIndexOf(' ', 40);
+      if (cutIndex > 20) { // Asegurar mínimo razonable
+        cleaned = cleaned.substring(0, cutIndex);
+      } else {
+        cleaned = cleaned.substring(0, 40);
+      }
+    }
 
     // Limpiar espacios extra
     cleaned = cleaned.trim();

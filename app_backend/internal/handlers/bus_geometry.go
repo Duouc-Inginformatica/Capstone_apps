@@ -14,8 +14,6 @@ import (
 	"math"
 
 	"github.com/gofiber/fiber/v2"
-	"github.com/yourorg/wayfindcl/internal/db"
-	"github.com/yourorg/wayfindcl/internal/validation"
 )
 
 // BusGeometryRequest representa la solicitud de geometría
@@ -173,7 +171,13 @@ func GetBusRouteSegment(c *fiber.Ctx) error {
 
 // getGeometryFromGTFSShapes obtiene geometría desde shapes GTFS
 func getGeometryFromGTFSShapes(routeNumber, fromStopCode, toStopCode string) ([][]float64, string, error) {
-	database := db.GetDB()
+	setupMu.RLock()
+	database := dbConn
+	setupMu.RUnlock()
+	
+	if database == nil {
+		return nil, "", fmt.Errorf("base de datos no inicializada")
+	}
 	
 	// 1. Buscar shape_id de la ruta
 	var shapeID string
@@ -254,7 +258,13 @@ func getGeometryFromGTFSShapes(routeNumber, fromStopCode, toStopCode string) ([]
 
 // getStopInfo obtiene información de una parada por código
 func getStopInfo(stopCode string) (StopInfo, error) {
-	database := db.GetDB()
+	setupMu.RLock()
+	database := dbConn
+	setupMu.RUnlock()
+	
+	if database == nil {
+		return StopInfo{}, fmt.Errorf("base de datos no inicializada")
+	}
 	
 	var info StopInfo
 	query := `
@@ -332,7 +342,13 @@ func toRadians(degrees float64) float64 {
 
 // countStopsBetween cuenta paradas entre dos códigos en una ruta
 func countStopsBetween(routeNumber, fromStopCode, toStopCode string) int {
-	database := db.GetDB()
+	setupMu.RLock()
+	database := dbConn
+	setupMu.RUnlock()
+	
+	if database == nil {
+		return 0
+	}
 	
 	query := `
 		WITH route_stops AS (

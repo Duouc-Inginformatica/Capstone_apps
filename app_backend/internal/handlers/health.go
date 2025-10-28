@@ -24,7 +24,10 @@ func Health(c *fiber.Ctx) error {
 	// ============================================================================
 	// CHECK: Base de Datos
 	// ============================================================================
-	db := getDBConn()
+	setupMu.RLock()
+	db := dbConn
+	setupMu.RUnlock()
+	
 	if db != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
@@ -43,6 +46,7 @@ func Health(c *fiber.Ctx) error {
 	// ============================================================================
 	// CHECK: GraphHopper
 	// ============================================================================
+	ghClient := getGHClient() // Usar la función del paquete graphhopper_routes
 	if ghClient != nil {
 		if err := ghClient.HealthCheck(); err != nil {
 			services["graphhopper"] = "unhealthy: " + err.Error()

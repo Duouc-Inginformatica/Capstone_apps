@@ -10,7 +10,6 @@ import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:vibration/vibration.dart';
 import '../services/device/tts_service.dart';
-import '../services/backend/api_client.dart';
 import '../services/backend/address_validation_service.dart';
 import '../services/backend/bus_arrivals_service.dart';
 import '../services/backend/bus_geometry_service.dart';
@@ -27,7 +26,13 @@ import 'settings_screen.dart';
 import '../widgets/bottom_nav.dart';
 
 class MapScreen extends StatefulWidget {
-  const MapScreen({super.key});
+  final String? welcomeMessage; // 🆕 Mensaje de bienvenida opcional
+  
+  const MapScreen({
+    super.key,
+    this.welcomeMessage,
+  });
+  
   static const routeName = '/map';
 
   @override
@@ -159,6 +164,14 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
     DebugLogger.info('💾 Caché de geometrías + Compresión Douglas-Peucker activos', context: 'MapScreen');
     
     unawaited(TtsService.instance.setActiveContext('map_navigation'));
+    
+    // 🆕 Reproducir mensaje de bienvenida PRIMERO si existe
+    if (widget.welcomeMessage != null && widget.welcomeMessage!.isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _speakWelcomeMessage();
+      });
+    }
+    
     _initializeNpuDetection();
     // Usar post-frame callback para evitar bloquear la construcción del widget
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -194,6 +207,21 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
       });
       _showSuccessNotification('¡Destino alcanzado!', withVibration: true);
     };
+  }
+
+  /// 🆕 Reproducir mensaje de bienvenida con prioridad
+  Future<void> _speakWelcomeMessage() async {
+    if (widget.welcomeMessage == null || widget.welcomeMessage!.isEmpty) {
+      return;
+    }
+    
+    // Esperar 800ms para que el MapScreen termine de renderizar
+    await Future.delayed(const Duration(milliseconds: 800));
+    
+    // Reproducir mensaje de bienvenida
+    await TtsService.instance.speak(widget.welcomeMessage!);
+    
+    _log('🔊 Mensaje de bienvenida reproducido: ${widget.welcomeMessage}');
   }
 
   Future<void> _initializeNpuDetection() async {
@@ -377,13 +405,31 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
     }
 
     final int totalInstructions = instructions?.length ?? 0;
-    final int focusIndex = totalInstructions == 0
+    
+    // ✅ CORRECCIÓN: Usar la instrucción basada en GPS si hay navegación activa
+    // Si el usuario está navegando, mostrar la instrucción automática basada en GPS
+    // Si no, usar el índice manual (_instructionFocusIndex)
+    int focusIndex = _instructionFocusIndex;
+    
+    if (activeNav != null && activeNav.currentStep?.type == 'walk' && _currentPosition != null) {
+      // En modo navegación walk: calcular instrucción automática basada en GPS
+      final autoIndex = _calculateCurrentInstructionIndex(
+        activeNav.currentStep!,
+        totalInstructions,
+      );
+      if (autoIndex >= 0 && autoIndex < totalInstructions) {
+        focusIndex = autoIndex;
+        // Sincronizar el índice manual con el automático
+        if (_instructionFocusIndex != autoIndex) {
+          _instructionFocusIndex = autoIndex;
+        }
+      }
+    }
+    
+    // Asegurar que el índice esté en rango válido
+    focusIndex = totalInstructions == 0
         ? 0
-        : _instructionFocusIndex < 0
-        ? 0
-        : _instructionFocusIndex >= totalInstructions
-        ? totalInstructions - 1
-        : _instructionFocusIndex;
+        : focusIndex.clamp(0, totalInstructions - 1);
 
     // Si no hay instrucciones, no mostrar el preview de texto
     final String preview = totalInstructions == 0
@@ -905,15 +951,38 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
             Vibration.vibrate(duration: 200);
           }
           
-          // Anunciar TTS
-          await TtsService.instance.speak('Subiendo al bus ${nextStep.busRoute}', urgent: true);
-          await Future.delayed(const Duration(milliseconds: 800));
+          // ✅ MEJORA: Mensaje TTS combinado con información del destino
+          final destinationName = nextStep.stopName ?? 'tu parada';
+          final totalStops = nextStep.totalStops ?? 0;
+          
+          String ttsMessage = 'Subiendo al bus Red ${busRoute ?? ""}';
+          
+          if (totalStops > 0) {
+            ttsMessage += '. Viajarás $totalStops paradas hasta $destinationName';
+          } else if (destinationName.isNotEmpty) {
+            ttsMessage += '. Destino: $destinationName';
+          }
+          
+          // Anunciar mensaje completo
+          await TtsService.instance.speak(ttsMessage, urgent: true);
+          
+          _log('🗣️ [TTS] Anunciando: $ttsMessage');
+          
+          // ✅ ESPERAR 3 segundos para que el TTS tenga tiempo de hablar
+          await Future.delayed(const Duration(seconds: 3));
         } else {
           _log('⚠️ [SIMULAR] Siguiente paso no es ride_bus: ${nextStep.type}');
         }
       }
       
+      // ✅ CRÍTICO: Resetear índice de paradas para el nuevo viaje en bus
+      // Como las paradas en step.busStops ya vienen recortadas (solo del viaje del usuario),
+      // simplemente reseteamos a 0 para empezar desde la primera parada
+      _log('🚌 [RIDE_BUS] Reseteando _currentSimulatedBusStopIndex a 0 (primera parada del viaje)');
+      _currentSimulatedBusStopIndex = 0;
+      
       // Avanzar al siguiente paso (ride_bus)
+      _log('📍 [STEP] Avanzando de wait_bus → ride_bus');
       IntegratedNavigationService.instance.advanceToNextStep();
       if (mounted) {
         setState(() {
@@ -1493,6 +1562,42 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
       final instruction = instructions[clampedIndex];
       TtsService.instance.speak('Paso ${clampedIndex + 1}: $instruction');
     }
+  }
+
+  /// Calcula qué instrucción de calle debería mostrarse según la posición GPS actual
+  int _calculateCurrentInstructionIndex(NavigationStep step, int totalInstructions) {
+    if (_currentPosition == null || totalInstructions == 0) return 0;
+    
+    // Obtener geometría del paso actual
+    final geometry = IntegratedNavigationService.instance.currentStepGeometry;
+    if (geometry.isEmpty) return 0;
+    
+    // Encontrar el punto más cercano en la geometría al GPS actual
+    final userLocation = LatLng(_currentPosition!.latitude, _currentPosition!.longitude);
+    double minDistance = double.infinity;
+    int closestPointIndex = 0;
+    
+    for (int i = 0; i < geometry.length; i++) {
+      final distance = Geolocator.distanceBetween(
+        userLocation.latitude,
+        userLocation.longitude,
+        geometry[i].latitude,
+        geometry[i].longitude,
+      );
+      if (distance < minDistance) {
+        minDistance = distance;
+        closestPointIndex = i;
+      }
+    }
+    
+    // Calcular el progreso como porcentaje del recorrido
+    final double progress = closestPointIndex / geometry.length;
+    
+    // Determinar qué instrucción mostrar según el progreso
+    int instructionIndex = (progress * totalInstructions).floor();
+    instructionIndex = instructionIndex.clamp(0, totalInstructions - 1);
+    
+    return instructionIndex;
   }
 
   void _speakFocusedInstruction() {
@@ -4928,27 +5033,57 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
       final busRoute = currentStep.busRoute ?? '';
       final destinationName = currentStep.stopName ?? 'Destino';
       
-      // Obtener lista de paradas del bus
-      RedBusLeg? busLeg;
-      try {
-        busLeg = activeNav.itinerary.legs.firstWhere(
+      // ✅ USAR directamente las paradas del NavigationStep (ya vienen recortadas)
+      final busStopsData = currentStep.busStops ?? [];
+      final totalStops = busStopsData.length;
+      
+      // ✅ Obtener índice actual del servicio (ya está actualizado por GPS)
+      int currentStopIndex;
+      if (_isSimulating) {
+        // En simulación: necesitamos calcular índice relativo
+        final busLeg = activeNav.itinerary.legs.firstWhere(
           (leg) => leg.type == 'bus' && leg.isRedBus,
+          orElse: () => throw Exception('No bus leg found'),
         );
-      } catch (e) {
-        busLeg = null;
+        
+        // Buscar origen en la lista global para calcular offset
+        int globalOriginIndex = 0;
+        if (activeNav.currentStepIndex > 0) {
+          final previousStep = activeNav.steps[activeNav.currentStepIndex - 1];
+          if (previousStep.type == 'wait_bus' && previousStep.location != null && busLeg.stops != null) {
+            final allStops = busLeg.stops!;
+            double minDistance = double.infinity;
+            for (int i = 0; i < allStops.length; i++) {
+              final distance = Geolocator.distanceBetween(
+                previousStep.location!.latitude,
+                previousStep.location!.longitude,
+                allStops[i].location.latitude,
+                allStops[i].location.longitude,
+              );
+              if (distance < minDistance) {
+                minDistance = distance;
+                globalOriginIndex = i;
+              }
+            }
+          }
+        }
+        currentStopIndex = (_currentSimulatedBusStopIndex - globalOriginIndex).clamp(0, totalStops - 1) as int;
+      } else {
+        // GPS real: usar el índice del servicio directamente
+        currentStopIndex = IntegratedNavigationService.instance.currentBusStopIndex;
+        if (totalStops > 0) {
+          currentStopIndex = currentStopIndex.clamp(0, totalStops - 1) as int;
+        }
       }
       
-      final allStops = busLeg?.stops ?? [];
-      final totalStops = allStops.length;
-      final currentStopIndex = _currentSimulatedBusStopIndex.clamp(0, totalStops - 1);
-      final remainingStops = totalStops > currentStopIndex ? totalStops - currentStopIndex : 0;
+      final remainingStops = totalStops > currentStopIndex ? totalStops - currentStopIndex - 1 : 0;
       
-      // Obtener nombre de parada actual y próxima
-      final currentStopName = currentStopIndex < allStops.length 
-          ? allStops[currentStopIndex].name 
+      // Obtener nombres de paradas
+      final currentStopName = currentStopIndex < busStopsData.length
+          ? busStopsData[currentStopIndex]['name'] as String
           : 'En tránsito';
-      final nextStopName = (currentStopIndex + 1) < allStops.length 
-          ? allStops[currentStopIndex + 1].name 
+      final nextStopName = (currentStopIndex + 1) < busStopsData.length
+          ? busStopsData[currentStopIndex + 1]['name'] as String
           : 'Destino final';
       
       return SafeArea(

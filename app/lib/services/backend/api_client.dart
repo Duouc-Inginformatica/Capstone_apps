@@ -512,7 +512,8 @@ class ApiClient {
   }
 
   /// Verifica si un token biométrico ya está registrado en el backend
-  Future<bool> checkBiometricExists(String biometricToken) async {
+  /// Retorna información completa: action (auto_login/register), username, message
+  Future<Map<String, dynamic>?> checkBiometricExists(String biometricToken) async {
     try {
       final uri = _uri('/api/biometric/check');
       final res = await _safeRequest(
@@ -527,14 +528,14 @@ class ApiClient {
         final data =
             jsonDecode(res.body.isEmpty ? '{}' : res.body)
                 as Map<String, dynamic>;
-        return data['exists'] == true;
+        return data;
       }
 
-      return false;
+      return null;
     } catch (e) {
       DebugLogger.network('⚠️ [API] Error verificando huella biométrica: $e');
       // En caso de error, permitir continuar (modo offline)
-      return false;
+      return null;
     }
   }
 

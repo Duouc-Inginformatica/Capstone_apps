@@ -35,6 +35,7 @@ type LoginResponse struct {
 	Token     string    `json:"token"`
 	User      UserDTO   `json:"user"`
 	ExpiresAt time.Time `json:"expires_at"`
+	Message   string    `json:"message,omitempty"` // Mensaje de bienvenida personalizado
 }
 
 // ErrorResponse is a simple error shape for API errors.

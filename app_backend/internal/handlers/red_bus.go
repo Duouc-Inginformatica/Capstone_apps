@@ -63,6 +63,27 @@ func (g *GeometryServiceAdapter) GetVehicleRoute(fromLat, fromLon, toLat, toLon 
 	}, nil
 }
 
+func (g *GeometryServiceAdapter) GetMetroRoute(fromLat, fromLon, toLat, toLon float64) (moovit.RouteGeometry, error) {
+	route, err := g.service.GetMetroRoute(fromLat, fromLon, toLat, toLon)
+	if err != nil {
+		return moovit.RouteGeometry{}, err
+	}
+
+	instructions := make([]string, 0)
+	for _, segment := range route.SegmentGeometries {
+		if len(segment.Instructions) > 0 {
+			instructions = append(instructions, segment.Instructions...)
+		}
+	}
+
+	return moovit.RouteGeometry{
+		TotalDistance: route.TotalDistance,
+		TotalDuration: route.TotalDuration,
+		MainGeometry:  route.MainGeometry,
+		Instructions:  instructions,
+	}, nil
+}
+
 // NewRedBusHandler crea una nueva instancia del handler
 func NewRedBusHandler(db *sql.DB) *RedBusHandler {
 	scraper := moovit.NewScraper()

@@ -88,8 +88,36 @@ func StartGraphHopperProcess() error {
 		return fmt.Errorf("❌ Configuración no encontrada: %s", configPath)
 	}
 
+	// ============================================================================
+	// AUTO-CREAR CACHÉ SI NO EXISTE
+	// ============================================================================
 	if _, err := os.Stat(graphCache); os.IsNotExist(err) {
-		return fmt.Errorf("❌ Graph cache no encontrado. Ejecuta primero: setup-graphhopper.ps1")
+		fmt.Println("📦 Graph cache no encontrado. Creando automáticamente...")
+		fmt.Println("⏳ Esto puede tomar 5-10 minutos para Chile (solo la primera vez)")
+		
+		// Comando para importar datos OSM y crear el caché
+		importCmd := exec.Command(
+			"java",
+			"-Xmx8g",
+			"-Xms2g",
+			"-jar", jarPath,
+			"import",
+			configPath,
+		)
+		
+		// Mostrar salida en consola
+		importCmd.Stdout = os.Stdout
+		importCmd.Stderr = os.Stderr
+		
+		fmt.Println("🚀 Ejecutando: java -Xmx8g -Xms2g -jar", jarPath, "import", configPath)
+		
+		if err := importCmd.Run(); err != nil {
+			return fmt.Errorf("❌ Error creando graph cache: %w", err)
+		}
+		
+		fmt.Println("✅ Graph cache creado exitosamente")
+	} else {
+		fmt.Println("✅ Graph cache encontrado en:", graphCache)
 	}
 
 	fmt.Println("🚀 Iniciando GraphHopper...")

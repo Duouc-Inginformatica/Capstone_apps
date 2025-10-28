@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"strconv"
@@ -429,6 +430,7 @@ func BiometricRegister(c *fiber.Ctx) error {
 			Email:    req.Email,
 		},
 		ExpiresAt: expiresAt,
+		Message:   fmt.Sprintf("¡Bienvenido, %s! Tu cuenta ha sido creada exitosamente", req.Username),
 	})
 }
 
@@ -499,11 +501,12 @@ func BiometricLogin(c *fiber.Ctx) error {
 			Email:    emailStr,
 		},
 		ExpiresAt: expiresAt,
+		Message:   fmt.Sprintf("Bienvenido de nuevo, %s!", username), // Mensaje de bienvenida
 	})
 }
 
 // CheckBiometricExists handles POST /api/biometric/check
-// Verifica si un token biométrico ya está registrado
+// Verifica si un token biométrico ya está registrado y retorna info del usuario
 func CheckBiometricExists(c *fiber.Ctx) error {
 	db := getDBConn()
 	if db == nil {
@@ -523,26 +526,46 @@ func CheckBiometricExists(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusUnprocessableEntity).JSON(models.ErrorResponse{Error: "biometric_token required"})
 	}
 
-	// Verificar si existe
-	var existingID int64
-	err := db.QueryRow(`SELECT id FROM users WHERE biometric_id = ?`, req.BiometricToken).Scan(&existingID)
+	// Verificar si existe y obtener datos del usuario
+	var (
+		userID   int64
+		username string
+		email    sql.NullString
+	)
+	err := db.QueryRow(
+		`SELECT id, username, email FROM users WHERE biometric_id = ? AND auth_type = 'biometric'`,
+		req.BiometricToken,
+	).Scan(&userID, &username, &email)
 
-	exists := false
-	if err == nil {
-		// Token encontrado
-		exists = true
-		log.Printf("🔍 Token biométrico encontrado: user_id=%d", existingID)
-	} else if !errors.Is(err, sql.ErrNoRows) {
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			// No existe - cliente debe mostrar pantalla de registro
+			log.Printf("🔍 Token biométrico no encontrado - usuario nuevo")
+			return c.Status(fiber.StatusOK).JSON(fiber.Map{
+				"exists":   false,
+				"action":   "register",
+				"message":  "Bienvenido! Por favor registra tu nombre de usuario",
+			})
+		}
 		// Error real de base de datos
 		log.Printf("❌ Error verificando token biométrico: %v", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(models.ErrorResponse{Error: "db error"})
-		// Error de BD
-		log.Printf("❌ Error verificando token biométrico: %v", err)
-		return c.Status(fiber.StatusInternalServerError).JSON(models.ErrorResponse{Error: "db error"})
 	}
-	// Si es ErrNoRows, exists queda en false
+
+	// Usuario existe - retornar información para login automático
+	log.Printf("✅ Token biométrico encontrado: user_id=%d, username=%s", userID, username)
+	
+	emailStr := ""
+	if email.Valid {
+		emailStr = email.String
+	}
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
-		"exists": exists,
+		"exists":   true,
+		"action":   "auto_login",
+		"user_id":  userID,
+		"username": username,
+		"email":    emailStr,
+		"message":  fmt.Sprintf("Bienvenido de nuevo, %s!", username),
 	})
 }

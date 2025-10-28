@@ -10,7 +10,9 @@ package geometry
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/yourorg/wayfindcl/internal/graphhopper"
@@ -76,6 +78,78 @@ type Segment struct {
 // MÉTODOS PRINCIPALES - CÁLCULOS GEOMÉTRICOS
 // ============================================================================
 
+// translateInstruction convierte instrucciones de GraphHopper a español accesible
+// Optimizado para usuarios con discapacidad visual usando TTS
+func translateInstruction(ghInstruction string) string {
+	text := strings.ToLower(strings.TrimSpace(ghInstruction))
+	
+	// Eliminar prefijos técnicos
+	text = strings.TrimPrefix(text, "continue ")
+	text = strings.TrimPrefix(text, "head ")
+	text = strings.TrimPrefix(text, "keep ")
+	
+	// Diccionario de traducciones inglés → español
+	replacements := map[string]string{
+		// Giros
+		"turn left":         "Gira a la izquierda",
+		"turn right":        "Gira a la derecha",
+		"turn slight left":  "Gira ligeramente a la izquierda",
+		"turn slight right": "Gira ligeramente a la derecha",
+		"turn sharp left":   "Gira fuertemente a la izquierda",
+		"turn sharp right":  "Gira fuertemente a la derecha",
+		
+		// Continuaciones
+		"continue":     "Continúa",
+		"onto":         "por",
+		"on":           "por",
+		"straight":     "recto",
+		"ahead":        "adelante",
+		
+		// Direcciones cardinales
+		"head south":   "Dirígete al sur",
+		"head north":   "Dirígete al norte",
+		"head east":    "Dirígete al este",
+		"head west":    "Dirígete al oeste",
+		"north":        "norte",
+		"south":        "sur",
+		"east":         "este",
+		"west":         "oeste",
+		
+		// Elementos viales
+		"roundabout":   "rotonda",
+		"at the":       "en la",
+		"at ":          "en ",
+		"the ":         "",
+		
+		// Destino
+		"arrive at":    "Llegas a",
+		"destination":  "destino",
+		"finish":       "Fin del recorrido",
+		
+		// Distancias (si vienen en el texto)
+		"meters":       "metros",
+		"kilometers":   "kilómetros",
+		"km":           "kilómetros",
+	}
+	
+	// Aplicar reemplazos
+	for en, es := range replacements {
+		text = strings.ReplaceAll(text, en, es)
+	}
+	
+	// Limpiar espacios múltiples
+	text = strings.Join(strings.Fields(text), " ")
+	
+	// Capitalizar primera letra
+	if len(text) > 0 {
+		runes := []rune(text)
+		runes[0] = []rune(strings.ToUpper(string(runes[0])))[0]
+		text = string(runes)
+	}
+	
+	return text
+}
+
 // GetWalkingRoute obtiene geometría de ruta peatonal usando GraphHopper
 // CENTRALIZA: Todo cálculo de rutas peatonales
 func (s *Service) GetWalkingRoute(fromLat, fromLon, toLat, toLon float64, detailed bool) (*RouteGeometry, error) {
@@ -111,10 +185,16 @@ func (s *Service) GetWalkingRoute(fromLat, fromLon, toLat, toLon float64, detail
 
 	path := route.Paths[0]
 
-	// Extraer instrucciones
+	// ✅ Extraer y traducir instrucciones a español accesible
 	instructions := make([]string, len(path.Instructions))
 	for i, inst := range path.Instructions {
-		instructions[i] = inst.Text
+		translated := translateInstruction(inst.Text)
+		instructions[i] = translated
+		
+		// Log de traducción para debugging
+		if inst.Text != translated {
+			log.Printf("📝 Instrucción %d: %s → %s", i+1, inst.Text, translated)
+		}
 	}
 
 	return &RouteGeometry{
@@ -156,9 +236,11 @@ func (s *Service) getRouteGeometry(profile, routeType, segmentType string, fromL
 	}
 
 	path := route.Paths[0]
+	
+	// ✅ Traducir instrucciones a español accesible
 	instructions := make([]string, len(path.Instructions))
 	for i, inst := range path.Instructions {
-		instructions[i] = inst.Text
+		instructions[i] = translateInstruction(inst.Text)
 	}
 
 	return &RouteGeometry{

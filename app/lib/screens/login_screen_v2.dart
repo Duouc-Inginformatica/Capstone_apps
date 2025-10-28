@@ -1,6 +1,8 @@
+import 'dart:convert';
 import 'dart:developer' as developer;
 import 'package:flutter/material.dart';
 import 'package:local_auth/local_auth.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../services/device/biometric_auth_service.dart';
 import '../services/device/tts_service.dart';
 import '../services/device/npu_detector_service.dart';
@@ -329,42 +331,98 @@ class _LoginScreenV2State extends State<LoginScreenV2>
         final biometricToken = await _biometricService
             .getBiometricDeviceToken();
 
-        // Verificar si ya existe en el backend
-        final existsInBackend = await _apiClient.checkBiometricExists(
+        // Verificar en backend con nuevo endpoint mejorado
+        final checkResult = await _apiClient.checkBiometricExists(
           biometricToken,
         );
 
-        if (existsInBackend) {
-          // Huella ya registrada a otro usuario
+        if (checkResult != null && checkResult['action'] == 'auto_login') {
+          // ============================================================
+          // CASO: Huella EXISTE en backend → Login automático
+          // ============================================================
+          final username = checkResult['username']?.toString() ?? 'Usuario';
+          final welcomeMessage = checkResult['message']?.toString() ?? 
+              'Bienvenido de nuevo, $username!';
+          
           setState(() {
-            _isAuthenticating = false;
-            _statusMessage = 'Huella ya registrada';
+            _statusMessage = 'Iniciando sesión...';
           });
 
-          await _ttsService.speak(
-            'Esta huella dactilar ya está registrada a otra cuenta. Por favor, utiliza una huella diferente o contacta a soporte.',
-          );
+          // 🆕 NO reproducir mensaje aquí - se reproduce en MapScreen
+          // await _ttsService.speak(welcomeMessage); // ❌ Removido
 
-          await Future.delayed(const Duration(seconds: 3));
+          try {
+            // Login automático con el backend
+            await _apiClient.biometricLogin(biometricToken: biometricToken);
+            
+            // Guardar datos localmente SIN solicitar huella de nuevo
+            // (ya se autenticó al inicio del método)
+            final userId = biometricToken; // Usar el token como ID único
+            final prefs = await SharedPreferences.getInstance();
+            
+            final userData = {
+              'userId': userId,
+              'username': username,
+              'email': checkResult['email']?.toString() ?? '',
+              'registeredAt': DateTime.now().toIso8601String(),
+              'lastLogin': DateTime.now().toIso8601String(),
+            };
+            
+            await prefs.setString(
+              'biometric_user_$userId',
+              jsonEncode(userData),
+            );
+            await prefs.setString('current_biometric_user', userId);
 
-          // Volver a intentar
-          if (mounted) {
+            developer.log(
+              '✅ Login automático exitoso para: $username',
+              name: 'LoginScreen',
+            );
+
+            if (mounted) {
+              setState(() {
+                _isAuthenticating = false;
+              });
+
+              // 🆕 Navegar pasando el mensaje al MapScreen
+              Navigator.of(context).pushReplacement(
+                MaterialPageRoute(
+                  builder: (_) => MapScreen(
+                    welcomeMessage: welcomeMessage, // 🎯 Pasar mensaje
+                  ),
+                ),
+              );
+            }
+          } catch (loginError) {
+            developer.log(
+              '❌ Error en login automático: $loginError',
+              name: 'LoginScreen',
+            );
+            
             setState(() {
               _isAuthenticating = false;
-              _statusMessage = '';
+              _statusMessage = 'Error al iniciar sesión';
             });
+            
+            await _ttsService.speak(
+              'Error al iniciar sesión. Por favor intenta nuevamente.',
+            );
           }
+          
           return;
         }
 
-        // Huella NO registrada → Proceder a registro
+        // ============================================================
+        // CASO: Huella NO existe → Proceder a registro
+        // ============================================================
         setState(() {
           _statusMessage = 'Nuevo usuario detectado. Iniciando registro...';
         });
 
-        await _ttsService.speak(
-          'No hay usuarios registrados con esta huella. Iniciando proceso de registro automático',
-        );
+        final registerMessage = checkResult?['message']?.toString() ?? 
+            'No hay usuarios registrados con esta huella. Iniciando proceso de registro automático';
+
+        await _ttsService.speak(registerMessage);
 
         if (mounted) {
           Navigator.of(context).pushReplacement(
