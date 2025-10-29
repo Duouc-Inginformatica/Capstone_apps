@@ -1746,11 +1746,13 @@ class _MapScreenState extends State<MapScreen>
 
   bool _handleNavigationCommand(String command) {
     // ============================================================================
-    // COMANDOS DE VOZ SIMPLIFICADOS
+    // COMANDOS DE VOZ CONTEXTUALES
     // ============================================================================
-    // 1. "ir a [destino]" - Iniciar navegación a un destino
-    // 2. "cancelar ruta" - Cancelar navegación activa
+    // Los comandos disponibles cambian según el estado de la navegación
     // ============================================================================
+
+    final activeNav = IntegratedNavigationService.instance.activeNavigation;
+    final currentStep = activeNav?.currentStep;
 
     // CONFIRMACIÓN: Sí (después de "ir a X")
     if (command.contains('sí') || command.contains('si')) {
@@ -1768,25 +1770,307 @@ class _MapScreenState extends State<MapScreen>
       }
     }
 
-    // CANCELAR RUTA ACTIVA
-    if (command.contains('cancelar')) {
-      if (IntegratedNavigationService.instance.hasActiveNavigation) {
-        IntegratedNavigationService.instance.stopNavigation();
-        setState(() {
-          clearGeometryCache(); // ✅ Limpiar geometría del mixin
-          _simulationPolylines.clear(); // Limpiar también polylines de simulación
-          _currentInstructions.clear();
-          _showInstructionsPanel = false;
-        });
-        TtsService.instance.speak('Ruta cancelada', urgent: true);
-        return true;
-      } else {
-        TtsService.instance.speak('No hay ruta activa');
-        return true;
-      }
+    // ✅ COMANDOS CONTEXTUALES SEGÚN ESTADO DE NAVEGACIÓN
+    
+    // SIN NAVEGACIÓN ACTIVA
+    if (activeNav == null) {
+      return _handleIdleCommands(command);
+    }
+    
+    // CON NAVEGACIÓN ACTIVA - comandos según tipo de paso
+    if (currentStep?.type == 'walk') {
+      return _handleWalkCommands(command, currentStep, activeNav);
+    } else if (currentStep?.type == 'wait_bus') {
+      return _handleWaitBusCommands(command, currentStep);
+    } else if (currentStep?.type == 'ride_bus') {
+      return _handleRideBusCommands(command, currentStep);
     }
 
     return false;
+  }
+  
+  /// ✅ NUEVO: Comandos cuando NO hay navegación activa
+  bool _handleIdleCommands(String command) {
+    // COMANDO: "Dónde estoy"
+    if (command.contains('dónde') || command.contains('donde')) {
+      _announceCurrentLocation();
+      return true;
+    }
+    
+    // COMANDO: "Qué hora es"
+    if (command.contains('qué hora') || command.contains('que hora') || 
+        command.contains('hora')) {
+      _announceTime();
+      return true;
+    }
+    
+    // COMANDO: Cancelar (sin navegación activa)
+    if (command.contains('cancelar')) {
+      TtsService.instance.speak('No hay ruta activa');
+      return true;
+    }
+    
+    return false;
+  }
+  
+  /// ✅ NUEVO: Comandos durante caminata
+  bool _handleWalkCommands(String command, dynamic currentStep, dynamic activeNav) {
+    // COMANDO: "Repetir" - repite la instrucción actual
+    if (command.contains('repetir') || command.contains('repite')) {
+      final instructions = currentStep.streetInstructions as List<String>?;
+      if (instructions != null && instructions.isNotEmpty) {
+        final currentIndex = _calculateCurrentInstructionIndexSilent(
+          instructions: instructions,
+          geometry: _getCurrentStepGeometryCached(),
+        );
+        TtsService.instance.speak(instructions[currentIndex], urgent: true);
+      } else {
+        TtsService.instance.speak('No hay instrucciones disponibles');
+      }
+      return true;
+    }
+    
+    // COMANDO: "Siguiente" - anuncia la siguiente instrucción
+    if (command.contains('siguiente') || command.contains('próxima')) {
+      final instructions = currentStep.streetInstructions as List<String>?;
+      if (instructions != null && instructions.isNotEmpty) {
+        final currentIndex = _calculateCurrentInstructionIndexSilent(
+          instructions: instructions,
+          geometry: _getCurrentStepGeometryCached(),
+        );
+        if (currentIndex < instructions.length - 1) {
+          TtsService.instance.speak(
+            'Siguiente instrucción: ${instructions[currentIndex + 1]}',
+            urgent: true,
+          );
+        } else {
+          TtsService.instance.speak('Ya estás en la última instrucción');
+        }
+      }
+      return true;
+    }
+    
+    // COMANDO: "Cuánto falta" - distancia al destino
+    if (command.contains('cuánto') || command.contains('cuanto') || 
+        command.contains('falta')) {
+      _announceDistanceRemaining();
+      return true;
+    }
+    
+    // COMANDO: "Más despacio" - reduce velocidad TTS
+    if (command.contains('más despacio') || command.contains('mas despacio') ||
+        command.contains('despacio')) {
+      TtsService.instance.setRate(0.4);
+      TtsService.instance.speak('Velocidad reducida');
+      return true;
+    }
+    
+    // COMANDO: "Más rápido" - aumenta velocidad TTS
+    if (command.contains('más rápido') || command.contains('mas rapido') ||
+        command.contains('rápido') || command.contains('rapido')) {
+      TtsService.instance.setRate(0.6);
+      TtsService.instance.speak('Velocidad aumentada');
+      return true;
+    }
+    
+    // COMANDO: "Velocidad normal" - reset velocidad TTS
+    if (command.contains('normal')) {
+      TtsService.instance.setRate(0.45);
+      TtsService.instance.speak('Velocidad normal');
+      return true;
+    }
+    
+    // COMANDO: "Cancelar ruta"
+    if (command.contains('cancelar')) {
+      IntegratedNavigationService.instance.stopNavigation();
+      setState(() {
+        clearGeometryCache();
+        _simulationPolylines.clear();
+        _currentInstructions.clear();
+        _showInstructionsPanel = false;
+      });
+      TtsService.instance.speak('Ruta cancelada', urgent: true);
+      return true;
+    }
+    
+    return false;
+  }
+  
+  /// ✅ NUEVO: Comandos mientras espera el bus
+  bool _handleWaitBusCommands(String command, dynamic currentStep) {
+    // COMANDO: "Cuándo llega el bus"
+    if (command.contains('cuándo') || command.contains('cuando') ||
+        command.contains('llega')) {
+      _announceBusArrival(currentStep);
+      return true;
+    }
+    
+    // COMANDO: "Qué buses pasan"
+    if (command.contains('qué buses') || command.contains('que buses') ||
+        command.contains('buses pasan')) {
+      _announceAvailableBuses(currentStep);
+      return true;
+    }
+    
+    // COMANDO: "Cancelar ruta"
+    if (command.contains('cancelar')) {
+      _stopBusArrivalMonitoring(); // Detener monitoreo
+      IntegratedNavigationService.instance.stopNavigation();
+      setState(() {
+        clearGeometryCache();
+        _simulationPolylines.clear();
+      });
+      TtsService.instance.speak('Ruta cancelada', urgent: true);
+      return true;
+    }
+    
+    return false;
+  }
+  
+  /// ✅ NUEVO: Comandos durante viaje en bus
+  bool _handleRideBusCommands(String command, dynamic currentStep) {
+    // COMANDO: "Cuánto falta"
+    if (command.contains('cuánto') || command.contains('cuanto') ||
+        command.contains('falta')) {
+      final stopsRemaining = currentStep.totalStops ?? 0;
+      final destination = currentStep.stopName ?? 'tu parada';
+      TtsService.instance.speak(
+        'Faltan $stopsRemaining paradas hasta $destination',
+        urgent: true,
+      );
+      return true;
+    }
+    
+    // COMANDO: "Próxima parada"
+    if (command.contains('próxima') || command.contains('proxima') ||
+        command.contains('siguiente')) {
+      TtsService.instance.speak(
+        'Manténte atento, te avisaré cuando estés cerca de tu parada',
+        urgent: true,
+      );
+      return true;
+    }
+    
+    return false;
+  }
+  
+  /// Anuncia la ubicación actual del usuario
+  void _announceCurrentLocation() {
+    if (_currentPosition == null) {
+      TtsService.instance.speak('No se puede obtener tu ubicación');
+      return;
+    }
+    
+    // En producción, esto debería hacer geocoding inverso
+    TtsService.instance.speak(
+      'Estás en las coordenadas: ${_currentPosition!.latitude.toStringAsFixed(4)}, '
+      '${_currentPosition!.longitude.toStringAsFixed(4)}',
+    );
+  }
+  
+  /// Anuncia la hora actual
+  void _announceTime() {
+    final now = DateTime.now();
+    final hour = now.hour;
+    final minute = now.minute;
+    final minuteText = minute < 10 ? 'cero $minute' : minute.toString();
+    
+    TtsService.instance.speak(
+      'Son las $hour con $minuteText',
+      urgent: true,
+    );
+  }
+  
+  /// Anuncia distancia restante al destino
+  void _announceDistanceRemaining() {
+    if (_currentPosition == null) {
+      TtsService.instance.speak('No se puede calcular la distancia');
+      return;
+    }
+    
+    final geometry = _getCurrentStepGeometryCached();
+    if (geometry.isEmpty) {
+      TtsService.instance.speak('No hay ruta activa');
+      return;
+    }
+    
+    final destination = geometry.last;
+    final distanceMeters = Geolocator.distanceBetween(
+      _currentPosition!.latitude,
+      _currentPosition!.longitude,
+      destination.latitude,
+      destination.longitude,
+    );
+    
+    String distanceText;
+    if (distanceMeters < 100) {
+      distanceText = '${distanceMeters.round()} metros';
+    } else if (distanceMeters < 1000) {
+      distanceText = '${(distanceMeters / 10).round() * 10} metros';
+    } else {
+      distanceText = '${(distanceMeters / 1000).toStringAsFixed(1)} kilómetros';
+    }
+    
+    TtsService.instance.speak('Faltan $distanceText', urgent: true);
+  }
+  
+  /// Anuncia cuándo llega el bus
+  Future<void> _announceBusArrival(dynamic currentStep) async {
+    final stopCode = currentStep.stopId;
+    final routeNumber = currentStep.busRoute;
+    
+    if (stopCode == null || routeNumber == null) {
+      TtsService.instance.speak('No hay información del bus');
+      return;
+    }
+    
+    try {
+      final arrivals = await BusArrivalsService.instance.getBusArrivals(stopCode);
+      
+      if (arrivals != null && arrivals.arrivals.isNotEmpty) {
+        final targetBus = arrivals.arrivals.firstWhere(
+          (bus) => bus.routeNumber == routeNumber,
+          orElse: () => arrivals.arrivals.first,
+        );
+        
+        TtsService.instance.speak(
+          'El bus $routeNumber llegará en ${targetBus.formattedTime}',
+          urgent: true,
+        );
+      } else {
+        TtsService.instance.speak('No hay información de llegadas');
+      }
+    } catch (e) {
+      TtsService.instance.speak('Error consultando llegadas del bus');
+    }
+  }
+  
+  /// Anuncia qué buses pasan por el paradero
+  Future<void> _announceAvailableBuses(dynamic currentStep) async {
+    final stopCode = currentStep.stopId;
+    
+    if (stopCode == null) {
+      TtsService.instance.speak('No hay información del paradero');
+      return;
+    }
+    
+    try {
+      final arrivals = await BusArrivalsService.instance.getBusArrivals(stopCode);
+      
+      if (arrivals != null && arrivals.arrivals.isNotEmpty) {
+        final routes = arrivals.arrivals.map((a) => a.routeNumber).toSet().toList();
+        final routesList = routes.join(', ');
+        
+        TtsService.instance.speak(
+          'Por este paradero pasan los buses: $routesList',
+          urgent: true,
+        );
+      } else {
+        TtsService.instance.speak('No hay información de buses');
+      }
+    } catch (e) {
+      TtsService.instance.speak('Error consultando información del paradero');
+    }
   }
 
   String? _extractDestination(String command) {
