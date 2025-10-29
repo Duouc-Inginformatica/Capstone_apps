@@ -1190,7 +1190,8 @@ class _MapScreenState extends State<MapScreen>
         _currentPosition = await Geolocator.getCurrentPosition(
           locationSettings: const LocationSettings(
             accuracy: LocationAccuracy.medium, // Cambio: medium es más rápido que high
-            timeLimit: Duration(seconds: 10), // ✅ Aumentado a 10 segundos (era 5)
+            // ❌ SIN timeLimit - permite esperar el tiempo necesario
+            // En dispositivos lentos o con mala señal, el timeout puede ser problemático
           ),
         );
 
@@ -1209,7 +1210,7 @@ class _MapScreenState extends State<MapScreen>
         }
       } catch (e) {
         // ✅ No es fatal: el listener de GPS se configurará de todas formas
-        _log('⚠️ [GPS INIT] Timeout obteniendo posición inicial (no es grave): $e');
+        _log('⚠️ [GPS INIT] Error obteniendo posición inicial (no es grave): $e');
         // ✅ NO anunciar por TTS, es molesto y el GPS funcionará después
       }
 
@@ -1232,7 +1233,8 @@ class _MapScreenState extends State<MapScreen>
     const locationSettings = LocationSettings(
       accuracy: LocationAccuracy.high, // Alta precisión para navegación
       distanceFilter: 5, // Actualizar cada 5 metros (más reactivo que 10m)
-      timeLimit: Duration(seconds: 30), // Timeout para actualizaciones
+      // ❌ SIN timeLimit - el GPS debe funcionar indefinidamente
+      // El timeout de 30 segundos estaba causando crashes en dispositivos lentos
     );
 
     Geolocator.getPositionStream(locationSettings: locationSettings).listen(
