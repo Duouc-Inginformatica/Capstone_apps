@@ -13,8 +13,6 @@ import '../services/device/tts_service.dart';
 import '../services/backend/address_validation_service.dart';
 import '../services/backend/bus_arrivals_service.dart';
 import '../services/backend/bus_geometry_service.dart';
-import '../services/navigation/route_tracking_service.dart';
-import '../services/navigation/transit_boarding_service.dart';
 import '../services/navigation/integrated_navigation_service.dart';
 import '../services/device/npu_detector_service.dart';
 import '../services/debug_logger.dart';
@@ -22,6 +20,7 @@ import '../services/ui/timer_manager.dart'; // Gestor de timers centralizado
 import '../services/polyline_compression.dart'; // Compresión Douglas-Peucker
 import '../services/geometry_cache_service.dart'; // Caché offline de geometrías
 import '../widgets/map/accessible_notification.dart';
+import '../mixins/navigation_geometry_mixin.dart'; // 🆕 Mixin centralizado de geometrías
 import 'settings_screen.dart';
 import '../widgets/bottom_nav.dart';
 
@@ -39,7 +38,8 @@ class MapScreen extends StatefulWidget {
   State<MapScreen> createState() => _MapScreenState();
 }
 
-class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
+class _MapScreenState extends State<MapScreen> 
+    with TimerManagerMixin, NavigationGeometryMixin {
   void _log(String message, {Object? error, StackTrace? stackTrace}) {
     developer.log(
       message,
@@ -73,18 +73,11 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
   // CAP-12: Instrucciones de ruta
   List<String> _currentInstructions = [];
   int _currentInstructionStep = 0;
-  int _instructionFocusIndex = 0;
   bool _isCalculatingRoute = false;
   bool _showInstructionsPanel = false;
 
   // Lectura automática de instrucciones
   bool _autoReadInstructions = true; // Por defecto ON para no videntes
-
-  // CAP-29: Confirmación de micro abordada
-  bool _waitingBoardingConfirmation = false;
-
-  // CAP-20 & CAP-30: Seguimiento en tiempo real
-  bool _isTrackingRoute = false;
 
   // Accessibility features
   // ✅ _feedbackTimer gestionado por TimerManagerMixin
@@ -110,17 +103,6 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
   List<LatLng>? _simulationDeviationRoute; // Ruta de desviación temporal (simulación)
   bool _isCurrentlyDeviated = false; // Si está actualmente desviado (simulación)
 
-  // Control de visualización de ruta de bus
-  final bool _busRouteShown =
-      false; // Rastrea si ya se mostró la ruta del bus en wait_bus
-
-  // ============================================================================
-  // TRACKING DE LLEGADAS EN TIEMPO REAL
-  // ============================================================================
-  StopArrivals? _currentArrivals; // Últimas llegadas recibidas
-  final bool _isWaitingForBus = false; // Si está esperando el bus en el paradero
-  bool _needsRouteRecalculation = false; // Si el bus pasó y necesita recalcular
-
   // Notification system
   final List<NotificationData> _activeNotifications = [];
   final int _maxNotifications = 3;
@@ -134,7 +116,9 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
   double? _pendingZoom;
   Position? _currentPosition;
   List<Marker> _markers = [];
-  List<Polyline> _polylines = [];
+  // ✅ _polylines eliminado - ahora se usa navigationPolylines del mixin para navegación real
+  // ⚠️ Para simulación de desarrollo, se usa _simulationPolylines separadamente
+  List<Polyline> _simulationPolylines = []; // Solo para _simulateArrivalAtStop (testing)
   
   // NOTA: Variables de compass removidas (causaban bugs en el mapa)
 
@@ -176,37 +160,7 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
     // Usar post-frame callback para evitar bloquear la construcción del widget
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _initServices();
-      _setupTrackingCallbacks();
-      _setupBoardingCallbacks();
     });
-  }
-
-  /// CAP-30 & CAP-20: Configurar callbacks de seguimiento
-  void _setupTrackingCallbacks() {
-    RouteTrackingService.instance.onPositionUpdate = (position) {
-      if (!mounted) return;
-      setState(() {
-        _currentPosition = position;
-      });
-      _updateCurrentLocationMarker();
-    };
-
-    RouteTrackingService
-        .instance
-        .onDeviationDetected = (distance, needsRecalc) {
-      if (!mounted || !needsRecalc) return;
-      // CAP-20: Recalcular ruta automáticamente
-      _showWarningNotification('Desviación detectada. Recalculando ruta...');
-      _recalculateRoute();
-    };
-
-    RouteTrackingService.instance.onDestinationReached = () {
-      if (!mounted) return;
-      setState(() {
-        _isTrackingRoute = false;
-      });
-      _showSuccessNotification('¡Destino alcanzado!', withVibration: true);
-    };
   }
 
   /// 🆕 Reproducir mensaje de bienvenida con prioridad
@@ -248,34 +202,6 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
         _npuChecked = true;
       });
     }
-  }
-
-  /// CAP-29: Configurar callbacks de abordaje
-  void _setupBoardingCallbacks() {
-    TransitBoardingService.instance.onBoardingConfirmed = (busRoute) {
-      if (!mounted) return;
-      setState(() {
-        _waitingBoardingConfirmation = false;
-      });
-      _showSuccessNotification(
-        'Abordaje confirmado en bus $busRoute',
-        withVibration: true,
-      );
-
-      // Iniciar seguimiento si no está activo
-      if (!_isTrackingRoute &&
-          RouteTrackingService.instance.destination != null) {
-        _startRouteTracking();
-      }
-    };
-
-    TransitBoardingService.instance.onBoardingCancelled = () {
-      if (!mounted) return;
-      setState(() {
-        _waitingBoardingConfirmation = false;
-      });
-      _showWarningNotification('Confirmación de abordaje cancelada');
-    };
   }
 
   /// Inicia servicios de forma no bloqueante y escalonada para evitar ANR
@@ -341,403 +267,6 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
   }
 
   /// Determina el índice de la instrucción actual basado en la posición GPS
-  int _determineCurrentInstructionIndex() {
-    if (_currentPosition == null) return 0;
-    
-    final activeNav = IntegratedNavigationService.instance.activeNavigation;
-    if (activeNav == null) return 0;
-
-    final currentStep = activeNav.currentStep;
-    if (currentStep == null || 
-        currentStep.streetInstructions == null ||
-        currentStep.streetInstructions!.isEmpty) {
-      return 0;
-    }
-
-    // Obtener la geometría del paso actual
-    final geometry = _getCurrentStepGeometryCached();
-    if (geometry.isEmpty) return 0;
-
-    // Calcular la distancia recorrida en el paso actual
-    double distanceToUser = double.infinity;
-    int closestPointIndex = 0;
-    
-    for (int i = 0; i < geometry.length; i++) {
-      final point = geometry[i];
-      final distance = Geolocator.distanceBetween(
-        _currentPosition!.latitude,
-        _currentPosition!.longitude,
-        point.latitude,
-        point.longitude,
-      );
-      
-      if (distance < distanceToUser) {
-        distanceToUser = distance;
-        closestPointIndex = i;
-      }
-    }
-
-    // Calcular el progreso como porcentaje del recorrido
-    final double progress = closestPointIndex / geometry.length;
-    final int totalInstructions = currentStep.streetInstructions!.length;
-    
-    // Determinar qué instrucción mostrar según el progreso
-    int instructionIndex = (progress * totalInstructions).floor();
-    instructionIndex = instructionIndex.clamp(0, totalInstructions - 1);
-    
-    return instructionIndex;
-  }
-
-  /// Construye el panel de instrucción actual basado en posición GPS
-  Widget _buildNavigationQuickActions(bool hasActiveNavigation) {
-    final instructions = _getActiveWalkInstructions();
-    final bool hasWalkInstructions =
-        instructions != null && instructions.isNotEmpty;
-
-    if (!hasActiveNavigation && !hasWalkInstructions) {
-      return const SizedBox.shrink();
-    }
-    
-    // NO mostrar en modo viaje de bus (ride_bus)
-    final activeNav = IntegratedNavigationService.instance.activeNavigation;
-    if (activeNav?.currentStep?.type == 'ride_bus') {
-      return const SizedBox.shrink();
-    }
-
-    final int totalInstructions = instructions?.length ?? 0;
-    
-    // ✅ CORRECCIÓN: Usar la instrucción basada en GPS si hay navegación activa
-    // Si el usuario está navegando, mostrar la instrucción automática basada en GPS
-    // Si no, usar el índice manual (_instructionFocusIndex)
-    int focusIndex = _instructionFocusIndex;
-    
-    if (activeNav != null && activeNav.currentStep?.type == 'walk' && _currentPosition != null) {
-      _log('🗺️ [LAYOUT] Recalculando índice de instrucción visual (GPS activo)');
-      
-      // En modo navegación walk: calcular instrucción automática basada en GPS
-      final autoIndex = _calculateCurrentInstructionIndex(
-        activeNav.currentStep!,
-        totalInstructions,
-      );
-      if (autoIndex >= 0 && autoIndex < totalInstructions) {
-        _log('🗺️ [LAYOUT] Índice calculado: $autoIndex (antes: $_instructionFocusIndex)');
-        focusIndex = autoIndex;
-        // Sincronizar el índice manual con el automático
-        if (_instructionFocusIndex != autoIndex) {
-          _instructionFocusIndex = autoIndex;
-        }
-      }
-    }
-    
-    // Asegurar que el índice esté en rango válido
-    focusIndex = totalInstructions == 0
-        ? 0
-        : focusIndex.clamp(0, totalInstructions - 1);
-
-    // Si no hay instrucciones, no mostrar el preview de texto
-    final String preview = totalInstructions == 0
-        ? '' // Vacío en vez de mensaje de "inicia navegación"
-        : instructions![focusIndex];
-
-    final List<Widget> actionButtons = [];
-    if (hasWalkInstructions) {
-      actionButtons.add(
-        _buildQuickActionButton(
-          icon: Icons.record_voice_over,
-          label: 'Leer paso',
-          description: 'Paso ${focusIndex + 1} de $totalInstructions',
-          onTap: _speakFocusedInstruction,
-          primary: false,
-          width: 160,
-        ),
-      );
-    }
-
-    return AnimatedOpacity(
-      duration: const Duration(milliseconds: 280),
-      opacity: hasActiveNavigation ? 1.0 : 0.8,
-      child: Container(
-        constraints: BoxConstraints(maxWidth: hasWalkInstructions ? 320 : 240),
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(20),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.1),
-              blurRadius: 18,
-              offset: const Offset(0, 12),
-            ),
-          ],
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (actionButtons.isNotEmpty)
-              Wrap(
-                spacing: 10,
-                runSpacing: 10,
-                children: actionButtons,
-              ),
-            if (hasWalkInstructions) ...[
-              if (actionButtons.isNotEmpty) const SizedBox(height: 12),
-              Text(
-                'Paso ${focusIndex + 1} de $totalInstructions',
-                style: const TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w700,
-                  color: Color(0xFF0F172A),
-                ),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                preview,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  fontSize: 13,
-                  height: 1.3,
-                  color: Color(0xFF4B5563),
-                ),
-              ),
-              const SizedBox(height: 12),
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  _buildMiniActionButton(
-                    icon: Icons.chevron_left,
-                    label: 'Anterior',
-                    onTap: focusIndex > 0
-                        ? () => _moveInstructionFocus(-1)
-                        : null,
-                  ),
-                  const SizedBox(width: 8),
-                  _buildMiniActionButton(
-                    icon: Icons.chevron_right,
-                    label: 'Siguiente',
-                    onTap: focusIndex < totalInstructions - 1
-                        ? () => _moveInstructionFocus(1)
-                        : null,
-                  ),
-                ],
-              ),
-            ] else ...[
-              const SizedBox(height: 4),
-              Text(
-                preview,
-                style: const TextStyle(
-                  fontSize: 13,
-                  height: 1.4,
-                  color: Color(0xFF4B5563),
-                ),
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildSimulationFab() {
-    final activeNav = IntegratedNavigationService.instance.activeNavigation;
-    final currentStep = activeNav?.currentStep;
-    
-    // NO mostrar en modo viaje de bus (ride_bus)
-    if (currentStep?.type == 'ride_bus') {
-      return const SizedBox.shrink();
-    }
-    
-    // Determinar si estamos esperando en el paradero
-    final bool isWaitingAtStop = currentStep?.type == 'wait_bus';
-    
-    // Cambiar el ícono y label según el estado
-    final IconData icon = isWaitingAtStop 
-        ? Icons.directions_bus_rounded  // Ícono de bus cuando esperas
-        : Icons.play_arrow_rounded;      // Ícono de play normal
-    
-    final String label = isWaitingAtStop
-        ? 'Subir al bus'                 // Cuando esperas: "Subir al bus"
-        : _getSimulationButtonLabel();   // Resto: "Simular → Paradero", etc.
-
-    return Semantics(
-      button: true,
-      label: label,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // Botón de simulación consciente del estado
-          Tooltip(
-            message: label,
-            child: GestureDetector(
-              onTap: _simulateArrivalAtStop,
-              child: Container(
-                width: 64,
-                height: 64,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  gradient: isWaitingAtStop
-                      ? const LinearGradient(
-                          // Gradiente rojo cuando esperas el bus
-                          colors: [Color(0xFFEF4444), Color(0xFFDC2626)],
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                        )
-                      : const LinearGradient(
-                          // Gradiente naranja normal
-                          colors: [Color(0xFFFF8C42), Color(0xFFFF6B2C)],
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                        ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: isWaitingAtStop
-                          ? const Color(0x66EF4444)
-                          : const Color(0x66FF8C42),
-                      blurRadius: 18,
-                      offset: const Offset(0, 10),
-                    ),
-                  ],
-                ),
-                child: Icon(
-                  icon,
-                  color: Colors.white,
-                  size: 28,
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(height: 8),
-          Container(
-            constraints: const BoxConstraints(maxWidth: 80),
-            child: Text(
-              label,
-              textAlign: TextAlign.center,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                color: isWaitingAtStop 
-                    ? const Color(0xFF991B1B)  // Rojo oscuro cuando esperas
-                    : const Color(0xFF9A3412),  // Naranja oscuro normal
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-                height: 1.2,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildQuickActionButton({
-    required IconData icon,
-    required String label,
-    required String description,
-    required VoidCallback? onTap,
-    bool primary = false,
-    double width = 160,
-  }) {
-    final bool enabled = onTap != null;
-    final Gradient enabledGradient = primary
-        ? const LinearGradient(
-            colors: [Color(0xFF34D399), Color(0xFF059669)],
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-          )
-        : const LinearGradient(
-            colors: [Color(0xFF1F2937), Color(0xFF111827)],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          );
-    final Gradient disabledGradient = LinearGradient(
-      colors: [Colors.grey.shade600, Colors.grey.shade500],
-      begin: Alignment.topCenter,
-      end: Alignment.bottomCenter,
-    );
-
-    final gradient = enabled ? enabledGradient : disabledGradient;
-    final Color shadowColor = primary
-        ? const Color(0xFF059669)
-        : const Color(0xFF0F172A);
-
-    return Opacity(
-      opacity: enabled ? 1.0 : 0.55,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(18),
-        child: Container(
-          width: width,
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(18),
-            gradient: gradient,
-            boxShadow: [
-              BoxShadow(
-                color: shadowColor.withValues(alpha: enabled ? 0.35 : 0.2),
-                blurRadius: 18,
-                offset: const Offset(0, 10),
-              ),
-            ],
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(icon, color: Colors.white, size: 22),
-              const SizedBox(height: 10),
-              Text(
-                label,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              const SizedBox(height: 6),
-              Text(
-                description,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: Colors.white.withValues(alpha: 0.85),
-                  fontSize: 12,
-                  height: 1.25,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildMiniActionButton({
-    required IconData icon,
-    required String label,
-    required VoidCallback? onTap,
-  }) {
-    return SizedBox(
-      height: 40,
-      child: OutlinedButton.icon(
-        onPressed: onTap,
-        icon: Icon(icon, size: 18),
-        label: Text(label),
-        style: OutlinedButton.styleFrom(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          foregroundColor: const Color(0xFF0F172A),
-          textStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-          ),
-        ),
-      ),
-    );
-  }
-
   // ✅ Timer para simular caminata gestionado por TimerManagerMixin
 
   /// Devuelve el texto del botón de simulación según el paso actual
@@ -929,7 +458,7 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
             _log('🚌 [BUS] Dibujando ruta del bus: ${busGeometry.length} puntos');
             
             setState(() {
-              _polylines = [
+              _simulationPolylines = [
                 Polyline(
                   points: busGeometry,
                   color: const Color(0xFFE30613), // ROJO para ruta de bus
@@ -943,7 +472,7 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
             _log('❌ [BUS] No se pudo obtener geometría del bus');
             // Limpiar polilínea si no hay geometría
             setState(() {
-              _polylines = [];
+              _simulationPolylines = [];
               _updateNavigationMarkers(nextStep, activeNav);
             });
           }
@@ -1018,9 +547,23 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
       // ✅ Cancelar simulación previa usando TimerManagerMixin
       cancelTimer('walkSimulation');
       
+      // ✅ CRÍTICO: Dibujar la geometría COMPLETA al inicio para que sea visible desde el principio
+      // Esto asegura que el usuario vea la ruta roja inmediatamente al presionar "Simular"
+      _log('🎨 [SIMULAR] Dibujando geometría completa inicial: ${geometry.length} puntos');
+      
       // Activar modo simulación para evitar auto-centrado
       setState(() {
         _isSimulating = true;
+        
+        // ✅ DIBUJAR RUTA COMPLETA AL INICIO
+        _simulationPolylines = [
+          Polyline(
+            points: geometry,
+            color: const Color(0xFFE30613), // Rojo desde el inicio
+            strokeWidth: 5.0,
+          ),
+        ];
+        
         // ✅ INICIALIZAR MARCADORES antes de comenzar la simulación
         _updateNavigationMarkers(currentStep, activeNav);
       });
@@ -1050,10 +593,24 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
           // Resetear desviación
           _resetSimulationDeviation();
           
-          // Desactivar modo simulación
+          // ✅ CRÍTICO: Restaurar navegación real después de simulación
+          // Desactivar modo simulación y actualizar geometría desde el mixin
           setState(() {
             _isSimulating = false;
+            _simulationPolylines.clear(); // Limpiar polylines de simulación
           });
+          
+          // Restaurar geometría del mixin para navegación real
+          final activeNavAfterSim = IntegratedNavigationService.instance.activeNavigation;
+          if (activeNavAfterSim != null && mounted) {
+            await updateNavigationGeometry(
+              navigation: activeNavAfterSim, 
+              forceRefresh: true,
+            );
+            if (mounted) {
+              setState(() {}); // Forzar rebuild para mostrar navigationPolylines
+            }
+          }
           
           // Vibración de llegada (doble vibración)
           final hasVibrator = await Vibration.hasVibrator();
@@ -1076,7 +633,7 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
             setState(() {
               if (geometry.length >= 2) {
                 // Mostrar toda la ruta recorrida en verde
-                _polylines = [
+                _simulationPolylines = [
                   Polyline(
                     points: geometry,
                     color: const Color(0xFF10B981), // Verde para destino completado
@@ -1085,7 +642,7 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
                 ];
               } else if (geometry.isNotEmpty && _currentPosition != null) {
                 // Fallback: crear línea desde posición actual al destino
-                _polylines = [
+                _simulationPolylines = [
                   Polyline(
                     points: [
                       LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
@@ -1166,11 +723,26 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
               // CUARTO: Actualizar UI para mostrar paraderos
               if (mounted) {
                 setState(() {
-                  // Limpiar polilínea de caminata
-                  _polylines = [];
-                  // Actualizar marcadores para mostrar paraderos de bus
-                  _updateNavigationMapState(IntegratedNavigationService.instance.activeNavigation!);
+                  // ✅ Desactivar simulación y limpiar polylines
+                  _isSimulating = false;
+                  _simulationPolylines.clear();
                 });
+                
+                // ✅ Actualizar geometría desde el mixin (wait_bus limpia la geometría)
+                await updateNavigationGeometry(
+                  navigation: IntegratedNavigationService.instance.activeNavigation!,
+                  forceRefresh: true,
+                );
+                
+                // Actualizar marcadores para mostrar paraderos de bus
+                if (mounted) {
+                  setState(() {
+                    _updateNavigationMarkers(
+                      IntegratedNavigationService.instance.activeNavigation!.currentStep!,
+                      IntegratedNavigationService.instance.activeNavigation!,
+                    );
+                  });
+                }
               }
               
               _log('🚏 [SIMULAR] Paso actual ahora: wait_bus. Esperando que el usuario suba al bus.');
@@ -1201,7 +773,7 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
               ? geometry.sublist(currentPointIndex)
               : [geometry.last]; // Mantener último punto si llegamos al final
           
-          _polylines = [
+          _simulationPolylines = [
             Polyline(
               points: remainingGeometry,
               color: isNearEnd 
@@ -1555,389 +1127,13 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
       clampedIndex = instructions.length - 1;
     }
 
-    if (!mounted) return;
-
-    setState(() {
-      _instructionFocusIndex = clampedIndex;
-    });
-
     if (speak) {
       final instruction = instructions[clampedIndex];
       TtsService.instance.speak('Paso ${clampedIndex + 1}: $instruction');
     }
   }
 
-  /// Calcula qué instrucción de calle debería mostrarse según la posición GPS actual
-  int _calculateCurrentInstructionIndex(NavigationStep step, int totalInstructions) {
-    if (_currentPosition == null || totalInstructions == 0) return 0;
-    
-    // Obtener geometría del paso actual
-    final geometry = IntegratedNavigationService.instance.currentStepGeometry;
-    if (geometry.isEmpty) return 0;
-    
-    // ✅ NUEVO: Si tenemos intervals, usarlos para precisión exacta
-    if (step.instructionIntervals != null && step.instructionIntervals!.isNotEmpty) {
-      // Encontrar el punto más cercano en la geometría al GPS actual
-      final userLocation = LatLng(_currentPosition!.latitude, _currentPosition!.longitude);
-      double minDistance = double.infinity;
-      int closestPointIndex = 0;
-      
-      for (int i = 0; i < geometry.length; i++) {
-        final distance = Geolocator.distanceBetween(
-          userLocation.latitude,
-          userLocation.longitude,
-          geometry[i].latitude,
-          geometry[i].longitude,
-        );
-        if (distance < minDistance) {
-          minDistance = distance;
-          closestPointIndex = i;
-        }
-      }
-      
-      // Buscar en qué intervalo cae el punto más cercano
-      for (int i = 0; i < step.instructionIntervals!.length; i++) {
-        final interval = step.instructionIntervals![i];
-        if (interval.length >= 2) {
-          final start = interval[0];
-          final end = interval[1];
-          
-          // Si el punto está dentro de este intervalo, esta es la instrucción correcta
-          if (closestPointIndex >= start && closestPointIndex <= end) {
-            _log('🗺️ [INSTRUCTION] Punto $closestPointIndex en intervalo [$start, $end] → Instrucción ${i + 1}');
-            return i;
-          }
-        }
-      }
-      
-      // Si no se encuentra en ningún intervalo, usar la última instrucción
-      return totalInstructions - 1;
-    }
-    
-    // Fallback: método antiguo basado en progreso lineal
-    final userLocation = LatLng(_currentPosition!.latitude, _currentPosition!.longitude);
-    double minDistance = double.infinity;
-    int closestPointIndex = 0;
-    
-    for (int i = 0; i < geometry.length; i++) {
-      final distance = Geolocator.distanceBetween(
-        userLocation.latitude,
-        userLocation.longitude,
-        geometry[i].latitude,
-        geometry[i].longitude,
-      );
-      if (distance < minDistance) {
-        minDistance = distance;
-        closestPointIndex = i;
-      }
-    }
-    
-    // Calcular el progreso como porcentaje del recorrido
-    final double progress = closestPointIndex / geometry.length;
-    
-    // Determinar qué instrucción mostrar según el progreso
-    int instructionIndex = (progress * totalInstructions).floor();
-    instructionIndex = instructionIndex.clamp(0, totalInstructions - 1);
-    
-    return instructionIndex;
-  }
-
-  void _speakFocusedInstruction() {
-    final instructions = _getActiveWalkInstructions();
-    if (instructions == null || instructions.isEmpty) {
-      TtsService.instance.speak('No hay instrucciones activas');
-      return;
-    }
-
-    int focusIndex = _instructionFocusIndex;
-    if (focusIndex < 0) {
-      focusIndex = 0;
-    } else if (focusIndex >= instructions.length) {
-      focusIndex = instructions.length - 1;
-    }
-
-    final instruction = instructions[focusIndex];
-    TtsService.instance.speak('Paso ${focusIndex + 1}: $instruction');
-
-    if (!mounted) return;
-
-    setState(() {
-      _instructionFocusIndex = focusIndex;
-    });
-  }
-
-  void _moveInstructionFocus(int delta) {
-    final instructions = _getActiveWalkInstructions();
-    if (instructions == null || instructions.isEmpty) {
-      TtsService.instance.speak('No hay instrucciones activas');
-      return;
-    }
-
-    int focusIndex = _instructionFocusIndex;
-    if (focusIndex < 0) {
-      focusIndex = 0;
-    } else if (focusIndex >= instructions.length) {
-      focusIndex = instructions.length - 1;
-    }
-
-    final newIndex = (focusIndex + delta)
-        .clamp(0, instructions.length - 1)
-        .toInt();
-
-    if (newIndex == focusIndex) {
-      TtsService.instance.speak(
-        delta > 0
-            ? 'Ya estás en la última instrucción'
-            : 'Ya estás en la primera instrucción',
-      );
-      return;
-    }
-
-    if (!mounted) return;
-
-    setState(() {
-      _instructionFocusIndex = newIndex;
-    });
-
-    final instruction = instructions[newIndex];
-    TtsService.instance.speak('Paso ${newIndex + 1}: $instruction');
-  }
-
   // Calcular nueva posición dado bearing y distancia
-  /// Crea y visualiza los paraderos del bus (sin mostrar la línea de ruta)
-  void _createBusRouteVisualization(ActiveNavigation navigation) {
-    _log('🗺️ [BUS_STOPS] Mostrando paraderos de la ruta del bus...');
-
-    // Buscar el leg del bus en el itinerario original
-    final busLeg = navigation.itinerary.legs.firstWhere(
-      (leg) => leg.type == 'bus' && leg.isRedBus,
-      orElse: () => throw Exception('No se encontró leg de bus'),
-    );
-
-    // Obtener la lista de paraderos del leg
-    final stops = busLeg.stops;
-    if (stops == null || stops.isEmpty) {
-      _log('⚠️ [BUS_STOPS] No hay paraderos en el leg del bus');
-      return;
-    }
-
-    _log('� [BUS_STOPS] ${stops.length} paraderos encontrados');
-
-    // Crear marcadores para cada paradero
-    final stopMarkers = <Marker>[];
-
-    for (int i = 0; i < stops.length; i++) {
-      final stop = stops[i];
-      final isFirst = i == 0;
-      final isLast = i == stops.length - 1;
-
-      // FILTRO: Si hay muchas paradas intermedias, solo mostrar algunas clave
-      if (!isFirst && !isLast && stops.length > 10) {
-        // Mostrar solo paradas en posiciones estratégicas
-        final shouldShow = _shouldShowIntermediateStop(i, stops.length);
-        if (!shouldShow) {
-          continue; // Saltar esta parada (no crear marcador visual)
-        }
-      }
-
-      // Icono y color según posición
-      Color markerColor;
-      IconData markerIcon;
-      double markerSize;
-      String label = '';
-
-      if (isFirst) {
-        // 🟢 PARADERO DE SUBIDA (verde brillante con icono de bus)
-        markerColor = const Color(0xFF4CAF50); // Verde Material
-        markerIcon = Icons.directions_bus; // Icono de bus
-        markerSize = 52;
-        label = 'SUBIDA';
-      } else if (isLast) {
-        // 🔴 PARADERO DE BAJADA (rojo con icono de bus)
-        markerColor = const Color(0xFFE30613); // Rojo RED
-        markerIcon = Icons.directions_bus; // Icono de bus
-        markerSize = 52;
-        label = 'BAJADA';
-      } else {
-        // 🔵 PARADEROS INTERMEDIOS (azul con icono de bus alert)
-        markerColor = const Color(0xFF2196F3); // Azul Material
-        markerIcon = Icons.bus_alert; // Icono de bus intermedio
-        markerSize = 36;
-        label = 'P$i'; // Parada número
-      }
-
-      final marker = Marker(
-        point: stop.location,
-        width: markerSize + 24,
-        height: markerSize + 40,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // Icono del marcador con sombra mejorada
-            Container(
-              width: markerSize,
-              height: markerSize,
-              decoration: BoxDecoration(
-                color: markerColor,
-                shape: BoxShape.circle,
-                border: Border.all(color: Colors.white, width: 3),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.3),
-                    blurRadius: 6,
-                    offset: const Offset(0, 2),
-                  ),
-                  BoxShadow(
-                    color: markerColor.withValues(alpha: 0.5),
-                    blurRadius: 12,
-                    spreadRadius: 2,
-                  ),
-                ],
-              ),
-              child: Center(
-                child: Icon(
-                  markerIcon,
-                  color: Colors.white,
-                  size: markerSize * 0.65,
-                ),
-              ),
-            ),
-            // Etiqueta con código de parada y descripción mejorada
-            if (stop.code != null && stop.code!.isNotEmpty)
-              Container(
-                margin: const EdgeInsets.only(top: 3),
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.90),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(
-                    color: markerColor,
-                    width: 2,
-                  ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.4),
-                      blurRadius: 4,
-                      offset: const Offset(0, 2),
-                    ),
-                  ],
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      label,
-                      style: TextStyle(
-                        color: markerColor,
-                        fontSize: 10,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      stop.code!,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 10,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: 0.5,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-          ],
-        ),
-      );
-
-      stopMarkers.add(marker);
-    }
-
-    // Actualizar marcadores en el mapa (NO agregar polyline)
-    setState(() {
-      _markers = [..._markers, ...stopMarkers];
-    });
-
-    // Ajustar zoom para mostrar todos los paraderos
-    final allStopLocations = stops.map((s) => s.location).toList();
-    _fitBoundsToRoute(allStopLocations);
-
-    _log(
-      '✅ [BUS_STOPS] ${stopMarkers.length} marcadores visibles de ${stops.length} paradas totales',
-    );
-    _showSuccessNotification(
-      '${stopMarkers.length} paraderos mostrados de ${stops.length} en ruta ${busLeg.routeNumber ?? ""}',
-    );
-  }
-
-  /// Determina si una parada intermedia debe mostrarse visualmente
-  /// Cuando hay más de 10 paradas, solo muestra algunas estratégicas
-  /// para evitar saturación visual en el mapa
-  bool _shouldShowIntermediateStop(int index, int totalStops) {
-    // Siempre mostrar si hay pocas paradas
-    if (totalStops <= 10) return true;
-
-    // Para más de 10 paradas, mostrar solo ~6-8 marcadores intermedios
-    // Primeras 2 (índices 1, 2)
-    if (index <= 2) return true;
-
-    // Últimas 2 (antes de la última que ya se muestra)
-    if (index >= totalStops - 3) return true;
-
-    // Algunas intermedias estratégicas
-    final quarter = (totalStops / 4).round();
-    final half = (totalStops / 2).round();
-    final threeQuarters = ((totalStops * 3) / 4).round();
-
-    if (index == quarter || index == half || index == threeQuarters) {
-      return true;
-    }
-
-    return false; // Ocultar el resto
-  }
-
-  /// Ajusta el zoom del mapa para mostrar toda la ruta proporcionada
-  void _fitBoundsToRoute(List<LatLng> routePoints) {
-    if (routePoints.isEmpty || !_isMapReady) return;
-
-    // Calcular límites de la ruta
-    double minLat = routePoints.first.latitude;
-    double maxLat = routePoints.first.latitude;
-    double minLng = routePoints.first.longitude;
-    double maxLng = routePoints.first.longitude;
-
-    for (final point in routePoints) {
-      if (point.latitude < minLat) minLat = point.latitude;
-      if (point.latitude > maxLat) maxLat = point.latitude;
-      if (point.longitude < minLng) minLng = point.longitude;
-      if (point.longitude > maxLng) maxLng = point.longitude;
-    }
-
-    // Calcular centro
-    final centerLat = (minLat + maxLat) / 2;
-    final centerLng = (minLng + maxLng) / 2;
-    final center = LatLng(centerLat, centerLng);
-
-    // Calcular zoom apropiado basado en la extensión
-    final latDiff = maxLat - minLat;
-    final lngDiff = maxLng - minLng;
-    final maxDiff = math.max(latDiff, lngDiff);
-
-    // Estimación simple de zoom (puede necesitar ajuste)
-    double zoom = 14.0;
-    if (maxDiff > 0.1) {
-      zoom = 11.0;
-    } else if (maxDiff > 0.05) {
-      zoom = 12.0;
-    } else if (maxDiff > 0.02) {
-      zoom = 13.0;
-    }
-
-    _log('🗺️ [FIT_BOUNDS] Centro: $center, Zoom: $zoom, Extensión: $maxDiff');
-
-    _moveMap(center, zoom);
-  }
-
   void _moveMap(LatLng target, double zoom) {
     // Movimiento inmediato (solo se usa para carga inicial del mapa)
     if (_isMapReady) {
@@ -2288,7 +1484,8 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
       if (IntegratedNavigationService.instance.hasActiveNavigation) {
         IntegratedNavigationService.instance.stopNavigation();
         setState(() {
-          _polylines.clear();
+          clearGeometryCache(); // ✅ Limpiar geometría del mixin
+          _simulationPolylines.clear(); // Limpiar también polylines de simulación
           _currentInstructions.clear();
           _showInstructionsPanel = false;
         });
@@ -2298,12 +1495,6 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
         TtsService.instance.speak('No hay ruta activa');
         return true;
       }
-    }
-
-    // CONFIRMACIÓN de abordaje (durante navegación activa)
-    if (_waitingBoardingConfirmation) {
-      TransitBoardingService.instance.confirmBoardingManually(command);
-      return true;
     }
 
     return false;
@@ -2436,82 +1627,6 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
       final instruction = _currentInstructions[step];
       _focusOnInstruction(step, speak: false);
       TtsService.instance.speak('Repitiendo paso ${step + 1}: $instruction');
-    }
-  }
-
-  /// CAP-30: Iniciar seguimiento en tiempo real
-  void _startRouteTracking() {
-    if (_polylines.isEmpty ||
-        RouteTrackingService.instance.destination == null) {
-      TtsService.instance.speak('No hay una ruta activa para seguir');
-      return;
-    }
-
-    setState(() {
-      _isTrackingRoute = true;
-    });
-
-    final destination = RouteTrackingService.instance.destination!;
-    final destinationName =
-        RouteTrackingService.instance.destinationName ?? 'destino';
-
-    // Extraer puntos de la ruta
-    final routePoints = _polylines.isNotEmpty
-        ? _polylines.first.points
-        : <LatLng>[];
-
-    RouteTrackingService.instance.startTracking(
-      plannedRoute: routePoints,
-      destination: destination,
-      destinationName: destinationName,
-    );
-
-    _showSuccessNotification(
-      'Seguimiento en tiempo real activado',
-      withVibration: true,
-    );
-  }
-
-  /// CAP-20: Recalcular ruta desde posición actual
-  /// Ahora usa IntegratedNavigationService en lugar del sistema legacy
-  Future<void> _recalculateRoute() async {
-    final activeNav = IntegratedNavigationService.instance.activeNavigation;
-    
-    if (_currentPosition == null || activeNav == null) {
-      _showWarningNotification('No hay navegación activa para recalcular');
-      return;
-    }
-
-    final destName = activeNav.destination;
-
-    setState(() => _isCalculatingRoute = true);
-    
-    await TtsService.instance.speak('Recalculando ruta a $destName');
-
-    try {
-      // Obtener coordenadas del destino desde el último paso
-      final lastStep = activeNav.steps.last;
-      final destLocation = lastStep.location;
-      
-      if (destLocation == null) {
-        _showWarningNotification('No se pudo obtener ubicación del destino');
-        setState(() => _isCalculatingRoute = false);
-        return;
-      }
-      
-      // Usar IntegratedNavigationService para recalcular
-      await _startIntegratedMoovitNavigation(
-        destName,
-        destLocation.latitude,
-        destLocation.longitude,
-      );
-
-      _showSuccessNotification('Ruta recalculada exitosamente');
-    } catch (e) {
-      _log('❌ [RECALCULATE] Error: $e');
-      _showErrorNotification('Error recalculando ruta');
-    } finally {
-      setState(() => _isCalculatingRoute = false);
     }
   }
 
@@ -2856,17 +1971,6 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
       // Anunciar inicio de búsqueda
       TtsService.instance.speak('Buscando ruta hacia $destination');
 
-      // ═══════════════════════════════════════════════════════════
-      // ✅ INTENTAR CARGAR DESDE CACHÉ OFFLINE
-      // ═══════════════════════════════════════════════════════════
-      final cacheKey = _generateCacheKey(
-        originLat: _currentPosition!.latitude.toStringAsFixed(4),
-        originLon: _currentPosition!.longitude.toStringAsFixed(4),
-        destLat: destLat.toStringAsFixed(4),
-        destLon: destLon.toStringAsFixed(4),
-        stepType: 'full_route',
-      );
-
       // Iniciar navegación integrada
       // Este servicio maneja: scraping Moovit, construcción de pasos,
       // geometrías separadas por paso, y anuncios TTS
@@ -2882,11 +1986,6 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
           );
 
       _log('🗺️ [MAP] startNavigation completado exitosamente');
-      
-      // ═══════════════════════════════════════════════════════════
-      // ✅ GUARDAR GEOMETRÍAS DE CADA PASO EN CACHÉ
-      // ═══════════════════════════════════════════════════════════
-      _cacheNavigationGeometries(navigation, cacheKey);
       _log('🗺️ [MAP] Navigation tiene ${navigation.steps.length} pasos');
 
       // ══════════════════════════════════════════════════════════════
@@ -2895,74 +1994,40 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
 
       _log('🗺️ [MAP] Configurando callbacks...');
 
-      IntegratedNavigationService.instance.onStepChanged = (step) {
+      IntegratedNavigationService.instance.onStepChanged = (step) async {
         if (!mounted) return;
 
-        setState(() {
-          // Usar geometría cacheada en lugar de llamar al servicio
-          final stepGeometry = _getCurrentStepGeometryCached();
-
-          if (step.type == 'walk') {
-            // CAMINATA: Línea NARANJA
-            _polylines = stepGeometry.isNotEmpty
-                ? [
-                    Polyline(
-                      points: stepGeometry,
-                      color: const Color(0xFFFF8C42), // NARANJA para caminata
-                      strokeWidth: 5.0,
-                    ),
-                  ]
-                : [];
-            _log('🚶 [WALK] Dibujando ruta de caminata NARANJA: ${stepGeometry.length} puntos');
-          } else if (step.type == 'wait_bus') {
-            // ESPERA EN PARADERO: MANTENER la línea naranja de caminata visible
-            _log('🚏 [WAIT_BUS] Manteniendo geometría de caminata NARANJA visible');
-            // NO modificar _polylines aquí - mantener la línea naranja
-          } else if (step.type == 'ride_bus') {
-            // VIAJE EN BUS: Línea ROJA (se dibuja en _simulateArrivalAtStop)
-            _log('🚌 [RIDE_BUS] Manteniendo geometría ROJA del bus');
-            // NO modificar _polylines aquí - ya se dibujó en _simulateArrivalAtStop
-          } else {
-            // Otros tipos de paso
-            _polylines = stepGeometry.isNotEmpty
-                ? [
-                    Polyline(
-                      points: stepGeometry,
-                      color: const Color(0xFFFF8C42),
-                      strokeWidth: 5.0,
-                    ),
-                  ]
-                : [];
-          }
-
-          // Actualizar marcadores: solo paso actual + destino final
-          final activeNav =
-              IntegratedNavigationService.instance.activeNavigation;
-          if (activeNav != null) {
+        // ✅ Actualizar geometría usando el mixin centralizado
+        final activeNav = IntegratedNavigationService.instance.activeNavigation;
+        if (activeNav != null) {
+          await updateNavigationGeometry(navigation: activeNav, forceRefresh: false);
+          
+          if (!mounted) return;
+          
+          setState(() {
+            // Actualizar marcadores: solo paso actual + destino final
             _updateNavigationMarkers(step, activeNav);
-          }
 
-          // Actualizar instrucciones: usar instrucciones detalladas de GraphHopper si están disponibles
-          if (step.streetInstructions != null &&
-              step.streetInstructions!.isNotEmpty) {
-            _currentInstructions = [
-              step.instruction, // Instrucción principal
-              '', // Línea en blanco
-              'Sigue estos pasos:', // Encabezado
-              ...step.streetInstructions!, // Instrucciones detalladas por calle
-            ];
-            _currentInstructionStep = 0;
-            _instructionFocusIndex = 0;
-            _log(
-              '📝 Instrucciones detalladas actualizadas: ${step.streetInstructions!.length} pasos',
-            );
-          } else {
-            // Fallback: solo instrucción principal
-            _currentInstructions = [step.instruction];
-            _currentInstructionStep = 0;
-            _instructionFocusIndex = 0;
-          }
-        });
+            // Actualizar instrucciones: usar instrucciones detalladas de GraphHopper si están disponibles
+            if (step.streetInstructions != null &&
+                step.streetInstructions!.isNotEmpty) {
+              _currentInstructions = [
+                step.instruction, // Instrucción principal
+                '', // Línea en blanco
+                'Sigue estos pasos:', // Encabezado
+                ...step.streetInstructions!, // Instrucciones detalladas por calle
+              ];
+              _currentInstructionStep = 0;
+              _log(
+                '📝 Instrucciones detalladas actualizadas: ${step.streetInstructions!.length} pasos',
+              );
+            } else {
+              // Fallback: solo instrucción principal
+              _currentInstructions = [step.instruction];
+              _currentInstructionStep = 0;
+            }
+          });
+        }
 
         // Anunciar nuevo paso y mostrar notificación
         _showNavigationNotification(step.instruction);
@@ -2992,10 +2057,6 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
         if (!mounted) return;
         _log('🎉 ¡Destino alcanzado!');
 
-        setState(() {
-          _isTrackingRoute = false;
-        });
-
         _showSuccessNotification(
           '¡Felicitaciones! Has llegado a tu destino',
           withVibration: true,
@@ -3009,27 +2070,8 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
         if (!mounted) return;
 
         setState(() {
-          // Actualizar UI con distancia/tiempo restante
-
-          // Usar geometría cacheada para evitar spam de llamadas
-          final activeNav =
-              IntegratedNavigationService.instance.activeNavigation;
-          final currentStep = activeNav?.currentStep;
-          final stepGeometry = _getCurrentStepGeometryCached();
-
-          if (currentStep?.type == 'ride_bus') {
-            // Para buses: NO dibujar línea, solo mantener paraderos como marcadores
-            _polylines = [];
-          } else if (stepGeometry.isNotEmpty) {
-            _polylines = [
-              Polyline(
-                points: stepGeometry,
-                color: const Color(0xFFE30613), // Color Red
-                strokeWidth: 5.0,
-              ),
-            ];
-          }
-
+          // ✅ La geometría ya se maneja en el mixin, solo actualizar posición y marcadores
+          
           // Actualizar posición del usuario
           final position = IntegratedNavigationService.instance.lastPosition;
           if (position != null) {
@@ -3053,10 +2095,6 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
       IntegratedNavigationService.instance.onBusArrivalsUpdated = (arrivals) {
         if (!mounted) return;
         
-        setState(() {
-          _currentArrivals = arrivals;
-        });
-        
         _log('🔄 [ARRIVALS] UI actualizada: ${arrivals.arrivals.length} buses');
       };
 
@@ -3064,10 +2102,6 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
         if (!mounted) return;
         
         _log('🚨 [RECALCULAR] Bus $routeNumber pasó - iniciando recálculo de ruta');
-        
-        setState(() {
-          _needsRouteRecalculation = true;
-        });
         
         // ===================================================================
         // ALERTAS AL USUARIO - MEJORADAS
@@ -3117,7 +2151,6 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
             
             setState(() {
               _updateNavigationMapState(newNav);
-              _needsRouteRecalculation = false;
             });
             
             // Verificar si encontró una nueva ruta con bus
@@ -3144,10 +2177,6 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
             );
             
             _showErrorNotification('❌ No se encontró ruta alternativa');
-            
-            setState(() {
-              _needsRouteRecalculation = false;
-            });
           }
         }
       };
@@ -3159,7 +2188,7 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
         // Configurar polyline y marcadores iniciales
         _updateNavigationMapState(navigation);
 
-        _log('🗺️ [MAP] Polylines después de actualizar: ${_polylines.length}');
+        _log('🗺️ [MAP] Polylines después de actualizar: ${navigationPolylines.length}'); // ✅ Usar getter del mixin
         _log('🗺️ [MAP] Markers después de actualizar: ${_markers.length}');
       });
 
@@ -3175,50 +2204,26 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
   }
 
   /// Actualiza el estado del mapa (polylines y marcadores) para la navegación activa
-  void _updateNavigationMapState(ActiveNavigation navigation) {
-    final currentStepIndex = navigation.currentStepIndex;
-    final previousStepIndex = _cachedStepIndex;
+  /// ✅ REFACTORIZADO: Ahora usa NavigationGeometryMixin centralizado
+  void _updateNavigationMapState(ActiveNavigation navigation) async {
+    _log('🗺️ [MAP] Actualizando estado del mapa...');
     
-    // Solo actualizar caché si cambió el paso
-    if (_cachedStepIndex != currentStepIndex) {
-      _cachedStepGeometry = IntegratedNavigationService.instance.currentStepGeometry;
-      _cachedStepIndex = currentStepIndex;
-      
-      _log(
-        '🗺️ [MAP] Cambio de paso: $previousStepIndex → $currentStepIndex (Geometría: ${_cachedStepGeometry.length} puntos)',
-      );
-    }
-
-    // Actualizar polyline del paso actual
-    if (navigation.currentStep?.type == 'wait_bus') {
-      // NO mostrar geometría del bus hasta que confirme con "Simular"
-      _polylines = [];
-      _log('🗺️ [MAP] WAIT_BUS: Polilínea limpia (esperando confirmación)');
-    } else if (navigation.currentStep?.type == 'ride_bus') {
-      // ✅ MANTENER la geometría ROJA del bus (ya dibujada y RECORTADA en _simulateArrivalAtStop)
-      // NO sobrescribir - confiar en la geometría recortada existente
-      _log('🗺️ [MAP] RIDE_BUS: Manteniendo polilínea ROJA recortada (${_polylines.length} polilíneas)');
-      if (_polylines.isNotEmpty) {
-        _log('🗺️ [MAP] RIDE_BUS: Polilínea actual tiene ${_polylines.first.points.length} puntos');
-      } else {
-        _log('⚠️ [MAP] RIDE_BUS: No hay polilínea dibujada - esto no debería pasar');
-      }
-    } else {
-      // Caminata: mostrar polilínea roja
-      _polylines = _cachedStepGeometry.isNotEmpty
-          ? [
-              Polyline(
-                points: _cachedStepGeometry,
-                color: const Color(0xFFE30613), // Rojo para walk
-                strokeWidth: 5.0,
-              ),
-            ]
-          : [];
-      _log('🗺️ [MAP] WALK: Polilínea roja (${_cachedStepGeometry.length} puntos)');
-    }
+    // ✅ Usar mixin centralizado para gestionar geometría
+    await updateNavigationGeometry(
+      navigation: navigation,
+      forceRefresh: false,
+    );
 
     // Actualizar marcadores
     _updateNavigationMarkers(navigation.currentStep, navigation);
+    
+    // Notificar cambio de estado
+    if (mounted) {
+      setState(() {
+        // El mixin ya actualizó navigationPolylines
+        _log('🗺️ [MAP] Estado actualizado: ${navigationPolylines.length} polilíneas');
+      });
+    }
     
     // NO AUTO-CENTRAR - el usuario tiene control total del mapa en todo momento
     // El centrado solo ocurre al cargar el mapa inicialmente
@@ -3361,8 +2366,6 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
         // Crear marcadores con diseño formal y empresarial
         for (final index in visibleStopIndices) {
           final stop = stops[index];
-          final isFirst = index == 0;
-          final isLast = index == stops.length - 1;
           final isCurrent = _isSimulating && index == _currentSimulatedBusStopIndex;
           
           newMarkers.add(
@@ -3724,17 +2727,6 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
   }
 
   /// Retorna el icono y color apropiado para cada tipo de paso
-  (IconData, Color) _getStepMarkerStyle(String stepType) {
-    return switch (stepType) {
-      'walk' => (Icons.directions_walk, Colors.blue),
-      'wait_bus' => (Icons.directions_bus, Colors.orange),
-      'ride_bus' => (Icons.drive_eta, Colors.red),
-      'transfer' => (Icons.swap_horiz, Colors.purple),
-      'arrival' => (Icons.flag, Colors.green),
-      _ => (Icons.navigation, Colors.grey),
-    };
-  }
-
   /// Comando de voz para controlar navegación integrada
   void _onIntegratedNavigationVoiceCommand(String command) async {
     final normalized = command.toLowerCase();
@@ -3886,9 +2878,8 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
     if (normalized.contains('cancelar navegación') ||
         normalized.contains('detener navegación')) {
       IntegratedNavigationService.instance.cancelNavigation();
+      clearGeometryCache(); // ✅ Limpiar caché del mixin
       setState(() {
-        _isTrackingRoute = false;
-        _polylines.clear();
         _markers.clear();
         _currentInstructions.clear();
         _showInstructionsPanel = false;
@@ -4115,204 +3106,11 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
     );
   }
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // MÉTODOS DE CACHÉ Y COMPRESIÓN DE GEOMETRÍAS
-  // ═══════════════════════════════════════════════════════════════════════
-
-  /// Intenta cargar geometría desde caché, si no existe la obtiene del servicio
-  /// y la guarda comprimida para uso futuro
-  Future<List<LatLng>> _getOrCacheGeometry({
-    required String cacheKey,
-    required Future<List<LatLng>> Function() fetchGeometry,
-    bool compress = true,
-    double epsilon = 0.0001,
-  }) async {
-    try {
-      // 1. Intentar cargar desde caché
-      final cached = await GeometryCacheService.instance.getRoute(cacheKey);
-      if (cached != null && cached.isNotEmpty) {
-        _log('💾 [CACHE] Geometría cargada desde caché: $cacheKey (${cached.length} pts)');
-        return cached;
-      }
-
-      // 2. No hay caché, obtener desde servicio
-      _log('🌐 [CACHE] No hay caché, obteniendo desde servicio: $cacheKey');
-      final geometry = await fetchGeometry();
-
-      if (geometry.isEmpty) {
-        _log('⚠️ [CACHE] Geometría vacía desde servicio: $cacheKey');
-        return geometry;
-      }
-
-      // 3. Guardar en caché (comprimido si es necesario)
-      unawaited(
-        GeometryCacheService.instance.saveRoute(
-          key: cacheKey,
-          geometry: geometry,
-          compress: compress,
-          epsilon: epsilon,
-          metadata: {
-            'timestamp': DateTime.now().toIso8601String(),
-            'source': 'integrated_navigation',
-          },
-        ),
-      );
-
-      // 4. Retornar comprimido si se solicitó
-      if (compress) {
-        final compressed = PolylineCompression.compress(
-          points: geometry,
-          epsilon: epsilon,
-        );
-        _log(
-          '🗜️ [COMPRESS] ${geometry.length} → ${compressed.length} pts '
-          '(${((1 - compressed.length / geometry.length) * 100).toStringAsFixed(1)}% reducción)',
-        );
-        return compressed;
-      }
-
-      return geometry;
-    } catch (e, st) {
-      _log('❌ [CACHE] Error en getOrCacheGeometry: $e', error: e, stackTrace: st);
-      // Fallback: intentar obtener sin caché
-      try {
-        return await fetchGeometry();
-      } catch (e2) {
-        _log('❌ [CACHE] Error en fallback: $e2');
-        return [];
-      }
-    }
-  }
-
-  /// Genera una clave de caché única para una geometría de paso
-  String _generateCacheKey({
-    required String originLat,
-    required String originLon,
-    required String destLat,
-    required String destLon,
-    required String stepType,
-    int? stepIndex,
-  }) {
-    // Redondear coordenadas a 4 decimales (aprox. 11m de precisión)
-    // para agrupar rutas similares
-    final origin = '${originLat}_$originLon';
-    final dest = '${destLat}_$destLon';
-    final step = stepIndex != null ? '${stepType}_$stepIndex' : stepType;
-    
-    return 'route_${origin}_to_${dest}_$step';
-  }
-
-  /// Comprime una lista de puntos usando Douglas-Peucker
-  /// Útil para polilíneas ya obtenidas que necesitan optimización
-  List<LatLng> _compressPolyline(List<LatLng> points, {double epsilon = 0.0001}) {
-    if (points.length <= 2) return points;
-
-    final compressed = PolylineCompression.compress(
-      points: points,
-      epsilon: epsilon,
-    );
-
-    final reduction = (1 - compressed.length / points.length) * 100;
-    _log(
-      '🗜️ [COMPRESS] Douglas-Peucker: ${points.length} → ${compressed.length} pts '
-      '(${reduction.toStringAsFixed(1)}% reducción, epsilon=$epsilon)',
-    );
-
-    return compressed;
-  }
-
-  /// Obtiene estadísticas del caché para debugging/monitoring
-  Future<void> _logCacheStats() async {
-    try {
-      final stats = await GeometryCacheService.instance.getStats();
-      _log('📊 [CACHE STATS] ${stats.toString()}');
-    } catch (e) {
-      _log('⚠️ [CACHE] Error obteniendo stats: $e');
-    }
-  }
-
-  /// Cachea las geometrías de todos los pasos de navegación en background
-  void _cacheNavigationGeometries(ActiveNavigation navigation, String routeCacheKey) {
-    // Ejecutar en background para no bloquear UI
-    Future(() async {
-      try {
-        int cached = 0;
-        
-        for (int i = 0; i < navigation.steps.length; i++) {
-          final step = navigation.steps[i];
-          
-          // Obtener geometría del paso desde el servicio
-          List<LatLng> geometry = [];
-          if (step.type == 'walk' || step.type == 'ride_bus') {
-            // Buscar geometría en los legs del itinerario
-            try {
-              if (step.type == 'walk') {
-                // Buscar leg de caminata correspondiente
-                final walkLegs = navigation.itinerary.legs
-                    .where((leg) => leg.type == 'walk')
-                    .toList();
-                
-                if (i < walkLegs.length && walkLegs[i].geometry != null) {
-                  geometry = walkLegs[i].geometry!;
-                }
-              } else if (step.type == 'ride_bus') {
-                // Buscar leg de bus
-                final busLeg = navigation.itinerary.legs
-                    .firstWhere((leg) => leg.type == 'bus');
-                
-                if (busLeg.geometry != null) {
-                  geometry = busLeg.geometry!;
-                }
-              }
-            } catch (e) {
-              _log('⚠️ [CACHE] No se pudo obtener geometría para paso $i: $e');
-              continue;
-            }
-          }
-          
-          if (geometry.isEmpty) continue;
-          
-          // Generar clave única para este paso
-          final stepKey = '${routeCacheKey}_step_$i';
-          
-          // Guardar en caché comprimido
-          final success = await GeometryCacheService.instance.saveRoute(
-            key: stepKey,
-            geometry: geometry,
-            compress: true,
-            epsilon: geometry.length > 200 ? 0.00015 : 0.0001,
-            ttl: const Duration(days: 7),
-            metadata: {
-              'stepType': step.type,
-              'stepIndex': i,
-              'instruction': step.instruction,
-              'timestamp': DateTime.now().toIso8601String(),
-            },
-          );
-          
-          if (success) cached++;
-        }
-        
-        _log('💾 [CACHE] Guardados $cached/${navigation.steps.length} pasos en caché offline');
-        
-        // Log de estadísticas
-        await _logCacheStats();
-      } catch (e, st) {
-        _log('❌ [CACHE] Error cacheando geometrías de navegación: $e', error: e, stackTrace: st);
-      }
-    });
-  }
-
-  @override
   @override
   void dispose() {
     // ✅ TimerManagerMixin limpia automáticamente: feedback, confirmation, speechTimeout, walkSimulation, resultDebounce
 
     unawaited(TtsService.instance.releaseContext('map_navigation'));
-
-    // Liberar servicios de tracking
-    RouteTrackingService.instance.dispose();
-    TransitBoardingService.instance.dispose();
 
     // Garantiza liberar el reconocimiento si la vista se destruye
     if (_isListening) {
@@ -4334,10 +3132,7 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
             constraints.maxHeight * 0.26,
           );
           final double gap = _overlayGap(context);
-          final double floatingPrimary = overlayBase + gap * 2;
           final double floatingSecondary = overlayBase + gap * 1.15;
-          final bool hasActiveNavigation =
-              IntegratedNavigationService.instance.activeNavigation != null;
 
           return Stack(
             children: [
@@ -4391,8 +3186,12 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
                         tileSize: 256,
                         panBuffer: 1, // Reduce tiles cargados fuera de pantalla
                       ),
-                      if (_polylines.isNotEmpty)
-                        PolylineLayer(polylines: _polylines),
+                      // ✅ PRIORIDAD: Durante simulación, SOLO mostrar _simulationPolylines
+                      // Esto evita conflictos entre navegación real y simulación de debug
+                      if (_isSimulating && _simulationPolylines.isNotEmpty)
+                        PolylineLayer(polylines: _simulationPolylines)
+                      else if (!_isSimulating && navigationPolylines.isNotEmpty) 
+                        PolylineLayer(polylines: navigationPolylines),
                       if (_markers.isNotEmpty) MarkerLayer(markers: _markers),
                     ],
                   ),

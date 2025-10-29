@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import '../services/device/auth_storage.dart';
 import '../services/backend/server_config.dart';
@@ -26,7 +25,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           icon: const Icon(Icons.arrow_back),
           onPressed: () => Navigator.pop(context),
         ),
-        title: const Text(''),
+        title: const Text('Configuración'),
       ),
       body: Padding(
         padding: const EdgeInsets.all(16.0),
@@ -37,24 +36,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
               builder: (context, baseUrl, _) {
                 return _ActionTile(
                   icon: Icons.cloud_outlined,
-                  title: 'Servidor backend',
+                  title: 'Servidor Backend',
                   subtitle: baseUrl,
                   onTap: _showServerConfigDialog,
                 );
               },
-            ),
-            const SizedBox(height: 16),
-            _ActionTile(
-              icon: Icons.record_voice_over_outlined,
-              title: 'Cambiar Voz del Asistente',
-              subtitle: 'Elige entre 6 voces diferentes',
-              onTap: _showVoiceSelector,
-            ),
-            const SizedBox(height: 16),
-            _ActionTile(
-              icon: Icons.warning_amber_rounded,
-              title: 'Reportar Errores',
-              onTap: () {},
             ),
             const SizedBox(height: 16),
             _ActionTile(
@@ -90,162 +76,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (!mounted || !updated) return;
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('URL del servidor actualizada.')),
-    );
-  }
-
-  /// Muestra selector de voz para usuarios no videntes
-  Future<void> _showVoiceSelector() async {
-    final voiceMap = {
-      'F1': {
-        'name': 'Asistente Clara',
-        'emoji': '👩',
-        'description': 'Voz femenina clara y dulce',
-      },
-      'F2': {
-        'name': 'Asistente María',
-        'emoji': '👩‍🦰',
-        'description': 'Voz femenina suave y cálida',
-      },
-      'F3': {
-        'name': 'Asistente Ana',
-        'emoji': '👩‍🦱',
-        'description': 'Voz femenina natural',
-      },
-      'M1': {
-        'name': 'Asistente Carlos',
-        'emoji': '👨',
-        'description': 'Voz masculina profunda',
-      },
-      'M2': {
-        'name': 'Asistente David',
-        'emoji': '👨‍💼',
-        'description': 'Voz masculina profesional',
-      },
-      'M3': {
-        'name': 'Asistente Miguel',
-        'emoji': '👨‍🦱',
-        'description': 'Voz masculina equilibrada',
-      },
-    };
-
-    // Anunciar que se abre el selector
-    await TtsService.instance.speak(
-      'Selector de voz. Toca una opción para escuchar y seleccionar tu asistente preferido.',
-    );
-
-    if (!mounted) return;
-
-    await showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.white,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (context) => Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                const Icon(
-                  Icons.record_voice_over,
-                  color: Color(0xFF00BCD4),
-                  size: 28,
-                ),
-                const SizedBox(width: 12),
-                const Text(
-                  'Elige tu Asistente',
-                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Toca para escuchar cada voz',
-              style: TextStyle(color: Colors.grey[600], fontSize: 14),
-            ),
-            const SizedBox(height: 20),
-            SizedBox(
-              height: 320,
-              child: ListView.builder(
-                itemCount: voiceMap.length,
-                itemBuilder: (context, index) {
-                  final voiceId = voiceMap.keys.elementAt(index);
-                  final voice = voiceMap[voiceId]!;
-
-                  return Card(
-                    margin: const EdgeInsets.only(bottom: 12),
-                    elevation: 2,
-                    child: ListTile(
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 8,
-                      ),
-                      leading: Container(
-                        width: 50,
-                        height: 50,
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF00BCD4).withValues(alpha: 0.1),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Center(
-                          child: Text(
-                            voice['emoji'] as String,
-                            style: const TextStyle(fontSize: 28),
-                          ),
-                        ),
-                      ),
-                      title: Text(
-                        voice['name'] as String,
-                        style: const TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 16,
-                        ),
-                      ),
-                      subtitle: Padding(
-                        padding: const EdgeInsets.only(top: 4),
-                        child: Text(
-                          voice['description'] as String,
-                          style: TextStyle(
-                            color: Colors.grey[600],
-                            fontSize: 13,
-                          ),
-                        ),
-                      ),
-                      trailing: const Icon(
-                        Icons.play_circle_outline,
-                        color: Color(0xFF00BCD4),
-                        size: 32,
-                      ),
-                      onTap: () async {
-                        // Probar voz con TTS clásico
-                        await TtsService.instance.speak(
-                          'Hola, soy ${voice['name']}. Estaré guiándote en WayFind CL.',
-                        );
-
-                        // Guardar selección
-                        final prefs = await SharedPreferences.getInstance();
-                        await prefs.setString('assistant_voice', voiceId);
-
-                        if (context.mounted) {
-                          Navigator.pop(context);
-
-                          // Confirmar selección
-                          await TtsService.instance.speak(
-                            '${voice['name']} seleccionada. Regresando a configuración.',
-                          );
-                        }
-                      },
-                    ),
-                  );
-                },
-              ),
-            ),
-          ],
-        ),
-      ),
     );
   }
 }
