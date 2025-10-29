@@ -2231,6 +2231,97 @@ class _MapScreenState extends State<MapScreen>
     // El centrado solo ocurre al cargar el mapa inicialmente
   }
 
+  /// Calcula el índice de la instrucción actual basándose en la posición GPS del usuario
+  /// Divide la geometría en segmentos y determina en cuál está el usuario
+  int _calculateCurrentInstructionIndex({
+    required List<String> instructions,
+    required dynamic currentStep,
+    required dynamic activeNav,
+  }) {
+    // Si no hay GPS, mostrar la primera instrucción
+    if (_currentPosition == null) return 0;
+    
+    // Obtener geometría del paso actual
+    final geometry = _getCurrentStepGeometryCached();
+    if (geometry.isEmpty || geometry.length < 2) return 0;
+    
+    // Posición actual del usuario
+    final userLat = _currentPosition!.latitude;
+    final userLon = _currentPosition!.longitude;
+    
+    // Encontrar el punto más cercano en la geometría
+    int closestPointIndex = 0;
+    double minDistance = double.infinity;
+    
+    for (int i = 0; i < geometry.length; i++) {
+      final distance = Geolocator.distanceBetween(
+        userLat,
+        userLon,
+        geometry[i].latitude,
+        geometry[i].longitude,
+      );
+      
+      if (distance < minDistance) {
+        minDistance = distance;
+        closestPointIndex = i;
+      }
+    }
+    
+    // Calcular progreso: qué porcentaje de la ruta ha completado el usuario
+    final progress = closestPointIndex / geometry.length;
+    
+    // Mapear el progreso al índice de instrucción
+    // Si hay 5 instrucciones y el usuario va al 60% de la ruta, mostrar instrucción 3
+    final instructionIndex = (progress * instructions.length).floor();
+    
+    // Asegurar que el índice esté dentro del rango válido
+    return instructionIndex.clamp(0, instructions.length - 1);
+  }
+
+  /// Determina el icono adecuado según el texto de la instrucción
+  IconData _getInstructionIcon(String instruction) {
+    final lowerInstruction = instruction.toLowerCase();
+    
+    // Detectar giros a la derecha
+    if (lowerInstruction.contains('derecha') || 
+        lowerInstruction.contains('gira a la derecha') ||
+        lowerInstruction.contains('dobla a la derecha')) {
+      return Icons.turn_right;
+    }
+    
+    // Detectar giros a la izquierda
+    if (lowerInstruction.contains('izquierda') || 
+        lowerInstruction.contains('gira a la izquierda') ||
+        lowerInstruction.contains('dobla a la izquierda')) {
+      return Icons.turn_left;
+    }
+    
+    // Detectar continuar recto
+    if (lowerInstruction.contains('continúa') || 
+        lowerInstruction.contains('sigue') ||
+        lowerInstruction.contains('recto') ||
+        lowerInstruction.contains('adelante')) {
+      return Icons.straight;
+    }
+    
+    // Detectar llegada/destino
+    if (lowerInstruction.contains('llegaste') || 
+        lowerInstruction.contains('destino') ||
+        lowerInstruction.contains('has llegado')) {
+      return Icons.place;
+    }
+    
+    // Detectar inicio
+    if (lowerInstruction.contains('dirígete') || 
+        lowerInstruction.contains('sal') ||
+        lowerInstruction.contains('comienza')) {
+      return Icons.north;
+    }
+    
+    // Default: caminar
+    return Icons.directions_walk;
+  }
+
   /// Obtiene la geometría del paso actual usando caché para optimización
   /// ✅ Aplica compresión Douglas-Peucker automáticamente
   List<LatLng> _getCurrentStepGeometryCached() {
@@ -3439,7 +3530,37 @@ class _MapScreenState extends State<MapScreen>
         currentStep.streetInstructions!.isNotEmpty) {
       
       final instructions = currentStep.streetInstructions!;
-      final currentInstruction = instructions.first; // Mostrar la primera instrucción
+      
+      // ✅ CRÍTICO: Calcular qué instrucción mostrar según posición GPS actual
+      final currentInstructionIndex = _calculateCurrentInstructionIndex(
+        instructions: instructions,
+        currentStep: currentStep,
+        activeNav: activeNav,
+      );
+      
+      final currentInstruction = instructions[currentInstructionIndex];
+      final progress = '${currentInstructionIndex + 1}/${instructions.length}';
+      
+      // ✅ Calcular distancia restante al destino del paso actual
+      String distanceInfo = '';
+      if (_currentPosition != null) {
+        final geometry = _getCurrentStepGeometryCached();
+        if (geometry.isNotEmpty) {
+          final destination = geometry.last;
+          final distanceMeters = Geolocator.distanceBetween(
+            _currentPosition!.latitude,
+            _currentPosition!.longitude,
+            destination.latitude,
+            destination.longitude,
+          );
+          
+          if (distanceMeters < 1000) {
+            distanceInfo = '${distanceMeters.round()}m';
+          } else {
+            distanceInfo = '${(distanceMeters / 1000).toStringAsFixed(1)}km';
+          }
+        }
+      }
       
       return SafeArea(
         top: false,
@@ -3469,7 +3590,7 @@ class _MapScreenState extends State<MapScreen>
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // Icono y título
+                    // Fila superior: Icono + Título + Progreso
                     Row(
                       children: [
                         Container(
@@ -3495,6 +3616,22 @@ class _MapScreenState extends State<MapScreen>
                             ),
                           ),
                         ),
+                        // ✅ Mostrar progreso de instrucciones
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.3),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Text(
+                            progress,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ),
                       ],
                     ),
                     const SizedBox(height: 16),
@@ -3505,25 +3642,53 @@ class _MapScreenState extends State<MapScreen>
                         color: Colors.white.withValues(alpha: 0.2),
                         borderRadius: BorderRadius.circular(16),
                       ),
-                      child: Row(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Icon(
-                            Icons.turn_right,
-                            color: Colors.white,
-                            size: 28,
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Text(
-                              currentInstruction,
-                              style: const TextStyle(
+                          Row(
+                            children: [
+                              // ✅ Icono dinámico según la instrucción
+                              Icon(
+                                _getInstructionIcon(currentInstruction),
                                 color: Colors.white,
-                                fontSize: 16,
-                                fontWeight: FontWeight.w600,
-                                height: 1.3,
+                                size: 28,
                               ),
-                            ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Text(
+                                  currentInstruction,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w600,
+                                    height: 1.3,
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
+                          // ✅ Mostrar distancia restante si está disponible
+                          if (distanceInfo.isNotEmpty) ...[
+                            const SizedBox(height: 12),
+                            Row(
+                              children: [
+                                const Icon(
+                                  Icons.location_on,
+                                  color: Colors.white70,
+                                  size: 18,
+                                ),
+                                const SizedBox(width: 6),
+                                Text(
+                                  'Faltan $distanceInfo al destino',
+                                  style: const TextStyle(
+                                    color: Colors.white70,
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
                         ],
                       ),
                     ),
