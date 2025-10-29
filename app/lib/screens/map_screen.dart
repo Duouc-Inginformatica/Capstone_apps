@@ -10,6 +10,7 @@ import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:vibration/vibration.dart';
 import '../services/device/tts_service.dart';
+import '../services/device/smart_vibration_service.dart';
 import '../services/backend/address_validation_service.dart';
 import '../services/backend/bus_arrivals_service.dart';
 import '../services/backend/bus_geometry_service.dart';
@@ -89,6 +90,14 @@ class _MapScreenState extends State<MapScreen>
   // Control de simulación GPS
   bool _isSimulating = false; // Evita auto-centrado durante simulación
   int _currentSimulatedBusStopIndex = -1; // Índice del paradero actual durante simulación de bus
+  
+  // ✅ Anuncios automáticos de instrucciones
+  int _lastAnnouncedInstructionIndex = -1;
+  
+  // ✅ Monitoreo de llegadas de bus
+  Timer? _busArrivalMonitor;
+  String? _monitoredBusRoute;
+  String? _monitoredStopCode;
   
   // ============================================================================
   // SIMULACIÓN REALISTA CON DESVIACIONES (SOLO PARA DESARROLLO/DEBUG)
@@ -347,6 +356,9 @@ class _MapScreenState extends State<MapScreen>
       // Detener tracking de llegadas (usuario ya subió al bus)
       _log('🛑 [ARRIVALS] Deteniendo tracking - usuario subió al bus');
       BusArrivalsService.instance.stopTracking();
+      
+      // ✅ NUEVO: Detener monitoreo de bus (usuario ya subió)
+      _stopBusArrivalMonitoring();
       
       // Verificar que existe un siguiente paso de tipo ride_bus
       if (activeNav.currentStepIndex < activeNav.steps.length - 1) {
@@ -685,6 +697,9 @@ class _MapScreenState extends State<MapScreen>
               if (stopCode != null && stopCode.isNotEmpty && routeNumber != null) {
                 _log('📡 [ARRIVALS] Consultando llegada del bus $routeNumber en paradero $stopCode');
                 final arrivals = await BusArrivalsService.instance.getBusArrivals(stopCode);
+                
+                // ✅ NUEVO: Iniciar monitoreo en tiempo real
+                _startBusArrivalMonitoring(stopCode, routeNumber);
                 
                 if (arrivals != null) {
                   final targetBus = arrivals.findBus(routeNumber);
@@ -1282,6 +1297,12 @@ class _MapScreenState extends State<MapScreen>
       targetWaypoint.longitude,
     );
 
+    // ✅ NUEVO: Alertas de proximidad para giros
+    _checkProximityAlerts(currentPos, currentStep, stepGeometry);
+    
+    // ✅ NUEVO: Detectar desviación de la ruta
+    _checkDeviationFromRoute(currentPos, stepGeometry);
+
     // Umbral de llegada: 15 metros
     const double arrivalThreshold = 15.0;
 
@@ -1303,6 +1324,272 @@ class _MapScreenState extends State<MapScreen>
           }
         });
       }
+    }
+  }
+  
+  /// ✅ NUEVO: Detecta proximidad a giros y alerta al usuario
+  DateTime? _lastProximityAlert;
+  
+  void _checkProximityAlerts(Position currentPos, dynamic currentStep, List<LatLng> geometry) {
+    // No alertar más de una vez cada 15 segundos
+    if (_lastProximityAlert != null && 
+        DateTime.now().difference(_lastProximityAlert!) < const Duration(seconds: 15)) {
+      return;
+    }
+    
+    // Verificar si hay instrucciones de calle
+    if (currentStep.streetInstructions == null || 
+        currentStep.streetInstructions!.isEmpty) {
+      return;
+    }
+    
+    final instructions = currentStep.streetInstructions! as List<String>;
+    
+    // Calcular índice de instrucción actual (sin anunciar)
+    final currentInstructionIndex = _calculateCurrentInstructionIndexSilent(
+      instructions: instructions,
+      geometry: geometry,
+    );
+    
+    // Si hay una siguiente instrucción
+    if (currentInstructionIndex < instructions.length - 1) {
+      final nextInstruction = instructions[currentInstructionIndex + 1];
+      
+      // Estimar distancia a la siguiente instrucción
+      // (dividir geometría entre instrucciones)
+      final pointsPerInstruction = geometry.length / instructions.length;
+      final nextInstructionPointIndex = ((currentInstructionIndex + 1) * pointsPerInstruction).round();
+      
+      if (nextInstructionPointIndex < geometry.length) {
+        final nextInstructionPoint = geometry[nextInstructionPointIndex];
+        
+        final distanceToNextInstruction = Geolocator.distanceBetween(
+          currentPos.latitude,
+          currentPos.longitude,
+          nextInstructionPoint.latitude,
+          nextInstructionPoint.longitude,
+        );
+        
+        // ALERTA: Giro en 50 metros
+        if (distanceToNextInstruction < 50 && distanceToNextInstruction > 30) {
+          _lastProximityAlert = DateTime.now();
+          SmartVibrationService.instance.vibrate(VibrationType.nearTurn);
+          TtsService.instance.speak('En 50 metros, $nextInstruction', urgent: false);
+          _log('⚠️ [PROXIMITY] Alerta 50m: $nextInstruction');
+        }
+        // ALERTA CRÍTICA: Giro en 10 metros
+        else if (distanceToNextInstruction < 10) {
+          _lastProximityAlert = DateTime.now();
+          SmartVibrationService.instance.vibrate(VibrationType.criticalTurn);
+          TtsService.instance.speak('Ahora, $nextInstruction', urgent: true);
+          _log('🔴 [PROXIMITY] Alerta CRÍTICA: $nextInstruction');
+        }
+      }
+    }
+  }
+  
+  /// Versión silenciosa que no anuncia (para alertas de proximidad)
+  int _calculateCurrentInstructionIndexSilent({
+    required List<String> instructions,
+    required List<LatLng> geometry,
+  }) {
+    if (_currentPosition == null || geometry.isEmpty || geometry.length < 2) return 0;
+    
+    final userLat = _currentPosition!.latitude;
+    final userLon = _currentPosition!.longitude;
+    
+    int closestPointIndex = 0;
+    double minDistance = double.infinity;
+    
+    for (int i = 0; i < geometry.length; i++) {
+      final distance = Geolocator.distanceBetween(
+        userLat,
+        userLon,
+        geometry[i].latitude,
+        geometry[i].longitude,
+      );
+      
+      if (distance < minDistance) {
+        minDistance = distance;
+        closestPointIndex = i;
+      }
+    }
+    
+    final progress = closestPointIndex / geometry.length;
+    final instructionIndex = (progress * instructions.length).floor();
+    
+    return instructionIndex.clamp(0, instructions.length - 1);
+  }
+  
+  /// ✅ NUEVO: Detecta si el usuario se desvió de la ruta
+  DateTime? _lastDeviationCheck;
+  bool _isCurrentlyOffRoute = false;
+  
+  void _checkDeviationFromRoute(Position currentPos, List<LatLng> geometry) {
+    // No verificar más de una vez cada 10 segundos
+    if (_lastDeviationCheck != null && 
+        DateTime.now().difference(_lastDeviationCheck!) < const Duration(seconds: 10)) {
+      return;
+    }
+    
+    _lastDeviationCheck = DateTime.now();
+    
+    if (geometry.isEmpty) return;
+    
+    // Encontrar distancia al punto más cercano de la ruta
+    double minDistanceToRoute = double.infinity;
+    for (final point in geometry) {
+      final distance = Geolocator.distanceBetween(
+        currentPos.latitude,
+        currentPos.longitude,
+        point.latitude,
+        point.longitude,
+      );
+      minDistanceToRoute = math.min(minDistanceToRoute, distance);
+    }
+    
+    // UMBRAL: Si está a más de 30m de la ruta, se considera desviado
+    const double deviationThreshold = 30.0;
+    
+    if (minDistanceToRoute > deviationThreshold && !_isCurrentlyOffRoute) {
+      _isCurrentlyOffRoute = true;
+      _handleDeviation(currentPos, minDistanceToRoute);
+    } else if (minDistanceToRoute <= deviationThreshold && _isCurrentlyOffRoute) {
+      // Usuario volvió a la ruta
+      _isCurrentlyOffRoute = false;
+      SmartVibrationService.instance.vibrate(VibrationType.success);
+      TtsService.instance.speak('Has vuelto a la ruta correcta', urgent: false);
+      _log('✅ [DEVIATION] Usuario volvió a la ruta');
+    }
+  }
+  
+  /// Maneja la desviación del usuario de la ruta planificada
+  Future<void> _handleDeviation(Position pos, double distance) async {
+    _log('⚠️ [DEVIATION] Desviación detectada: ${distance.toStringAsFixed(1)}m de la ruta');
+    
+    // Vibración de alerta
+    await SmartVibrationService.instance.vibrate(VibrationType.deviation);
+    
+    // Anunciar desviación
+    await TtsService.instance.speak(
+      'Te desviaste de la ruta. Recalculando...',
+      urgent: true,
+    );
+    
+    _showWarningNotification('Fuera de ruta - Recalculando');
+    
+    // RECALCULAR ruta desde posición actual
+    final activeNav = IntegratedNavigationService.instance.activeNavigation;
+    if (activeNav != null) {
+      try {
+        // Obtener destino final
+        final finalDestination = activeNav.steps.last;
+        
+        if (finalDestination.location != null) {
+          _log('🔄 [DEVIATION] Recalculando ruta desde posición actual');
+          
+          // Obtener nombre del destino
+          final destinationName = finalDestination.stopName ?? finalDestination.instruction;
+          
+          // Reiniciar navegación desde posición actual al mismo destino
+          await _startIntegratedMoovitNavigation(
+            destinationName,
+            finalDestination.location!.latitude,
+            finalDestination.location!.longitude,
+          );
+          
+          await TtsService.instance.speak(
+            'Nueva ruta calculada. Sigue las instrucciones.',
+            urgent: true,
+          );
+        }
+      } catch (e) {
+        _log('❌ [DEVIATION] Error recalculando ruta: $e');
+        await TtsService.instance.speak(
+          'No se pudo recalcular la ruta. Intenta volver a la ruta original.',
+          urgent: true,
+        );
+      }
+    }
+  }
+  
+  /// ✅ NUEVO: Inicia monitoreo de llegadas de bus en tiempo real
+  void _startBusArrivalMonitoring(String stopCode, String routeNumber) {
+    // Cancelar monitoreo previo si existe
+    _stopBusArrivalMonitoring();
+    
+    _monitoredStopCode = stopCode;
+    _monitoredBusRoute = routeNumber;
+    
+    _log('🚌 [BUS-MONITOR] Iniciando monitoreo: Ruta $routeNumber en paradero $stopCode');
+    
+    // Consultar inmediatamente
+    _checkBusArrival(stopCode, routeNumber);
+    
+    // Consultar cada 15 segundos
+    _busArrivalMonitor = Timer.periodic(const Duration(seconds: 15), (_) {
+      _checkBusArrival(stopCode, routeNumber);
+    });
+  }
+  
+  /// Detiene el monitoreo de bus
+  void _stopBusArrivalMonitoring() {
+    _busArrivalMonitor?.cancel();
+    _busArrivalMonitor = null;
+    _monitoredStopCode = null;
+    _monitoredBusRoute = null;
+    _log('🛑 [BUS-MONITOR] Monitoreo detenido');
+  }
+  
+  /// Verifica llegada del bus y alerta al usuario
+  Future<void> _checkBusArrival(String stopCode, String routeNumber) async {
+    try {
+      final arrivals = await BusArrivalsService.instance.getBusArrivals(stopCode);
+      
+      if (arrivals != null && arrivals.arrivals.isNotEmpty) {
+        for (final busArrival in arrivals.arrivals) {
+          if (busArrival.routeNumber == routeNumber) {
+            final minutesAway = busArrival.estimatedMinutes;
+            
+            _log('🚌 [BUS-MONITOR] Bus $routeNumber llega en $minutesAway minutos');
+            
+            // ALERTA: Bus a 3 minutos
+            if (minutesAway == 3) {
+              await SmartVibrationService.instance.vibrate(VibrationType.busBoarding);
+              await TtsService.instance.speak(
+                'Tu bus Red $routeNumber llega en 3 minutos. Prepárate.',
+                urgent: true,
+              );
+              _showSuccessNotification('Bus llegando en 3 min');
+            }
+            // ALERTA: Bus a 2 minutos
+            else if (minutesAway == 2) {
+              await SmartVibrationService.instance.vibrate(VibrationType.busBoarding);
+              await TtsService.instance.speak(
+                'Tu bus Red $routeNumber llega en 2 minutos.',
+                urgent: true,
+              );
+              _showSuccessNotification('Bus llegando en 2 min');
+            }
+            // ALERTA CRÍTICA: Bus a 1 minuto o llegando
+            else if (minutesAway <= 1) {
+              await SmartVibrationService.instance.vibrate(VibrationType.criticalTurn);
+              await TtsService.instance.speak(
+                '¡Tu bus está llegando! Red $routeNumber',
+                urgent: true,
+              );
+              _showSuccessNotification('¡Bus llegando!', withVibration: true);
+              
+              // Detener monitoreo después de última alerta
+              _stopBusArrivalMonitoring();
+            }
+            
+            break; // Solo alertar para el primer bus de esta ruta
+          }
+        }
+      }
+    } catch (e) {
+      _log('❌ [BUS-MONITOR] Error consultando llegadas: $e');
     }
   }
 
@@ -2275,7 +2562,29 @@ class _MapScreenState extends State<MapScreen>
     final instructionIndex = (progress * instructions.length).floor();
     
     // Asegurar que el índice esté dentro del rango válido
-    return instructionIndex.clamp(0, instructions.length - 1);
+    final validIndex = instructionIndex.clamp(0, instructions.length - 1);
+    
+    // ✅ NUEVO: Anunciar automáticamente cuando cambia la instrucción
+    if (validIndex != _lastAnnouncedInstructionIndex && 
+        validIndex < instructions.length &&
+        !_isSimulating) { // No anunciar durante simulación (tiene su propio sistema)
+      
+      _lastAnnouncedInstructionIndex = validIndex;
+      
+      // Vibración distintiva para cambio de instrucción
+      SmartVibrationService.instance.vibrate(VibrationType.instructionChange);
+      
+      // Anunciar nueva instrucción con prioridad
+      final instruction = instructions[validIndex];
+      TtsService.instance.speak(
+        instruction,
+        urgent: true,
+      );
+      
+      _log('🔊 [AUTO-ANNOUNCE] Nueva instrucción (${validIndex + 1}/${instructions.length}): $instruction');
+    }
+    
+    return validIndex;
   }
 
   /// Determina el icono adecuado según el texto de la instrucción
@@ -3204,6 +3513,9 @@ class _MapScreenState extends State<MapScreen>
     // ✅ TimerManagerMixin limpia automáticamente: feedback, confirmation, speechTimeout, walkSimulation, resultDebounce
 
     unawaited(TtsService.instance.releaseContext('map_navigation'));
+    
+    // ✅ Limpiar monitoreo de bus
+    _stopBusArrivalMonitoring();
 
     // Garantiza liberar el reconocimiento si la vista se destruye
     if (_isListening) {
