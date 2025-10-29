@@ -412,12 +412,15 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
     int focusIndex = _instructionFocusIndex;
     
     if (activeNav != null && activeNav.currentStep?.type == 'walk' && _currentPosition != null) {
+      _log('🗺️ [LAYOUT] Recalculando índice de instrucción visual (GPS activo)');
+      
       // En modo navegación walk: calcular instrucción automática basada en GPS
       final autoIndex = _calculateCurrentInstructionIndex(
         activeNav.currentStep!,
         totalInstructions,
       );
       if (autoIndex >= 0 && autoIndex < totalInstructions) {
+        _log('🗺️ [LAYOUT] Índice calculado: $autoIndex (antes: $_instructionFocusIndex)');
         focusIndex = autoIndex;
         // Sincronizar el índice manual con el automático
         if (_instructionFocusIndex != autoIndex) {
@@ -1572,7 +1575,46 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
     final geometry = IntegratedNavigationService.instance.currentStepGeometry;
     if (geometry.isEmpty) return 0;
     
-    // Encontrar el punto más cercano en la geometría al GPS actual
+    // ✅ NUEVO: Si tenemos intervals, usarlos para precisión exacta
+    if (step.instructionIntervals != null && step.instructionIntervals!.isNotEmpty) {
+      // Encontrar el punto más cercano en la geometría al GPS actual
+      final userLocation = LatLng(_currentPosition!.latitude, _currentPosition!.longitude);
+      double minDistance = double.infinity;
+      int closestPointIndex = 0;
+      
+      for (int i = 0; i < geometry.length; i++) {
+        final distance = Geolocator.distanceBetween(
+          userLocation.latitude,
+          userLocation.longitude,
+          geometry[i].latitude,
+          geometry[i].longitude,
+        );
+        if (distance < minDistance) {
+          minDistance = distance;
+          closestPointIndex = i;
+        }
+      }
+      
+      // Buscar en qué intervalo cae el punto más cercano
+      for (int i = 0; i < step.instructionIntervals!.length; i++) {
+        final interval = step.instructionIntervals![i];
+        if (interval.length >= 2) {
+          final start = interval[0];
+          final end = interval[1];
+          
+          // Si el punto está dentro de este intervalo, esta es la instrucción correcta
+          if (closestPointIndex >= start && closestPointIndex <= end) {
+            _log('🗺️ [INSTRUCTION] Punto $closestPointIndex en intervalo [$start, $end] → Instrucción ${i + 1}');
+            return i;
+          }
+        }
+      }
+      
+      // Si no se encuentra en ningún intervalo, usar la última instrucción
+      return totalInstructions - 1;
+    }
+    
+    // Fallback: método antiguo basado en progreso lineal
     final userLocation = LatLng(_currentPosition!.latitude, _currentPosition!.longitude);
     double minDistance = double.infinity;
     int closestPointIndex = 0;
@@ -1948,33 +1990,43 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
       }
 
       // ⚡ OPTIMIZACIÓN 2: Obtener posición actual con precisión media primero (más rápido)
-      _currentPosition = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.medium, // Cambio: medium es más rápido que high
-          timeLimit: Duration(seconds: 5), // Timeout de 5 segundos
-        ),
-      );
-
-      if (!mounted) return;
-
-      // Actualizar con la nueva posición
-      _updateCurrentLocationMarker();
-
-      // Move camera to current location if map is ready
-      if (_currentPosition != null) {
-        _moveMap(
-          LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
-          14.0,
+      try {
+        _currentPosition = await Geolocator.getCurrentPosition(
+          locationSettings: const LocationSettings(
+            accuracy: LocationAccuracy.medium, // Cambio: medium es más rápido que high
+            timeLimit: Duration(seconds: 10), // ✅ Aumentado a 10 segundos (era 5)
+          ),
         );
-        _log('📍 [GPS] Centrado con posición actual (precisión media)');
+
+        if (!mounted) return;
+
+        // Actualizar con la nueva posición
+        _updateCurrentLocationMarker();
+
+        // Move camera to current location if map is ready
+        if (_currentPosition != null) {
+          _moveMap(
+            LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
+            14.0,
+          );
+          _log('📍 [GPS] Centrado con posición actual (precisión media)');
+        }
+      } catch (e) {
+        // ✅ No es fatal: el listener de GPS se configurará de todas formas
+        _log('⚠️ [GPS INIT] Timeout obteniendo posición inicial (no es grave): $e');
+        // ✅ NO anunciar por TTS, es molesto y el GPS funcionará después
       }
 
       // Configurar listener de GPS en tiempo real (con alta precisión)
+      // ✅ Esto se ejecuta SIEMPRE, incluso si getCurrentPosition falló
       _setupGPSListener();
     } catch (e) {
       if (!mounted) return;
-      _log('⚠️ [GPS] Error obteniendo ubicación: $e', error: e);
-      TtsService.instance.speak('Error obteniendo ubicación');
+      _log('⚠️ [GPS] Error crítico en inicialización de ubicación: $e', error: e);
+      // Solo anunciar si es un error realmente grave (permisos denegados, etc.)
+      if (e.toString().contains('denied') || e.toString().contains('permission')) {
+        TtsService.instance.speak('Error: permisos de ubicación denegados');
+      }
     }
   }
 
@@ -2550,10 +2602,13 @@ class _MapScreenState extends State<MapScreen> with TimerManagerMixin {
     // Esto asegura que la geometría se recorte desde la posición simulada correcta
     IntegratedNavigationService.instance.updateSimulatedPosition(_currentPosition!);
     
-    // Actualizar marcador de ubicación
+    // ✅ FIX: Forzar reconstrucción completa del widget para actualizar instrucciones visuales
+    // Esto asegura que _calculateCurrentInstructionIndex se llame en build() y actualice el layout
     if (mounted) {
       setState(() {
         _updateCurrentLocationMarker();
+        // El setState fuerza la reconstrucción del widget, lo que ejecuta build()
+        // y recalcula el índice de instrucción basado en la nueva posición GPS
       });
     }
     

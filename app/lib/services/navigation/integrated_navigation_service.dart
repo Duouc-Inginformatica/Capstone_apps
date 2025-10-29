@@ -67,6 +67,7 @@ class RedBusLeg {
   final double distanceKm;
   final int durationMinutes;
   final List<String>? streetInstructions;
+  final List<List<int>>? instructionIntervals; // ✅ Intervalos de puntos para cada instrucción
   final List<LatLng>? geometry;
 
   RedBusLeg({
@@ -80,6 +81,7 @@ class RedBusLeg {
     required this.distanceKm,
     required this.durationMinutes,
     this.streetInstructions,
+    this.instructionIntervals, // ✅ Nuevo campo
     this.geometry,
   });
 
@@ -142,6 +144,11 @@ class RedBusLeg {
       durationMinutes: json['duration_minutes'] as int? ?? 0,
       streetInstructions: json['street_instructions'] != null
           ? List<String>.from(json['street_instructions'] as List)
+          : null,
+      instructionIntervals: json['instruction_intervals'] != null
+          ? (json['instruction_intervals'] as List)
+              .map((interval) => List<int>.from(interval as List))
+              .toList()
           : null,
       geometry: geometry,
     );
@@ -219,6 +226,7 @@ class NavigationStep {
   final int? realDurationSeconds; // Duración real en segundos
   final List<String>?
   streetInstructions; // Instrucciones detalladas de navegación por calles
+  final List<List<int>>? instructionIntervals; // ✅ Intervalos de puntos para cada instrucción
   final List<Map<String, dynamic>>? busStops; // Paradas completas del bus (del backend)
 
   NavigationStep({
@@ -236,6 +244,7 @@ class NavigationStep {
     this.realDistanceMeters,
     this.realDurationSeconds,
     this.streetInstructions,
+    this.instructionIntervals, // ✅ Nuevo campo
     this.busStops,
   });
 
@@ -261,6 +270,7 @@ class NavigationStep {
       realDistanceMeters: realDistanceMeters ?? this.realDistanceMeters,
       realDurationSeconds: realDurationSeconds ?? this.realDurationSeconds,
       streetInstructions: streetInstructions ?? this.streetInstructions,
+      instructionIntervals: instructionIntervals, // ✅ Mantener intervals
       busStops: busStops,
     );
   }
@@ -753,6 +763,7 @@ class IntegratedNavigationService {
                       leg.streetInstructions!.isNotEmpty)
                   ? List<String>.from(leg.streetInstructions!)
                   : <String>[leg.instruction],
+              instructionIntervals: leg.instructionIntervals, // ✅ Incluir intervals
             ),
           );
         }

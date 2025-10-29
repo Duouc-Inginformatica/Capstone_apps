@@ -68,6 +68,7 @@ type Segment struct {
 	Duration     int         `json:"duration_seconds"`
 	Geometry     [][]float64 `json:"geometry"` // [lon, lat] pairs
 	Instructions []string    `json:"instructions,omitempty"`
+	InstructionIntervals [][]int `json:"instruction_intervals,omitempty"` // ✅ Intervalos de puntos para cada instrucción
 	// Para segmentos de bus
 	RouteID        string `json:"route_id,omitempty"`
 	RouteShortName string `json:"route_short_name,omitempty"`
@@ -187,13 +188,15 @@ func (s *Service) GetWalkingRoute(fromLat, fromLon, toLat, toLon float64, detail
 
 	// ✅ Extraer y traducir instrucciones a español accesible
 	instructions := make([]string, len(path.Instructions))
+	intervals := make([][]int, len(path.Instructions))
 	for i, inst := range path.Instructions {
 		translated := translateInstruction(inst.Text)
 		instructions[i] = translated
+		intervals[i] = inst.Interval // ✅ Guardar intervalo de puntos
 		
 		// Log de traducción para debugging
 		if inst.Text != translated {
-			log.Printf("📝 Instrucción %d: %s → %s", i+1, inst.Text, translated)
+			log.Printf("📝 Instrucción %d: %s → %s (puntos %v)", i+1, inst.Text, translated, inst.Interval)
 		}
 	}
 
@@ -204,11 +207,12 @@ func (s *Service) GetWalkingRoute(fromLat, fromLon, toLat, toLon float64, detail
 		MainGeometry:  path.Points.Coordinates,
 		SegmentGeometries: []Segment{
 			{
-				Type:         "walk",
-				Distance:     path.Distance,
-				Duration:     int(path.Time / 1000),
-				Geometry:     path.Points.Coordinates,
-				Instructions: instructions,
+				Type:                 "walk",
+				Distance:             path.Distance,
+				Duration:             int(path.Time / 1000),
+				Geometry:             path.Points.Coordinates,
+				Instructions:         instructions,
+				InstructionIntervals: intervals, // ✅ Incluir intervalos
 			},
 		},
 	}, nil
@@ -237,10 +241,12 @@ func (s *Service) getRouteGeometry(profile, routeType, segmentType string, fromL
 
 	path := route.Paths[0]
 	
-	// ✅ Traducir instrucciones a español accesible
+	// ✅ Traducir instrucciones a español accesible y extraer intervalos
 	instructions := make([]string, len(path.Instructions))
+	intervals := make([][]int, len(path.Instructions))
 	for i, inst := range path.Instructions {
 		instructions[i] = translateInstruction(inst.Text)
+		intervals[i] = inst.Interval // ✅ Guardar intervalo de puntos
 	}
 
 	return &RouteGeometry{
@@ -250,11 +256,12 @@ func (s *Service) getRouteGeometry(profile, routeType, segmentType string, fromL
 		MainGeometry:  path.Points.Coordinates,
 		SegmentGeometries: []Segment{
 			{
-				Type:         segmentType,
-				Distance:     path.Distance,
-				Duration:     int(path.Time / 1000),
-				Geometry:     path.Points.Coordinates,
-				Instructions: instructions,
+				Type:                 segmentType,
+				Distance:             path.Distance,
+				Duration:             int(path.Time / 1000),
+				Geometry:             path.Points.Coordinates,
+				Instructions:         instructions,
+				InstructionIntervals: intervals, // ✅ Incluir intervalos
 			},
 		},
 	}, nil
