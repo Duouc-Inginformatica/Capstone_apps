@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"sort"
 	"strconv"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/yourorg/wayfindcl/internal/cache"
 	"github.com/yourorg/wayfindcl/internal/models"
 )
 
@@ -159,6 +161,7 @@ func degreesToRadians(deg float64) float64 {
 }
 
 // GetStopByCode busca un paradero por su código (ej: "PC1237")
+// ✅ OPTIMIZADO con caché in-memory (TTL: 5 minutos)
 func GetStopByCode(c *fiber.Ctx) error {
 	if dbConn == nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(models.ErrorResponse{Error: "database not ready"})
@@ -169,6 +172,19 @@ func GetStopByCode(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(models.ErrorResponse{Error: "código de paradero requerido"})
 	}
 
+	// ============================================================================
+	// CACHE LAYER: Intentar obtener de caché primero
+	// ============================================================================
+	cacheKey := fmt.Sprintf("stop:code:%s", code)
+	if cached, found := cache.StopsCache.Get(cacheKey); found {
+		stop := cached.(models.Stop)
+		c.Set("X-Cache", "HIT")
+		return c.Status(fiber.StatusOK).JSON(stop)
+	}
+
+	// ============================================================================
+	// DATABASE QUERY: Si no está en caché, consultar DB
+	// ============================================================================
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
@@ -186,6 +202,12 @@ func GetStopByCode(c *fiber.Ctx) error {
 			Error: "paradero no encontrado con código: " + code,
 		})
 	}
+
+	// ============================================================================
+	// CACHE STORAGE: Guardar en caché para próximas consultas
+	// ============================================================================
+	cache.StopsCache.Set(cacheKey, stop)
+	c.Set("X-Cache", "MISS")
 
 	return c.Status(fiber.StatusOK).JSON(stop)
 }

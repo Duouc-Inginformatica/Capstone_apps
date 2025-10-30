@@ -76,16 +76,32 @@
     # Priorizar rutas con menos trasbordos
     transfer_penalty: 120  # Penalizar trasbordos (2 minutos extra por trasbordo)
 
-  # Fuente GTFS oficial (WayFindCL sincroniza el mismo feed en DB)
+  # ============================================================================
+  # GTFS MEJORADO DE BUSMAPS (12,107 paradas, 418 rutas)
+  # ============================================================================
+  # Fuente: https://s3.transitpdf.com/files/uran/improved-gtfs-transantiago-metrodesantiago.zip
+  # Vigencia: 2 Ago 2025 - 31 Dic 2025
+  # Mejoras vs DTFS oficial:
+  #   - +10% más paradas (12,107 vs 11,000)
+  #   - +4.5% más rutas (418 vs 400)
+  #   - >90% trips con shapes (vs ~70% DTPM)
+  #   - Validado con MobilityData
+  #   - Geometrías corregidas y enriquecidas
+  # ============================================================================
   gtfs:
     file: data/gtfs-santiago.zip
     use_transfers_txt: true
-    # NUEVO: Usar shapes exactos de GTFS para rutas de bus
+    # CRÍTICO: Usar shapes mejorados de BusMaps para rutas precisas
     use_shapes: true
-    # Configuración específica para Red Transantiago
-    feed_id: red_transantiago
-    # Preferir rutas de la Red sobre otras
+    # Configuración para Red Transantiago (BusMaps incluye 4 operadores)
+    feed_id: transantiago_busmaps
+    # Preferir rutas del feed mejorado
     prefer_feed: true
+    # NUEVO: Configuraciones adicionales para GTFS mejorado
+    max_transfer_distance: 500  # 500m máximo para transbordos
+    interpolate_missing_times: true  # Interpolar horarios faltantes
+    # Usar datos de accesibilidad (wheelchair_boarding)
+    use_accessibility_info: true
 
   # Optimizaciones
   prepare:

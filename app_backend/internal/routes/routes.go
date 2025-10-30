@@ -281,6 +281,18 @@ func Register(app *fiber.App, db *sql.DB) {
 	// GET /api/stats/metrics - Métricas en tiempo real del sistema (CPU, memoria, usuarios, requests)
 
 	// ============================================================================
+	// CACHE MANAGEMENT (Gestión y monitoreo de caché)
+	// ============================================================================
+	cacheApi := api.Group("/cache")
+	cacheApi.Get("/stats", handlers.GetCacheStats)
+	// GET /api/cache/stats - Estadísticas de todos los cachés
+	
+	cacheApi.Delete("/", handlers.ClearCache)
+	// DELETE /api/cache?type=stops - Limpia caché específico
+	// DELETE /api/cache?type=all - Limpia todos los cachés
+	// Tipos: stops, routes, trips, geometry, arrivals, all
+
+	// ============================================================================
 	// INTERNAL/ADMIN ENDPOINTS (No expuestos al frontend)
 	// ============================================================================
 	// NOTA: gtfs/sync se maneja automáticamente en la inicialización del servidor

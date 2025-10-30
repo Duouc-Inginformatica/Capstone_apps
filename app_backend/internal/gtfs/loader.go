@@ -90,6 +90,21 @@ func (l *Loader) Sync(ctx context.Context, db *sql.DB) (*Summary, error) {
 
 	// Limpiar tablas en orden (respetando foreign keys)
 	fmt.Println("gtfs loader: clearing old data...")
+	if _, err := tx.ExecContext(ctx, "DELETE FROM gtfs_frequencies"); err != nil {
+		return nil, fmt.Errorf("gtfs loader: clear frequencies: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM gtfs_transfers"); err != nil {
+		return nil, fmt.Errorf("gtfs loader: clear transfers: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM gtfs_calendar_dates"); err != nil {
+		return nil, fmt.Errorf("gtfs loader: clear calendar_dates: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM gtfs_calendar"); err != nil {
+		return nil, fmt.Errorf("gtfs loader: clear calendar: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM gtfs_shapes"); err != nil {
+		return nil, fmt.Errorf("gtfs loader: clear shapes: %w", err)
+	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM gtfs_stop_times"); err != nil {
 		return nil, fmt.Errorf("gtfs loader: clear stop_times: %w", err)
 	}
@@ -101,6 +116,9 @@ func (l *Loader) Sync(ctx context.Context, db *sql.DB) (*Summary, error) {
 	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM gtfs_stops"); err != nil {
 		return nil, fmt.Errorf("gtfs loader: clear stops: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM gtfs_agencies"); err != nil {
+		return nil, fmt.Errorf("gtfs loader: clear agencies: %w", err)
 	}
 
 	res, err := tx.ExecContext(ctx,
@@ -116,6 +134,17 @@ func (l *Loader) Sync(ctx context.Context, db *sql.DB) (*Summary, error) {
 	}
 
 	// Importar en orden (respetando foreign keys)
+	fmt.Println("🏢 Importing agencies...")
+	agenciesCount := 0
+	if agenciesFile, err := findFile(zr, "agency.txt"); err == nil {
+		agenciesCount, err = importAgencies(ctx, tx, feedID, agenciesFile)
+		if err != nil {
+			fmt.Printf("⚠️ Warning importing agencies: %v\n", err)
+		}
+	} else {
+		fmt.Println("⚠️ agency.txt not found (optional)")
+	}
+	
 	fmt.Println("📍 Importing stops...")
 	stopsCount, err := importStops(ctx, tx, feedID, stopsFile)
 	if err != nil {
@@ -126,6 +155,17 @@ func (l *Loader) Sync(ctx context.Context, db *sql.DB) (*Summary, error) {
 	routesCount, err := importRoutes(ctx, tx, feedID, routesFile)
 	if err != nil {
 		return nil, err
+	}
+	
+	fmt.Println("🗺️ Importing shapes...")
+	shapesCount := 0
+	if shapesFile, err := findFile(zr, "shapes.txt"); err == nil {
+		shapesCount, err = importShapes(ctx, tx, feedID, shapesFile)
+		if err != nil {
+			fmt.Printf("⚠️ Warning importing shapes: %v\n", err)
+		}
+	} else {
+		fmt.Println("⚠️ shapes.txt not found (optional but recommended)")
 	}
 	
 	fmt.Println("🚏 Importing trips...")
@@ -139,16 +179,66 @@ func (l *Loader) Sync(ctx context.Context, db *sql.DB) (*Summary, error) {
 	if err != nil {
 		return nil, err
 	}
+	
+	fmt.Println("📅 Importing calendar...")
+	calendarCount := 0
+	if calendarFile, err := findFile(zr, "calendar.txt"); err == nil {
+		calendarCount, err = importCalendar(ctx, tx, feedID, calendarFile)
+		if err != nil {
+			fmt.Printf("⚠️ Warning importing calendar: %v\n", err)
+		}
+	} else {
+		fmt.Println("⚠️ calendar.txt not found (optional)")
+	}
+	
+	fmt.Println("📆 Importing calendar dates...")
+	calendarDatesCount := 0
+	if calendarDatesFile, err := findFile(zr, "calendar_dates.txt"); err == nil {
+		calendarDatesCount, err = importCalendarDates(ctx, tx, feedID, calendarDatesFile)
+		if err != nil {
+			fmt.Printf("⚠️ Warning importing calendar_dates: %v\n", err)
+		}
+	} else {
+		fmt.Println("⚠️ calendar_dates.txt not found (optional)")
+	}
+	
+	fmt.Println("🔄 Importing transfers...")
+	transfersCount := 0
+	if transfersFile, err := findFile(zr, "transfers.txt"); err == nil {
+		transfersCount, err = importTransfers(ctx, tx, feedID, transfersFile)
+		if err != nil {
+			fmt.Printf("⚠️ Warning importing transfers: %v\n", err)
+		}
+	} else {
+		fmt.Println("⚠️ transfers.txt not found (optional)")
+	}
+	
+	fmt.Println("⏱️ Importing frequencies...")
+	frequenciesCount := 0
+	if frequenciesFile, err := findFile(zr, "frequencies.txt"); err == nil {
+		frequenciesCount, err = importFrequencies(ctx, tx, feedID, frequenciesFile)
+		if err != nil {
+			fmt.Printf("⚠️ Warning importing frequencies: %v\n", err)
+		}
+	} else {
+		fmt.Println("⚠️ frequencies.txt not found (optional)")
+	}
 
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("gtfs loader: commit: %w", err)
 	}
 
 	fmt.Printf("✅ GTFS import complete:\n")
+	fmt.Printf("   - Agencies: %d\n", agenciesCount)
 	fmt.Printf("   - Stops: %d\n", stopsCount)
 	fmt.Printf("   - Routes: %d\n", routesCount)
+	fmt.Printf("   - Shapes: %d\n", shapesCount)
 	fmt.Printf("   - Trips: %d\n", tripsCount)
 	fmt.Printf("   - Stop Times: %d\n", stopTimesCount)
+	fmt.Printf("   - Calendar: %d\n", calendarCount)
+	fmt.Printf("   - Calendar Dates: %d\n", calendarDatesCount)
+	fmt.Printf("   - Transfers: %d\n", transfersCount)
+	fmt.Printf("   - Frequencies: %d\n", frequenciesCount)
 
 	summary := &Summary{
 		FeedVersion:   feedVersion,
@@ -562,5 +652,408 @@ func importStopTimes(ctx context.Context, tx *sql.Tx, feedID int64, file *zip.Fi
 	}
 
 	fmt.Printf("   stop_times import complete: %d records (skipped: %d)\n", count, skipped)
+	return count, nil
+}
+
+// importAgencies imports agency.txt into gtfs_agencies table
+func importAgencies(ctx context.Context, tx *sql.Tx, feedID int64, file *zip.File) (int, error) {
+	rc, err := file.Open()
+	if err != nil {
+		return 0, fmt.Errorf("gtfs loader: open agency.txt: %w", err)
+	}
+	defer rc.Close()
+
+	reader := csv.NewReader(rc)
+	reader.FieldsPerRecord = -1
+	reader.LazyQuotes = true
+	reader.TrimLeadingSpace = true
+
+	header, err := reader.Read()
+	if err != nil {
+		return 0, fmt.Errorf("gtfs loader: read agency header: %w", err)
+	}
+	idx := headerIndex(header)
+
+	stmt, err := tx.PrepareContext(ctx, `INSERT INTO gtfs_agencies 
+        (agency_id, feed_id, agency_name, agency_url, agency_timezone, agency_lang, agency_phone)
+        VALUES (?, ?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		return 0, fmt.Errorf("gtfs loader: prepare insert agency: %w", err)
+	}
+	defer stmt.Close()
+
+	count := 0
+	for {
+		record, err := reader.Read()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			continue
+		}
+
+		agencyID := safeField(record, idx, "agency_id")
+		agencyName := safeField(record, idx, "agency_name")
+		agencyURL := safeField(record, idx, "agency_url")
+		agencyTimezone := safeField(record, idx, "agency_timezone")
+		
+		if agencyName == "" || agencyURL == "" || agencyTimezone == "" {
+			continue
+		}
+
+		agencyLang := safeField(record, idx, "agency_lang")
+		agencyPhone := safeField(record, idx, "agency_phone")
+
+		if _, err := stmt.ExecContext(ctx, agencyID, feedID, agencyName, agencyURL, agencyTimezone, agencyLang, agencyPhone); err != nil {
+			continue
+		}
+		count++
+	}
+
+	fmt.Printf("   agencies import complete: %d agencies\n", count)
+	return count, nil
+}
+
+// importShapes imports shapes.txt into gtfs_shapes table
+func importShapes(ctx context.Context, tx *sql.Tx, feedID int64, file *zip.File) (int, error) {
+	rc, err := file.Open()
+	if err != nil {
+		return 0, fmt.Errorf("gtfs loader: open shapes.txt: %w", err)
+	}
+	defer rc.Close()
+
+	reader := csv.NewReader(rc)
+	reader.FieldsPerRecord = -1
+	reader.LazyQuotes = true
+	reader.TrimLeadingSpace = true
+
+	header, err := reader.Read()
+	if err != nil {
+		return 0, fmt.Errorf("gtfs loader: read shapes header: %w", err)
+	}
+	idx := headerIndex(header)
+
+	stmt, err := tx.PrepareContext(ctx, `INSERT INTO gtfs_shapes 
+        (feed_id, shape_id, shape_pt_lat, shape_pt_lon, shape_pt_sequence, shape_dist_traveled)
+        VALUES (?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		return 0, fmt.Errorf("gtfs loader: prepare insert shape: %w", err)
+	}
+	defer stmt.Close()
+
+	count := 0
+	skipped := 0
+	for {
+		record, err := reader.Read()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			skipped++
+			continue
+		}
+
+		shapeID := safeField(record, idx, "shape_id")
+		latStr := safeField(record, idx, "shape_pt_lat")
+		lonStr := safeField(record, idx, "shape_pt_lon")
+		seqStr := safeField(record, idx, "shape_pt_sequence")
+
+		if shapeID == "" || latStr == "" || lonStr == "" || seqStr == "" {
+			skipped++
+			continue
+		}
+
+		lat, err := strconv.ParseFloat(latStr, 64)
+		if err != nil {
+			skipped++
+			continue
+		}
+		lon, err := strconv.ParseFloat(lonStr, 64)
+		if err != nil {
+			skipped++
+			continue
+		}
+		seq, err := strconv.Atoi(seqStr)
+		if err != nil {
+			skipped++
+			continue
+		}
+
+		var distTraveled *float64
+		if distStr := safeField(record, idx, "shape_dist_traveled"); distStr != "" {
+			if dist, err := strconv.ParseFloat(distStr, 32); err == nil {
+				d := float64(dist)
+				distTraveled = &d
+			}
+		}
+
+		if _, err := stmt.ExecContext(ctx, feedID, shapeID, lat, lon, seq, distTraveled); err != nil {
+			skipped++
+			continue
+		}
+		count++
+
+		if count%50000 == 0 {
+			fmt.Printf("   imported %d shape points...\n", count)
+		}
+	}
+
+	fmt.Printf("   shapes import complete: %d points (skipped: %d)\n", count, skipped)
+	return count, nil
+}
+
+// importCalendar imports calendar.txt into gtfs_calendar table
+func importCalendar(ctx context.Context, tx *sql.Tx, feedID int64, file *zip.File) (int, error) {
+	rc, err := file.Open()
+	if err != nil {
+		return 0, fmt.Errorf("gtfs loader: open calendar.txt: %w", err)
+	}
+	defer rc.Close()
+
+	reader := csv.NewReader(rc)
+	reader.FieldsPerRecord = -1
+	reader.LazyQuotes = true
+	reader.TrimLeadingSpace = true
+
+	header, err := reader.Read()
+	if err != nil {
+		return 0, fmt.Errorf("gtfs loader: read calendar header: %w", err)
+	}
+	idx := headerIndex(header)
+
+	stmt, err := tx.PrepareContext(ctx, `INSERT INTO gtfs_calendar 
+        (service_id, feed_id, monday, tuesday, wednesday, thursday, friday, saturday, sunday, start_date, end_date)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		return 0, fmt.Errorf("gtfs loader: prepare insert calendar: %w", err)
+	}
+	defer stmt.Close()
+
+	count := 0
+	for {
+		record, err := reader.Read()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			continue
+		}
+
+		serviceID := safeField(record, idx, "service_id")
+		if serviceID == "" {
+			continue
+		}
+
+		monday := safeField(record, idx, "monday") == "1"
+		tuesday := safeField(record, idx, "tuesday") == "1"
+		wednesday := safeField(record, idx, "wednesday") == "1"
+		thursday := safeField(record, idx, "thursday") == "1"
+		friday := safeField(record, idx, "friday") == "1"
+		saturday := safeField(record, idx, "saturday") == "1"
+		sunday := safeField(record, idx, "sunday") == "1"
+		startDate := safeField(record, idx, "start_date")
+		endDate := safeField(record, idx, "end_date")
+
+		if _, err := stmt.ExecContext(ctx, serviceID, feedID, monday, tuesday, wednesday, thursday, friday, saturday, sunday, startDate, endDate); err != nil {
+			continue
+		}
+		count++
+	}
+
+	fmt.Printf("   calendar import complete: %d services\n", count)
+	return count, nil
+}
+
+// importCalendarDates imports calendar_dates.txt into gtfs_calendar_dates table
+func importCalendarDates(ctx context.Context, tx *sql.Tx, feedID int64, file *zip.File) (int, error) {
+	rc, err := file.Open()
+	if err != nil {
+		return 0, fmt.Errorf("gtfs loader: open calendar_dates.txt: %w", err)
+	}
+	defer rc.Close()
+
+	reader := csv.NewReader(rc)
+	reader.FieldsPerRecord = -1
+	reader.LazyQuotes = true
+	reader.TrimLeadingSpace = true
+
+	header, err := reader.Read()
+	if err != nil {
+		return 0, fmt.Errorf("gtfs loader: read calendar_dates header: %w", err)
+	}
+	idx := headerIndex(header)
+
+	stmt, err := tx.PrepareContext(ctx, `INSERT INTO gtfs_calendar_dates 
+        (service_id, feed_id, date, exception_type)
+        VALUES (?, ?, ?, ?)`)
+	if err != nil {
+		return 0, fmt.Errorf("gtfs loader: prepare insert calendar_date: %w", err)
+	}
+	defer stmt.Close()
+
+	count := 0
+	for {
+		record, err := reader.Read()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			continue
+		}
+
+		serviceID := safeField(record, idx, "service_id")
+		date := safeField(record, idx, "date")
+		exceptionTypeStr := safeField(record, idx, "exception_type")
+
+		if serviceID == "" || date == "" || exceptionTypeStr == "" {
+			continue
+		}
+
+		exceptionType, err := strconv.Atoi(exceptionTypeStr)
+		if err != nil {
+			continue
+		}
+
+		if _, err := stmt.ExecContext(ctx, serviceID, feedID, date, exceptionType); err != nil {
+			continue
+		}
+		count++
+	}
+
+	fmt.Printf("   calendar_dates import complete: %d exceptions\n", count)
+	return count, nil
+}
+
+// importTransfers imports transfers.txt into gtfs_transfers table
+func importTransfers(ctx context.Context, tx *sql.Tx, feedID int64, file *zip.File) (int, error) {
+	rc, err := file.Open()
+	if err != nil {
+		return 0, fmt.Errorf("gtfs loader: open transfers.txt: %w", err)
+	}
+	defer rc.Close()
+
+	reader := csv.NewReader(rc)
+	reader.FieldsPerRecord = -1
+	reader.LazyQuotes = true
+	reader.TrimLeadingSpace = true
+
+	header, err := reader.Read()
+	if err != nil {
+		return 0, fmt.Errorf("gtfs loader: read transfers header: %w", err)
+	}
+	idx := headerIndex(header)
+
+	stmt, err := tx.PrepareContext(ctx, `INSERT INTO gtfs_transfers 
+        (feed_id, from_stop_id, to_stop_id, transfer_type, min_transfer_time)
+        VALUES (?, ?, ?, ?, ?)`)
+	if err != nil {
+		return 0, fmt.Errorf("gtfs loader: prepare insert transfer: %w", err)
+	}
+	defer stmt.Close()
+
+	count := 0
+	for {
+		record, err := reader.Read()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			continue
+		}
+
+		fromStopID := safeField(record, idx, "from_stop_id")
+		toStopID := safeField(record, idx, "to_stop_id")
+
+		if fromStopID == "" || toStopID == "" {
+			continue
+		}
+
+		transferType := 0
+		if v := safeField(record, idx, "transfer_type"); v != "" {
+			if parsed, err := strconv.Atoi(v); err == nil {
+				transferType = parsed
+			}
+		}
+
+		var minTransferTime *int
+		if v := safeField(record, idx, "min_transfer_time"); v != "" {
+			if parsed, err := strconv.Atoi(v); err == nil {
+				minTransferTime = &parsed
+			}
+		}
+
+		if _, err := stmt.ExecContext(ctx, feedID, fromStopID, toStopID, transferType, minTransferTime); err != nil {
+			continue
+		}
+		count++
+	}
+
+	fmt.Printf("   transfers import complete: %d transfers\n", count)
+	return count, nil
+}
+
+// importFrequencies imports frequencies.txt into gtfs_frequencies table
+func importFrequencies(ctx context.Context, tx *sql.Tx, feedID int64, file *zip.File) (int, error) {
+	rc, err := file.Open()
+	if err != nil {
+		return 0, fmt.Errorf("gtfs loader: open frequencies.txt: %w", err)
+	}
+	defer rc.Close()
+
+	reader := csv.NewReader(rc)
+	reader.FieldsPerRecord = -1
+	reader.LazyQuotes = true
+	reader.TrimLeadingSpace = true
+
+	header, err := reader.Read()
+	if err != nil {
+		return 0, fmt.Errorf("gtfs loader: read frequencies header: %w", err)
+	}
+	idx := headerIndex(header)
+
+	stmt, err := tx.PrepareContext(ctx, `INSERT INTO gtfs_frequencies 
+        (trip_id, feed_id, start_time, end_time, headway_secs, exact_times)
+        VALUES (?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		return 0, fmt.Errorf("gtfs loader: prepare insert frequency: %w", err)
+	}
+	defer stmt.Close()
+
+	count := 0
+	for {
+		record, err := reader.Read()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			continue
+		}
+
+		tripID := safeField(record, idx, "trip_id")
+		startTime := safeField(record, idx, "start_time")
+		endTime := safeField(record, idx, "end_time")
+		headwaySecsStr := safeField(record, idx, "headway_secs")
+
+		if tripID == "" || startTime == "" || endTime == "" || headwaySecsStr == "" {
+			continue
+		}
+
+		headwaySecs, err := strconv.Atoi(headwaySecsStr)
+		if err != nil {
+			continue
+		}
+
+		exactTimes := 0
+		if v := safeField(record, idx, "exact_times"); v == "1" {
+			exactTimes = 1
+		}
+
+		if _, err := stmt.ExecContext(ctx, tripID, feedID, startTime, endTime, headwaySecs, exactTimes); err != nil {
+			continue
+		}
+		count++
+	}
+
+	fmt.Printf("   frequencies import complete: %d frequency rules\n", count)
 	return count, nil
 }

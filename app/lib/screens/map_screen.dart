@@ -21,12 +21,12 @@ import '../services/ui/timer_manager.dart'; // Gestor de timers centralizado
 import '../services/polyline_compression.dart'; // Compresión Douglas-Peucker
 import '../services/geometry_cache_service.dart'; // Caché offline de geometrías
 import '../widgets/map/accessible_notification.dart';
-import '../mixins/navigation_geometry_mixin.dart'; // 🆕 Mixin centralizado de geometrías
+import '../mixins/navigation_geometry_mixin.dart'; // Mixin centralizado de geometrías
 import 'settings_screen.dart';
 import '../widgets/bottom_nav.dart';
 
 class MapScreen extends StatefulWidget {
-  final String? welcomeMessage; // 🆕 Mensaje de bienvenida opcional
+  final String? welcomeMessage; // Mensaje de bienvenida opcional
   
   const MapScreen({
     super.key,
@@ -54,7 +54,7 @@ class _MapScreenState extends State<MapScreen>
   String _lastWords = '';
   final SpeechToText _speech = SpeechToText();
   bool _speechEnabled = false;
-  // ✅ _resultDebounce gestionado por TimerManagerMixin
+  //  _resultDebounce gestionado por TimerManagerMixin
   String _pendingWords = '';
 
   bool _npuAvailable = false;
@@ -98,6 +98,14 @@ class _MapScreenState extends State<MapScreen>
   Timer? _busArrivalMonitor;
   String? _monitoredBusRoute;
   String? _monitoredStopCode;
+  
+  // ✅ Alertas de proximidad y desviación
+  DateTime? _lastProximityAlert;
+  DateTime? _lastDeviationCheck;
+  bool _isCurrentlyOffRoute = false;
+  
+  // ✅ NUEVO: Índice único para ride_bus (relativo a currentStep.busStops)
+  int _currentBusStopIndex = 0;
   
   // ============================================================================
   // SIMULACIÓN REALISTA CON DESVIACIONES (SOLO PARA DESARROLLO/DEBUG)
@@ -830,22 +838,15 @@ class _MapScreenState extends State<MapScreen>
       
     } else if (currentStep.type == 'ride_bus') {
       // ═══════════════════════════════════════════════════════════════
-      // SIMULAR VIAJE EN BUS: Mover GPS por cada parada
+      // ✅ SIMULAR VIAJE EN BUS: Sistema simplificado y robusto
       // ═══════════════════════════════════════════════════════════════
-      _log('🚌 [SIMULAR] Viaje en bus - Moviendo GPS por paradas');
+      _log('🚌 [RIDE_BUS] Iniciando simulación de viaje en bus');
       
-      // Dar un pequeño delay antes de empezar
-      await Future.delayed(const Duration(milliseconds: 500));
+      // ✅ FUENTE ÚNICA DE VERDAD: currentStep.busStops (ya recortadas por el backend)
+      final busStops = currentStep.busStops ?? [];
       
-      // Obtener paradas del bus
-      final busLeg = activeNav.itinerary.legs.firstWhere(
-        (leg) => leg.type == 'bus' && leg.isRedBus,
-        orElse: () => throw Exception('No bus leg found'),
-      );
-      
-      final allStops = busLeg.stops ?? [];
-      if (allStops.isEmpty) {
-        _log('⚠️ [SIMULAR] Sin paradas para simular');
+      if (busStops.isEmpty) {
+        _log('⚠️ [RIDE_BUS] Sin paradas - completando viaje inmediatamente');
         await TtsService.instance.speak('Viaje en bus completado');
         IntegratedNavigationService.instance.advanceToNextStep();
         if (mounted) {
@@ -856,200 +857,140 @@ class _MapScreenState extends State<MapScreen>
         return;
       }
       
-      // ✅ ENCONTRAR ÍNDICE REAL del paradero de origen (donde subimos)
-      // El origen está en el paso wait_bus anterior
-      int startStopIndex = 0;
-      LatLng? originLocation;
+      _log('🚌 [RIDE_BUS] Total paradas en viaje: ${busStops.length}');
+      _log('🚌 [RIDE_BUS] Origen: ${busStops.first['name']}');
+      _log('🚌 [RIDE_BUS] Destino: ${busStops.last['name']}');
       
-      // Buscar el paso wait_bus anterior
-      if (activeNav.currentStepIndex > 0) {
-        final previousStep = activeNav.steps[activeNav.currentStepIndex - 1];
-        _log('🚌 [SIMULAR] Paso anterior: ${previousStep.type} - ${previousStep.stopName}');
-        if (previousStep.type == 'wait_bus' && previousStep.location != null) {
-          originLocation = previousStep.location;
-          _log('🚌 [SIMULAR] Origen tomado del paso wait_bus: ${previousStep.stopName} en $originLocation');
-        } else {
-          _log('⚠️ [SIMULAR] Paso anterior no es wait_bus o no tiene location');
-        }
-      }
-      
-      // Fallback: usar posición actual del GPS
-      if (originLocation == null && _currentPosition != null) {
-        originLocation = LatLng(_currentPosition!.latitude, _currentPosition!.longitude);
-        _log('🚌 [SIMULAR] Origen tomado del GPS actual: $originLocation');
-      }
-      
-      _log('🚌 [SIMULAR] Total de paradas en busLeg: ${allStops.length}');
-      _log('🚌 [SIMULAR] Primera parada: ${allStops.first.name} en ${allStops.first.location}');
-      _log('🚌 [SIMULAR] Última parada: ${allStops.last.name} en ${allStops.last.location}');
-      
-      if (originLocation != null) {
-        double minDistance = double.infinity;
-        for (int i = 0; i < allStops.length; i++) {
-          final distance = Geolocator.distanceBetween(
-            originLocation.latitude,
-            originLocation.longitude,
-            allStops[i].location.latitude,
-            allStops[i].location.longitude,
-          );
-          if (distance < minDistance) {
-            minDistance = distance;
-            startStopIndex = i;
-          }
-        }
-        _log('🚌 [SIMULAR] Paradero de origen encontrado: índice $startStopIndex (${allStops[startStopIndex].name}) a ${minDistance.toStringAsFixed(0)}m');
-      } else {
-        _log('⚠️ [SIMULAR] No hay location en currentStep, usando primer paradero');
-      }
-      
-      // ✅ ENCONTRAR ÍNDICE REAL del paradero de destino (donde bajamos)
-      // El ride_bus tiene location que apunta al paradero de bajada
-      int endStopIndex = allStops.length - 1;
-      
-      if (currentStep.location != null) {
-        // Buscar desde el paradero de origen hacia adelante
-        double minDistance = double.infinity;
-        for (int i = startStopIndex + 1; i < allStops.length; i++) {
-          final distance = Geolocator.distanceBetween(
-            currentStep.location!.latitude,
-            currentStep.location!.longitude,
-            allStops[i].location.latitude,
-            allStops[i].location.longitude,
-          );
-          if (distance < minDistance) {
-            minDistance = distance;
-            endStopIndex = i;
-          }
-        }
-        _log('🚌 [SIMULAR] Paradero de destino encontrado: índice $endStopIndex (${allStops[endStopIndex].name}) a ${minDistance.toStringAsFixed(0)}m');
-      } else {
-        _log('⚠️ [SIMULAR] No hay destino definido, usando última parada');
-      }
-      
-      // ✅ RECORTAR lista de paradas para simular SOLO desde origen hasta destino
-      final stopsToSimulate = allStops.sublist(startStopIndex, endStopIndex + 1);
-      _log('🚌 [SIMULAR] Simulando ${stopsToSimulate.length} paradas (desde $startStopIndex hasta $endStopIndex)');
-      
-      // ✅ Cancelar timer previo usando TimerManagerMixin
+      // ✅ Cancelar timer previo
       cancelTimer('walkSimulation');
       
-      // Activar modo simulación
+      // ✅ Activar modo simulación y resetear índice
       setState(() {
         _isSimulating = true;
-        _currentSimulatedBusStopIndex = startStopIndex; // ✅ EMPEZAR desde el índice real
+        _currentBusStopIndex = 0; // ✅ Empezar en primera parada
       });
       
-      int currentLocalIndex = 0; // Índice local en stopsToSimulate
+      // Dar pequeño delay antes de empezar
+      await Future.delayed(const Duration(milliseconds: 500));
       
-      // Determinar qué paraderos anunciar (evitar spam en rutas largas)
-      final importantStopIndices = _getImportantStopIndices(stopsToSimulate.length);
+      // Determinar paraderos importantes (para evitar spam en rutas largas)
+      final importantStopIndices = _getImportantStopIndices(busStops.length);
       
       // Anunciar primera parada
       await TtsService.instance.speak(
-        'Partiendo desde ${stopsToSimulate[0].name}',
+        'Partiendo desde ${busStops[0]['name']}',
         urgent: false,
       );
       
-      // ✅ Timer periódico usando TimerManagerMixin  
+      // ✅ Timer periódico: avanzar por cada parada
       createPeriodicTimer(
         const Duration(seconds: 8),
         (timer) async {
-        if (currentLocalIndex >= stopsToSimulate.length) {
-          cancelTimer('walkSimulation');
-          _log('✅ [SIMULAR] Viaje en bus completado');
-          
-          // Desactivar modo simulación
-          setState(() {
-            _isSimulating = false;
-            _currentSimulatedBusStopIndex = -1; // Resetear índice
-          });
-          
-          // Vibración al bajar del bus (triple vibración)
-          final hasVibrator = await Vibration.hasVibrator();
-          if (hasVibrator == true) {
-            Vibration.vibrate(duration: 100);
-            await Future.delayed(const Duration(milliseconds: 150));
-            Vibration.vibrate(duration: 100);
-            await Future.delayed(const Duration(milliseconds: 150));
-            Vibration.vibrate(duration: 100);
+          if (_currentBusStopIndex >= busStops.length) {
+            cancelTimer('walkSimulation');
+            _log('✅ [RIDE_BUS] Viaje completado - bajando del bus');
+            
+            // Desactivar modo simulación
+            setState(() {
+              _isSimulating = false;
+              _currentBusStopIndex = 0;
+            });
+            
+            // Vibración al bajar (triple)
+            SmartVibrationService.instance.vibrate(VibrationType.arrival);
+            
+            await TtsService.instance.speak('Bajaste del bus', urgent: true);
+            
+            // Pausa para procesamiento
+            await Future.delayed(const Duration(milliseconds: 1500));
+            
+            // Avanzar al siguiente paso (probablemente walk final)
+            if (activeNav.currentStepIndex < activeNav.steps.length - 1) {
+              IntegratedNavigationService.instance.advanceToNextStep();
+              
+              final nextStep = IntegratedNavigationService.instance.activeNavigation?.currentStep;
+              if (nextStep?.type == 'walk') {
+                await TtsService.instance.speak(
+                  'Ahora camina hacia tu destino final. Presiona "Simular" para continuar.',
+                  urgent: true,
+                );
+              }
+              
+              if (mounted) {
+                setState(() {
+                  _updateNavigationMapState(IntegratedNavigationService.instance.activeNavigation!);
+                });
+              }
+            }
+            return;
           }
           
-          await TtsService.instance.speak('Bajaste del bus', urgent: true);
+          // Obtener parada actual
+          final currentStop = busStops[_currentBusStopIndex];
+          final stopName = currentStop['name'] as String;
+          final stopCode = currentStop['code'] as String?;
           
-          // Pausa para que el usuario procese la información
-          await Future.delayed(const Duration(milliseconds: 1500));
+          // ✅ VALIDAR que location existe antes de hacer cast
+          final location = currentStop['location'] as LatLng?;
           
-          // Avanzar al siguiente paso (probablemente walk final)
-          if (activeNav.currentStepIndex < activeNav.steps.length - 1) {
-            IntegratedNavigationService.instance.advanceToNextStep();
-            
-            // Anunciar el siguiente paso
-            final nextStep = IntegratedNavigationService.instance.activeNavigation?.currentStep;
-            if (nextStep?.type == 'walk') {
-              await TtsService.instance.speak(
-                'Ahora camina hacia tu destino final. Presiona "Simular" para continuar.',
-                urgent: true,
-              );
-            }
-            
+          if (location == null) {
+            _log('⚠️ [RIDE_BUS] Parada ${_currentBusStopIndex + 1} sin location - saltando');
+            // Avanzar al siguiente índice sin mover GPS
             if (mounted) {
               setState(() {
-                _updateNavigationMapState(IntegratedNavigationService.instance.activeNavigation!);
+                _currentBusStopIndex++;
+                
+                // Actualizar marcadores visuales
+                final activeNav = IntegratedNavigationService.instance.activeNavigation;
+                if (activeNav != null) {
+                  _updateNavigationMarkers(activeNav.currentStep, activeNav);
+                }
               });
+            } else {
+              _currentBusStopIndex++;
             }
+            return; // Saltar al siguiente ciclo del timer
           }
-          return;
-        }
-        
-        // Mover GPS a la parada (SIN mover el mapa para permitir interacción)
-        final stop = stopsToSimulate[currentLocalIndex];
-        final globalStopIndex = startStopIndex + currentLocalIndex; // Índice real en allStops
-        _updateSimulatedGPS(stop.location, moveMap: false);
-        
-        final isFirstStop = currentLocalIndex == 0;
-        final isLastStop = currentLocalIndex == stopsToSimulate.length - 1;
-        final isImportantStop = importantStopIndices.contains(currentLocalIndex);
-        
-        // Anunciar SOLO paraderos importantes para evitar spam
-        String announcement = '';
-        if (isLastStop) {
-          announcement = 'Próxima parada: ${stop.name}. Prepárate para bajar';
-          // Vibración más fuerte para última parada
-          final hasVibrator = await Vibration.hasVibrator();
-          if (hasVibrator == true) {
-            Vibration.vibrate(duration: 300);
+          
+          // Mover GPS a la parada (sin mover mapa para permitir interacción)
+          _updateSimulatedGPS(location, moveMap: false);
+          
+          final isFirstStop = _currentBusStopIndex == 0;
+          final isLastStop = _currentBusStopIndex == busStops.length - 1;
+          final isImportantStop = importantStopIndices.contains(_currentBusStopIndex);
+          
+          // ✅ Anunciar SOLO paraderos importantes
+          String announcement = '';
+          if (isLastStop) {
+            announcement = 'Próxima parada: $stopName. Prepárate para bajar';
+            SmartVibrationService.instance.vibrate(VibrationType.busBoarding);
+          } else if (isImportantStop && !isFirstStop) {
+            final codeText = stopCode != null ? 'código $stopCode' : '';
+            announcement = 'Paradero $stopName $codeText';
+            SmartVibrationService.instance.vibrate(VibrationType.instructionChange);
           }
-        } else if (isImportantStop && !isFirstStop) {
-          // Anunciar paraderos importantes (cada N paradas)
-          final stopCode = stop.code != null ? 'código ${stop.code}' : '';
-          announcement = 'Paradero ${stop.name} $stopCode';
-          // Vibración sutil para paraderos importantes
-          final hasVibrator = await Vibration.hasVibrator();
-          if (hasVibrator == true) {
-            Vibration.vibrate(duration: 100);
+          
+          if (announcement.isNotEmpty) {
+            await TtsService.instance.speak(announcement, urgent: false);
           }
-        }
-        
-        if (announcement.isNotEmpty) {
-          await TtsService.instance.speak(announcement, urgent: false);
-        }
-        
-        _log('🚏 [SIMULAR] Parada ${currentLocalIndex + 1}/${stopsToSimulate.length} (global: ${globalStopIndex + 1}/${allStops.length}): ${stop.name} ${stop.code ?? ""}');
-        
-        currentLocalIndex++;
-        
-        if (mounted) {
-          setState(() {
-            _currentSimulatedBusStopIndex = globalStopIndex + 1; // ✅ Actualizar índice GLOBAL
-            
-            // ✅ Actualizar marcadores para reflejar progreso en el viaje
-            final activeNav = IntegratedNavigationService.instance.activeNavigation;
-            if (activeNav != null) {
-              _updateNavigationMarkers(activeNav.currentStep, activeNav);
-            }
-          });
-        }
-      },
+          
+          _log('🚏 [RIDE_BUS] Parada ${_currentBusStopIndex + 1}/${busStops.length}: $stopName ${stopCode ?? ""}');
+          
+          // ✅ Avanzar al siguiente índice
+          if (mounted) {
+            setState(() {
+              _currentBusStopIndex++;
+              
+              // Actualizar marcadores visuales
+              final activeNav = IntegratedNavigationService.instance.activeNavigation;
+              if (activeNav != null) {
+                _updateNavigationMarkers(activeNav.currentStep, activeNav);
+              }
+            });
+          } else {
+            _currentBusStopIndex++;
+          }
+        },
         name: 'walkSimulation',
       );
       
@@ -1328,8 +1269,6 @@ class _MapScreenState extends State<MapScreen>
   }
   
   /// ✅ NUEVO: Detecta proximidad a giros y alerta al usuario
-  DateTime? _lastProximityAlert;
-  
   void _checkProximityAlerts(Position currentPos, dynamic currentStep, List<LatLng> geometry) {
     // No alertar más de una vez cada 15 segundos
     if (_lastProximityAlert != null && 
@@ -1422,9 +1361,6 @@ class _MapScreenState extends State<MapScreen>
   }
   
   /// ✅ NUEVO: Detecta si el usuario se desvió de la ruta
-  DateTime? _lastDeviationCheck;
-  bool _isCurrentlyOffRoute = false;
-  
   void _checkDeviationFromRoute(Position currentPos, List<LatLng> geometry) {
     // No verificar más de una vez cada 10 segundos
     if (_lastDeviationCheck != null && 
@@ -4654,45 +4590,8 @@ class _MapScreenState extends State<MapScreen>
       final busStopsData = currentStep.busStops ?? [];
       final totalStops = busStopsData.length;
       
-      // ✅ Obtener índice actual del servicio (ya está actualizado por GPS)
-      int currentStopIndex;
-      if (_isSimulating) {
-        // En simulación: necesitamos calcular índice relativo
-        final busLeg = activeNav.itinerary.legs.firstWhere(
-          (leg) => leg.type == 'bus' && leg.isRedBus,
-          orElse: () => throw Exception('No bus leg found'),
-        );
-        
-        // Buscar origen en la lista global para calcular offset
-        int globalOriginIndex = 0;
-        if (activeNav.currentStepIndex > 0) {
-          final previousStep = activeNav.steps[activeNav.currentStepIndex - 1];
-          if (previousStep.type == 'wait_bus' && previousStep.location != null && busLeg.stops != null) {
-            final allStops = busLeg.stops!;
-            double minDistance = double.infinity;
-            for (int i = 0; i < allStops.length; i++) {
-              final distance = Geolocator.distanceBetween(
-                previousStep.location!.latitude,
-                previousStep.location!.longitude,
-                allStops[i].location.latitude,
-                allStops[i].location.longitude,
-              );
-              if (distance < minDistance) {
-                minDistance = distance;
-                globalOriginIndex = i;
-              }
-            }
-          }
-        }
-        currentStopIndex = (_currentSimulatedBusStopIndex - globalOriginIndex).clamp(0, totalStops - 1) as int;
-      } else {
-        // GPS real: usar el índice del servicio directamente
-        currentStopIndex = IntegratedNavigationService.instance.currentBusStopIndex;
-        if (totalStops > 0) {
-          currentStopIndex = currentStopIndex.clamp(0, totalStops - 1) as int;
-        }
-      }
-      
+      // ✅ Usar el índice único _currentBusStopIndex (ya sincronizado en simulación)
+      final currentStopIndex = _currentBusStopIndex.clamp(0, totalStops > 0 ? totalStops - 1 : 0);
       final remainingStops = totalStops > currentStopIndex ? totalStops - currentStopIndex - 1 : 0;
       
       // Obtener nombres de paradas

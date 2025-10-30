@@ -51,6 +51,9 @@ dependencies:
   
   # Comunicación y Backend
   http: ^1.2.2
+  dio: ^5.7.0  # ✅ Cliente HTTP avanzado con interceptors, retry, connection pooling
+  dio_cache_interceptor: ^3.5.1  # ✅ Caché HTTP automático (compatible con hive_store 3.x)
+  dio_cache_interceptor_hive_store: 3.2.2  # ✅ Almacenamiento de caché en Hive
   
   # Mapas y Geolocalización
   geolocator: ^14.0.2  # Actualizado de 13.0.4
@@ -61,7 +64,14 @@ dependencies:
   # Almacenamiento Local
   hive: ^2.2.3  # ✅ Base de datos local ultra-rápida (10x más rápido que SharedPreferences)
   hive_flutter: ^1.1.0  # ✅ Integración con Flutter
-  shared_preferences: ^2.3.2  # Mantener temporalmente para migración gradual
+  flutter_secure_storage: ^9.2.2  # ✅ Almacenamiento cifrado multiplataforma (KeyChain iOS, KeyStore Android)
+  # shared_preferences: ^2.3.2  # ❌ REMOVIDO - Migrado completamente a Hive
+  # encrypted_shared_preferences: ^3.0.1  # ❌ REMOVIDO - Reemplazado por flutter_secure_storage
+  
+  # Gestión de Estado
+  flutter_bloc: ^8.1.6  # ✅ BLoC pattern para arquitectura escalable
+  equatable: ^2.0.5  # ✅ Comparación de estados eficiente
+  bloc_concurrency: ^0.2.5  # ✅ Manejo de eventos concurrentes
   
   # UX y Feedback
   vibration: ^3.1.4
@@ -79,6 +89,10 @@ dev_dependencies:
   # Code Generation para Hive
   hive_generator: ^2.0.1  # ✅ Genera adaptadores de tipo automáticamente
   build_runner: ^2.4.13  # ✅ Requerido para code generation
+  
+  # Testing
+  bloc_test: ^9.1.7  # ✅ Testing para BLoC
+  mocktail: ^1.0.4  # ✅ Mocking para tests
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec

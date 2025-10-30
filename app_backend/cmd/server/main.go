@@ -13,6 +13,7 @@ import (
 	"github.com/joho/godotenv"
 
 	appdb "github.com/yourorg/wayfindcl/internal/db"
+	"github.com/yourorg/wayfindcl/internal/cache"
 	"github.com/yourorg/wayfindcl/internal/debug"
 	"github.com/yourorg/wayfindcl/internal/geometry"
 	"github.com/yourorg/wayfindcl/internal/graphhopper"
@@ -23,6 +24,16 @@ import (
 
 func main() {
 	_ = godotenv.Load()
+
+	// ============================================================================
+	// INICIALIZAR SISTEMA DE CACHÉ IN-MEMORY
+	// ============================================================================
+	log.Println("🚀 Inicializando sistema de caché...")
+	cache.InitCaches()
+	log.Println("✅ Caché inicializado: stops(5m), routes(5m), trips(2m), geometry(10m), arrivals(30s)")
+	
+	// Cleanup al cerrar
+	defer cache.StopCaches()
 
 	app := fiber.New(fiber.Config{
 		ReadTimeout:  30 * time.Second,  // Reducido de 180s a 30s para operaciones normales
@@ -39,6 +50,12 @@ func main() {
 	}))
 	
 	app.Use(logger.New())
+	
+	// ============================================================================
+	// RATE LIMITING - Protección contra abuso
+	// ============================================================================
+	app.Use(middleware.GlobalRateLimiter())
+	log.Println("✅ Rate limiting activado: 1000 req/min por IP")
 	
 	// Dashboard logger middleware para enviar logs en tiempo real
 	app.Use(middleware.DashboardLogger())
