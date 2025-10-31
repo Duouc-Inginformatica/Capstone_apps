@@ -18,8 +18,6 @@ import '../services/navigation/integrated_navigation_service.dart';
 import '../services/device/npu_detector_service.dart';
 import '../services/debug_logger.dart';
 import '../services/ui/timer_manager.dart'; // Gestor de timers centralizado
-import '../services/polyline_compression.dart'; // Compresión Douglas-Peucker
-import '../services/geometry_cache_service.dart'; // Caché offline de geometrías
 import '../widgets/map/accessible_notification.dart';
 import '../mixins/navigation_geometry_mixin.dart'; // 🆕 Mixin centralizado de geometrías
 import 'settings_screen.dart';
@@ -93,11 +91,6 @@ class _MapScreenState extends State<MapScreen>
   
   // ✅ Anuncios automáticos de instrucciones
   int _lastAnnouncedInstructionIndex = -1;
-  
-  // ✅ Monitoreo de llegadas de bus
-  Timer? _busArrivalMonitor;
-  String? _monitoredBusRoute;
-  String? _monitoredStopCode;
   
   // ============================================================================
   // SIMULACIÓN REALISTA CON DESVIACIONES (SOLO PARA DESARROLLO/DEBUG)
@@ -215,11 +208,6 @@ class _MapScreenState extends State<MapScreen>
 
   /// Inicia servicios de forma no bloqueante y escalonada para evitar ANR
   void _initServices() {
-    // ✅ Inicializar caché de geometrías en background
-    GeometryCacheService.instance.initialize().catchError((e, st) {
-      _log('⚠️ Error inicializando GeometryCache: $e', error: e, stackTrace: st);
-    });
-
     // Iniciar reconocimiento de voz inmediatamente, pero no await para no bloquear UI
     _initSpeech().catchError((e, st) {
       _log('Error inicializando Speech: $e', error: e, stackTrace: st);
@@ -357,8 +345,8 @@ class _MapScreenState extends State<MapScreen>
       _log('🛑 [ARRIVALS] Deteniendo tracking - usuario subió al bus');
       BusArrivalsService.instance.stopTracking();
       
-      // ✅ NUEVO: Detener monitoreo de bus (usuario ya subió)
-      _stopBusArrivalMonitoring();
+      // Feature de monitoreo de bus deshabilitada
+      // _stopBusArrivalMonitoring();
       
       // Verificar que existe un siguiente paso de tipo ride_bus
       if (activeNav.currentStepIndex < activeNav.steps.length - 1) {
@@ -698,8 +686,8 @@ class _MapScreenState extends State<MapScreen>
                 _log('📡 [ARRIVALS] Consultando llegada del bus $routeNumber en paradero $stopCode');
                 final arrivals = await BusArrivalsService.instance.getBusArrivals(stopCode);
                 
-                // ✅ NUEVO: Iniciar monitoreo en tiempo real
-                _startBusArrivalMonitoring(stopCode, routeNumber);
+                // Feature de monitoreo en tiempo real deshabilitada
+                // _startBusArrivalMonitoring(stopCode, routeNumber);
                 
                 if (arrivals != null) {
                   final targetBus = arrivals.findBus(routeNumber);
@@ -1513,85 +1501,9 @@ class _MapScreenState extends State<MapScreen>
     }
   }
   
-  /// ✅ NUEVO: Inicia monitoreo de llegadas de bus en tiempo real
-  void _startBusArrivalMonitoring(String stopCode, String routeNumber) {
-    // Cancelar monitoreo previo si existe
-    _stopBusArrivalMonitoring();
-    
-    _monitoredStopCode = stopCode;
-    _monitoredBusRoute = routeNumber;
-    
-    _log('🚌 [BUS-MONITOR] Iniciando monitoreo: Ruta $routeNumber en paradero $stopCode');
-    
-    // Consultar inmediatamente
-    _checkBusArrival(stopCode, routeNumber);
-    
-    // Consultar cada 15 segundos
-    _busArrivalMonitor = Timer.periodic(const Duration(seconds: 15), (_) {
-      _checkBusArrival(stopCode, routeNumber);
-    });
-  }
-  
-  /// Detiene el monitoreo de bus
-  void _stopBusArrivalMonitoring() {
-    _busArrivalMonitor?.cancel();
-    _busArrivalMonitor = null;
-    _monitoredStopCode = null;
-    _monitoredBusRoute = null;
-    _log('🛑 [BUS-MONITOR] Monitoreo detenido');
-  }
-  
-  /// Verifica llegada del bus y alerta al usuario
-  Future<void> _checkBusArrival(String stopCode, String routeNumber) async {
-    try {
-      final arrivals = await BusArrivalsService.instance.getBusArrivals(stopCode);
-      
-      if (arrivals != null && arrivals.arrivals.isNotEmpty) {
-        for (final busArrival in arrivals.arrivals) {
-          if (busArrival.routeNumber == routeNumber) {
-            final minutesAway = busArrival.estimatedMinutes;
-            
-            _log('🚌 [BUS-MONITOR] Bus $routeNumber llega en $minutesAway minutos');
-            
-            // ALERTA: Bus a 3 minutos
-            if (minutesAway == 3) {
-              await SmartVibrationService.instance.vibrate(VibrationType.busBoarding);
-              await TtsService.instance.speak(
-                'Tu bus Red $routeNumber llega en 3 minutos. Prepárate.',
-                urgent: true,
-              );
-              _showSuccessNotification('Bus llegando en 3 min');
-            }
-            // ALERTA: Bus a 2 minutos
-            else if (minutesAway == 2) {
-              await SmartVibrationService.instance.vibrate(VibrationType.busBoarding);
-              await TtsService.instance.speak(
-                'Tu bus Red $routeNumber llega en 2 minutos.',
-                urgent: true,
-              );
-              _showSuccessNotification('Bus llegando en 2 min');
-            }
-            // ALERTA CRÍTICA: Bus a 1 minuto o llegando
-            else if (minutesAway <= 1) {
-              await SmartVibrationService.instance.vibrate(VibrationType.criticalTurn);
-              await TtsService.instance.speak(
-                '¡Tu bus está llegando! Red $routeNumber',
-                urgent: true,
-              );
-              _showSuccessNotification('¡Bus llegando!', withVibration: true);
-              
-              // Detener monitoreo después de última alerta
-              _stopBusArrivalMonitoring();
-            }
-            
-            break; // Solo alertar para el primer bus de esta ruta
-          }
-        }
-      }
-    } catch (e) {
-      _log('❌ [BUS-MONITOR] Error consultando llegadas: $e');
-    }
-  }
+  // MONITOREO DE LLEGADAS DE BUS - FEATURE DESHABILITADA
+  // (Requiere TripAlertsService que fue eliminado por no estar integrado)
+  // TODO: Implementar usando IntegratedNavigationService si es necesario
 
   void _updateCurrentLocationMarker() {
     if (_currentPosition == null || !mounted) return;
@@ -1914,7 +1826,7 @@ class _MapScreenState extends State<MapScreen>
     
     // COMANDO: "Cancelar ruta"
     if (command.contains('cancelar')) {
-      _stopBusArrivalMonitoring(); // Detener monitoreo
+      // _stopBusArrivalMonitoring(); // Feature deshabilitada
       IntegratedNavigationService.instance.stopNavigation();
       setState(() {
         clearGeometryCache();
@@ -2931,32 +2843,10 @@ class _MapScreenState extends State<MapScreen>
     // Obtener geometría del servicio
     var geometry = IntegratedNavigationService.instance.currentStepGeometry;
     
-    // ✅ Aplicar compresión Douglas-Peucker si la geometría tiene muchos puntos
-    if (geometry.length > 50) {
-      final originalLength = geometry.length;
-      
-      // Epsilon adaptativo según la cantidad de puntos
-      // Rutas cortas: más detalle, rutas largas: más compresión
-      double epsilon = 0.0001; // ~11 metros por defecto
-      if (geometry.length > 200) {
-        epsilon = 0.00015; // ~17 metros para rutas muy largas
-      } else if (geometry.length > 500) {
-        epsilon = 0.0002; // ~22 metros para rutas extensas
-      }
-      
-      geometry = PolylineCompression.compress(
-        points: geometry,
-        epsilon: epsilon,
-      );
-      
-      final reduction = ((1 - geometry.length / originalLength) * 100);
-      _log(
-        '🗜️ [COMPRESS] Geometría del paso comprimida: $originalLength → ${geometry.length} pts '
-        '(${reduction.toStringAsFixed(1)}% reducción, epsilon=$epsilon)',
-      );
-    }
+    // Compresión deshabilitada - usando geometría completa del backend
+    // (polyline_compression.dart fue eliminado con geometry_cache_service.dart)
     
-    // Actualizar caché con geometría comprimida
+    // Actualizar caché con geometría completa
     _cachedStepGeometry = geometry;
     _cachedStepIndex = currentStepIndex;
     
@@ -3798,8 +3688,8 @@ class _MapScreenState extends State<MapScreen>
 
     unawaited(TtsService.instance.releaseContext('map_navigation'));
     
-    // ✅ Limpiar monitoreo de bus
-    _stopBusArrivalMonitoring();
+    // Feature de monitoreo de bus deshabilitada
+    // _stopBusArrivalMonitoring();
 
     // Garantiza liberar el reconocimiento si la vista se destruye
     if (_isListening) {

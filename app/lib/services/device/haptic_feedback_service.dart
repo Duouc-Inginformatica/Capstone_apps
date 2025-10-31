@@ -77,7 +77,7 @@ class HapticFeedbackService {
     }
 
     try {
-      _hasVibrator = await Vibration.hasVibrator() ?? false;
+      _hasVibrator = await Vibration.hasVibrator();
       return _hasVibrator!;
     } catch (e) {
       _hasVibrator = false;

@@ -156,7 +156,10 @@ class MetroRoutePanelWidget extends StatelessWidget {
     bool isCompleted,
   ) {
     final stepType = step.type.toLowerCase();
-    final isMetro = stepType == 'metro' || (step.busRoute?.startsWith('L') == true && step.busRoute!.length <= 3);
+    final isMetro = stepType == 'metro' || 
+                    stepType == 'wait_metro' || 
+                    stepType == 'ride_metro' ||
+                    (step.busRoute?.startsWith('L') == true && step.busRoute!.length <= 3);
     
     return InkWell(
       onTap: onStepTap != null ? () => onStepTap!(index) : null,
@@ -274,6 +277,14 @@ class MetroRoutePanelWidget extends StatelessWidget {
     switch (type.toLowerCase()) {
       case 'walk':
         return Icons.directions_walk;
+      case 'wait_bus':
+        return Icons.schedule; // Reloj para esperar bus
+      case 'ride_bus':
+        return Icons.directions_bus; // Bus en movimiento
+      case 'wait_metro':
+        return Icons.schedule; // Reloj para esperar metro
+      case 'ride_metro':
+        return Icons.subway; // Metro en movimiento
       case 'bus':
         return isMetro ? Icons.subway : Icons.directions_bus;
       case 'metro':
@@ -376,6 +387,14 @@ class MetroRoutePanelWidget extends StatelessWidget {
     switch (step.type.toLowerCase()) {
       case 'walk':
         return 'Caminar';
+      case 'wait_bus':
+        return 'Esperar Bus ${step.busRoute ?? ""}';
+      case 'ride_bus':
+        return 'Viajar en Bus ${step.busRoute ?? ""}';
+      case 'wait_metro':
+        return 'Esperar Metro ${step.busRoute ?? ""}';
+      case 'ride_metro':
+        return 'Viajar en Metro ${step.busRoute ?? ""}';
       case 'bus':
         final isMetro = step.busRoute?.startsWith('L') == true && step.busRoute!.length <= 3;
         if (isMetro) {
@@ -401,7 +420,9 @@ class MetroRoutePanelWidget extends StatelessWidget {
   /// Verifica si la ruta incluye segmentos de metro
   bool _hasMetroSegment() {
     return steps.any((step) {
-      final isMetroType = step.type.toLowerCase() == 'metro';
+      final isMetroType = step.type.toLowerCase() == 'metro' || 
+                         step.type.toLowerCase() == 'wait_metro' || 
+                         step.type.toLowerCase() == 'ride_metro';
       final isMetroRoute = step.busRoute?.startsWith('L') == true && step.busRoute!.length <= 3;
       return isMetroType || isMetroRoute;
     });
@@ -497,14 +518,17 @@ class MetroRouteSummaryWidget extends StatelessWidget {
     
     for (final step in steps) {
       final type = step.type.toLowerCase();
-      final isMetro = type == 'metro' || (step.busRoute?.startsWith('L') == true && step.busRoute!.length <= 3);
+      final isMetro = type == 'metro' || 
+                      type == 'wait_metro' || 
+                      type == 'ride_metro' ||
+                      (step.busRoute?.startsWith('L') == true && step.busRoute!.length <= 3);
       
       String mode;
       if (type == 'walk') {
         mode = 'walk';
       } else if (isMetro) {
         mode = 'metro:${step.busRoute ?? ""}';
-      } else if (type == 'bus') {
+      } else if (type == 'bus' || type == 'wait_bus' || type == 'ride_bus') {
         mode = 'bus';
       } else {
         continue;

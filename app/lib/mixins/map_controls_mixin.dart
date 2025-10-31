@@ -36,12 +36,10 @@ mixin MapControlsMixin<T extends StatefulWidget> on State<T> {
   static const double _defaultZoom = 17.0;
   static const double _minZoom = 10.0;
   static const double _maxZoom = 19.0;
-  static const LatLng _defaultCenter = LatLng(-33.4489, -70.6693); // Santiago Centro
 
   // Estado interno
   Timer? _mapUpdateThrottle;
   bool _isMapReady = false;
-  LatLng? _lastCenter;
 
   /// Inicializa los controles del mapa
   void initMapControls() {
@@ -86,15 +84,12 @@ mixin MapControlsMixin<T extends StatefulWidget> on State<T> {
 
       try {
         final targetZoom = zoom ?? mapController.camera.zoom;
-        final targetRotation = rotation ?? mapController.camera.rotation;
 
         if (animated) {
           mapController.move(position, targetZoom);
         } else {
           mapController.move(position, targetZoom);
         }
-
-        _lastCenter = position;
       } catch (e) {
         DebugLogger.network('❌ Error actualizando mapa: $e');
       }

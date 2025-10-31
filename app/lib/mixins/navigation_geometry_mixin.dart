@@ -13,7 +13,6 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import '../services/navigation/integrated_navigation_service.dart';
 import '../services/backend/bus_geometry_service.dart';
-import '../services/polyline_compression.dart';
 import '../services/debug_logger.dart';
 
 /// Mixin para gestionar geometrías de navegación de forma centralizada
@@ -309,34 +308,16 @@ mixin NavigationGeometryMixin<T extends StatefulWidget> on State<T> {
   // ══════════════════════════════════════════════════════════════════════
   
   /// Comprime geometría si tiene muchos puntos (optimización)
+  /// NOTA: Compresión deshabilitada - usando geometría completa del backend
   List<LatLng> _compressGeometryIfNeeded(List<LatLng> geometry) {
-    if (geometry.length <= 50) {
-      return geometry; // No comprimir si es pequeña
+    if (geometry.length > 50) {
+      DebugLogger.info(
+        '🗜️ [GEOMETRY] Geometría grande (${geometry.length} puntos) - usando completa',
+        context: 'NavigationGeometryMixin',
+      );
     }
     
-    // Epsilon adaptativo según cantidad de puntos
-    double epsilon;
-    if (geometry.length > 500) {
-      epsilon = 0.0002; // Más compresión para rutas muy largas
-    } else if (geometry.length > 200) {
-      epsilon = 0.00015;
-    } else {
-      epsilon = 0.0001; // Compresión mínima
-    }
-    
-    final compressed = PolylineCompression.compress(
-      points: geometry,
-      epsilon: epsilon,
-    );
-    
-    final reduction = ((1 - compressed.length / geometry.length) * 100);
-    
-    DebugLogger.info(
-      '🗜️ [GEOMETRY] Compresión: ${geometry.length} → ${compressed.length} pts (${reduction.toStringAsFixed(1)}%)',
-      context: 'NavigationGeometryMixin',
-    );
-    
-    return compressed;
+    return geometry;
   }
   
   // ══════════════════════════════════════════════════════════════════════

@@ -1804,43 +1804,6 @@ Te iré guiando paso a paso.
     }
   }
 
-  /// Detecta buses cercanos usando datos de tiempo real
-  /// DESBLOQUEADO - MEJORA #1
-  Future<void> _detectNearbyBuses(
-    NavigationStep step,
-    LatLng userLocation,
-  ) async {
-    if (step.stopId == null) return;
-
-    try {
-      // Consultar API de tiempo real para obtener llegadas próximas
-      final arrivalsData = await ApiClient.instance.getBusArrivals(step.stopId!);
-      
-      if (arrivalsData == null) return;
-      
-      final arrivals = arrivalsData['arrivals'] as List<dynamic>? ?? [];
-      
-      if (arrivals.isNotEmpty) {
-        final nextBus = arrivals.first as Map<String, dynamic>;
-        final routeNumber = nextBus['route_number'] ?? '';
-        final distanceKm = (nextBus['distance_km'] as num?)?.toDouble() ?? 0.0;
-        
-        // Estimar minutos (asumiendo 15 km/h promedio en ciudad)
-        final etaMinutes = (distanceKm / 0.25).ceil();
-        
-        if (etaMinutes <= 5 && etaMinutes > 0) {
-          _navLog('🚌 Bus $routeNumber llegará en $etaMinutes minutos');
-          TtsService.instance.speak(
-            'El bus $routeNumber llegará en $etaMinutes minutos.',
-          );
-          onBusDetected?.call(routeNumber);
-        }
-      }
-    } catch (e) {
-      _navLog('⚠️ [BUS_DETECTION] Error detectando buses cercanos: $e');
-    }
-  }
-
   /// Verifica progreso a través de paradas de bus durante viaje en bus
   /// Anuncia cada parada cuando el usuario pasa cerca
   void _checkBusStopsProgress(NavigationStep step, LatLng userLocation) {
