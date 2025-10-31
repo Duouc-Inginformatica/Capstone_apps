@@ -57,9 +57,11 @@ class RedBusStop {
 }
 
 class RedBusLeg {
-  final String type; // 'walk', 'bus'
+  final String type; // 'walk', 'bus', 'metro'
+  final String mode; // 'Red', 'Metro', 'walk' - del backend
   final String instruction;
   final bool isRedBus;
+  final bool isMetro; // 🆕 Identificador de Metro
   final String? routeNumber;
   final RedBusStop? departStop;
   final RedBusStop? arriveStop;
@@ -72,8 +74,10 @@ class RedBusLeg {
 
   RedBusLeg({
     required this.type,
+    required this.mode,
     required this.instruction,
     required this.isRedBus,
+    required this.isMetro,
     this.routeNumber,
     this.departStop,
     this.arriveStop,
@@ -123,15 +127,23 @@ class RedBusLeg {
           .toList();
     }
 
-    // Determinar si es bus de la Red: el backend envía mode: "Red"
+    // Determinar tipo de transporte
     final mode = json['mode'] as String? ?? '';
+    final type = json['type'] as String? ?? 'walk';
     final backendIsRedBus = json['is_red_bus'] as bool? ?? false;
-    final isRedBus = (mode == 'Red' || backendIsRedBus);
+    
+    // Identificar si es Metro: mode == "Metro" o type == "metro"
+    final isMetro = (mode.toLowerCase() == 'metro' || type.toLowerCase() == 'metro');
+    
+    // Identificar si es Bus Red: mode == "Red" o is_red_bus == true
+    final isRedBus = (mode == 'Red' || backendIsRedBus) && !isMetro;
 
     return RedBusLeg(
-      type: json['type'] as String? ?? 'walk',
+      type: type,
+      mode: mode,
       instruction: json['instruction'] as String? ?? '',
       isRedBus: isRedBus,
+      isMetro: isMetro,
       routeNumber: json['route_number'] as String?,
       departStop: json['depart_stop'] != null
           ? RedBusStop.fromJson(json['depart_stop'] as Map<String, dynamic>)
@@ -210,7 +222,7 @@ class RedBusItinerary {
 // =============================================================================
 
 class NavigationStep {
-  final String type; // 'walk', 'bus', 'transfer', 'arrival'
+  final String type; // 'walk', 'wait_bus', 'ride_bus', 'wait_metro', 'ride_metro', 'transfer', 'arrival'
   final String instruction;
   final LatLng? location;
   final String? stopId;
@@ -349,8 +361,8 @@ class ActiveNavigation {
       final geometry = stepGeometries[currentStepIndex]!;
       _navLog('🔍 Geometría encontrada para paso $currentStepIndex: ${geometry.length} puntos');
 
-      // Si es paso de walk o bus, recortar geometría desde el punto más cercano al usuario
-      if ((step.type == 'walk' || step.type == 'bus') &&
+      // Si es paso de walk, ride_bus o ride_metro, recortar geometría desde el punto más cercano al usuario
+      if ((step.type == 'walk' || step.type == 'ride_bus' || step.type == 'ride_metro') &&
           geometry.length >= 2) {
         _navLog('🔍 Paso ${step.type.toUpperCase()}: Recortando geometría desde posición actual');
 
@@ -886,6 +898,125 @@ class IntegratedNavigationService {
             busStops: busStops,
           ),
         );
+      } else if (leg.isMetro || (leg.type == 'metro' || leg.mode.toLowerCase() == 'metro')) {
+        // ═══════════════════════════════════════════════════════════════
+        // PASO DE METRO: Crear DOS pasos separados
+        // 1. wait_metro - Esperar el metro en la estación
+        // 2. ride_metro - Viajar en el metro
+        // ═══════════════════════════════════════════════════════════════
+        _navLog(
+          '🚇 Paso METRO ${leg.routeNumber}: ${leg.departStop?.name} → ${leg.arriveStop?.name}',
+        );
+        _navLog(
+          '🚇 Estaciones en el metro: ${leg.stops?.length ?? 0}',
+        );
+
+        // Convertir stops a formato simple para el NavigationStep
+        // ✅ CRÍTICO: Recortar solo las estaciones del VIAJE DEL USUARIO (origen → destino)
+        List<Map<String, dynamic>>? metroStops;
+        if (leg.stops != null && leg.stops!.isNotEmpty) {
+          final allStops = leg.stops!;
+          
+          // Encontrar índices de las estaciones de origen y destino
+          int startIndex = 0;
+          int endIndex = allStops.length - 1;
+          
+          // Buscar estación de origen (departStop)
+          if (leg.departStop != null) {
+            double minDistance = double.infinity;
+            for (int i = 0; i < allStops.length; i++) {
+              final distance = _distance.as(
+                LengthUnit.Meter,
+                leg.departStop!.location,
+                allStops[i].location,
+              );
+              if (distance < minDistance) {
+                minDistance = distance;
+                startIndex = i;
+              }
+            }
+            _navLog('🚇 Estación de origen encontrada: ${allStops[startIndex].name} (índice $startIndex)');
+          }
+          
+          // Buscar estación de destino (arriveStop)
+          if (leg.arriveStop != null) {
+            double minDistance = double.infinity;
+            for (int i = startIndex; i < allStops.length; i++) {
+              final distance = _distance.as(
+                LengthUnit.Meter,
+                leg.arriveStop!.location,
+                allStops[i].location,
+              );
+              if (distance < minDistance) {
+                minDistance = distance;
+                endIndex = i;
+              }
+            }
+            _navLog('🚇 Estación de destino encontrada: ${allStops[endIndex].name} (índice $endIndex)');
+          }
+          
+          // ✅ RECORTAR solo las estaciones del viaje del usuario
+          final userTripStops = allStops.sublist(startIndex, endIndex + 1);
+          
+          metroStops = userTripStops.map((stop) {
+            return {
+              'name': stop.name,
+              'code': stop.code,
+              'lat': stop.location.latitude,
+              'lng': stop.location.longitude,
+            };
+          }).toList();
+
+          _navLog(
+            '🚇 Estaciones del VIAJE DEL USUARIO: ${metroStops.length} estaciones (de $startIndex a $endIndex)',
+          );
+          _navLog(
+            '   Primera: ${metroStops.first['name']}',
+          );
+          _navLog(
+            '   Última: ${metroStops.last['name']}',
+          );
+        }
+
+        // PASO 1: WAIT_METRO - Esperar el metro en la estación de subida
+        _navLog('🚇 Creando paso WAIT_METRO en ${leg.departStop?.name}');
+        steps.add(
+          NavigationStep(
+            type: 'wait_metro',
+            instruction:
+                'Espera el Metro Línea ${leg.routeNumber} en estación ${leg.departStop?.name}',
+            location: leg.departStop?.location,
+            stopId: null,
+            stopName: leg.departStop?.name,
+            busRoute: leg.routeNumber, // Línea de metro (ej: "L1", "L2")
+            busOptions: const [],
+            estimatedDuration: 3, // 3 minutos de espera estimada (metros son más frecuentes)
+            totalStops: leg.stops?.length,
+            realDistanceMeters: 0, // No hay distancia en espera
+            realDurationSeconds: 180, // 3 minutos
+            busStops: metroStops,
+          ),
+        );
+
+        // PASO 2: RIDE_METRO - Viajar en el metro
+        _navLog('🚇 Creando paso RIDE_METRO hasta ${leg.arriveStop?.name}');
+        steps.add(
+          NavigationStep(
+            type: 'ride_metro',
+            instruction:
+                'Viaja en el Metro Línea ${leg.routeNumber} hasta estación ${leg.arriveStop?.name}',
+            location: leg.arriveStop?.location,
+            stopId: null,
+            stopName: leg.arriveStop?.name,
+            busRoute: leg.routeNumber,
+            busOptions: const [],
+            estimatedDuration: leg.durationMinutes,
+            totalStops: leg.stops?.length,
+            realDistanceMeters: leg.distanceKm * 1000,
+            realDurationSeconds: leg.durationMinutes * 60,
+            busStops: metroStops,
+          ),
+        );
       }
     }
 
@@ -894,9 +1025,13 @@ class IntegratedNavigationService {
     for (var i = 0; i < steps.length; i++) {
       final step = steps[i];
       _navLog('🚶 Paso $i: ${step.type} - ${step.instruction}');
-      if (step.type == 'bus') {
+      if (step.type == 'ride_bus' || step.type == 'wait_bus') {
         _navLog(
           '   └─ Bus: ${step.busRoute}, StopName: ${step.stopName}',
+        );
+      } else if (step.type == 'ride_metro' || step.type == 'wait_metro') {
+        _navLog(
+          '   └─ Metro: ${step.busRoute}, Estación: ${step.stopName}',
         );
       }
     }
@@ -995,7 +1130,7 @@ class IntegratedNavigationService {
           _navLog('   ✅ Geometría wait_bus: Punto único en paradero');
         }
         // NO incrementar legIndex porque ride_bus usará el mismo leg
-      } else if (step.type == 'ride_bus' || step.type == 'bus') {
+      } else if (step.type == 'ride_bus') {
         // ride_bus corresponde al leg de bus (mismo que wait_bus)
         if (legIndex < itinerary.legs.length) {
           final leg = itinerary.legs[legIndex];
@@ -1003,6 +1138,24 @@ class IntegratedNavigationService {
           if (leg.type == 'bus' && leg.geometry != null && leg.geometry!.isNotEmpty) {
             geometries[stepIndex] = List.from(leg.geometry!);
             _navLog('   ✅ Geometría ride_bus: ${leg.geometry!.length} puntos (leg $legIndex)');
+          }
+          legIndex++; // Ahora sí avanzar al siguiente leg
+        }
+      } else if (step.type == 'wait_metro') {
+        // wait_metro NO tiene geometría (es solo esperar en estación)
+        if (step.location != null) {
+          geometries[stepIndex] = [step.location!];
+          _navLog('   ✅ Geometría wait_metro: Punto único en estación');
+        }
+        // NO incrementar legIndex porque ride_metro usará el mismo leg
+      } else if (step.type == 'ride_metro') {
+        // ride_metro corresponde al leg de metro (mismo que wait_metro)
+        if (legIndex < itinerary.legs.length) {
+          final leg = itinerary.legs[legIndex];
+          
+          if ((leg.type == 'metro' || leg.isMetro) && leg.geometry != null && leg.geometry!.isNotEmpty) {
+            geometries[stepIndex] = List.from(leg.geometry!);
+            _navLog('   ✅ Geometría ride_metro: ${leg.geometry!.length} puntos (leg $legIndex)');
           }
           legIndex++; // Ahora sí avanzar al siguiente leg
         }
@@ -1252,16 +1405,16 @@ Te iré guiando paso a paso.
       }
     }
 
-    // Si está en un paso de bus, detectar si está esperando o ya subió
-    if (currentStep.type == 'bus') {
-      // Si está cerca del paradero de inicio Y no se ha movido mucho, está esperando
-      final busLegs = _activeNavigation!.itinerary.legs
-          .where((leg) => leg.type == 'bus')
+    // Si está en un paso de ride_bus o ride_metro, detectar progreso del viaje
+    if (currentStep.type == 'ride_bus' || currentStep.type == 'ride_metro') {
+      // Detectar si está cerca de alguna parada/estación intermedia
+      final vehicleLegs = _activeNavigation!.itinerary.legs
+          .where((leg) => leg.type == 'bus' || leg.type == 'metro' || leg.isMetro)
           .toList();
       
-      if (busLegs.isNotEmpty) {
-        final busLeg = busLegs.first;
-        final departStop = busLeg.departStop?.location;
+      if (vehicleLegs.isNotEmpty) {
+        final vehicleLeg = vehicleLegs.first;
+        final departStop = vehicleLeg.departStop?.location;
         
         if (departStop != null) {
           final distanceToStart = _distance.as(
@@ -1397,7 +1550,7 @@ Te iré guiando paso a paso.
         }
         message += ' para llegar al $simplifiedStopName';
       }
-    } else if (step.type == 'bus') {
+    } else if (step.type == 'ride_bus') {
       final km = (distanceMeters / 1000).toStringAsFixed(1);
       final simplifiedStopName = _simplifyStopNameForTTS(
         step.stopName,
@@ -1405,6 +1558,14 @@ Te iré guiando paso a paso.
       );
       message =
           'Viajando en bus ${step.busRoute}. Faltan $km kilómetros hasta $simplifiedStopName';
+    } else if (step.type == 'ride_metro') {
+      final km = (distanceMeters / 1000).toStringAsFixed(1);
+      final simplifiedStopName = _simplifyStopNameForTTS(
+        step.stopName,
+        isDestination: true,
+      );
+      message =
+          'Viajando en Metro Línea ${step.busRoute}. Faltan $km kilómetros hasta estación $simplifiedStopName';
     }
 
     if (message.isNotEmpty) {
