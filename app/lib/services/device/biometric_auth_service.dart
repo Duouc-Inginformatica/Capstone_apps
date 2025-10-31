@@ -104,7 +104,9 @@ class BiometricAuthService {
       final userId = prefs.getString(_currentUserKey);
 
       if (userId == null) {
-        developer.log('ℹ️ [BIOMETRIC] No hay usuario registrado con esta biometría');
+        developer.log(
+          'ℹ️ [BIOMETRIC] No hay usuario registrado con esta biometría',
+        );
         return null;
       }
 
@@ -115,7 +117,9 @@ class BiometricAuthService {
       }
 
       final userData = json.decode(userDataJson) as Map<String, dynamic>;
-      developer.log('👤 [BIOMETRIC] Usuario encontrado: ${userData['username']}');
+      developer.log(
+        '👤 [BIOMETRIC] Usuario encontrado: ${userData['username']}',
+      );
 
       return userData;
     } on PlatformException catch (e) {

@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 import 'package:dio_cache_interceptor/dio_cache_interceptor.dart';
-import 'package:dio_cache_interceptor_hive_store/dio_cache_interceptor_hive_store.dart';
+// NOTA: dio_cache_interceptor 4.x usa MemCacheStore por defecto
+// Para Hive storage, usar el nuevo paquete http_cache_hive_store cuando esté disponible
 import '../debug_logger.dart';
 
 /// ============================================================================
@@ -8,7 +9,7 @@ import '../debug_logger.dart';
 /// ============================================================================
 /// Reemplaza http.dart con Dio para mejor rendimiento:
 /// - Connection pooling (reutiliza conexiones TCP)
-/// - Caché HTTP automático
+/// - Caché HTTP automático (en memoria)
 /// - Retry con backoff exponencial
 /// - Interceptors para logging y tracing
 ///
@@ -20,7 +21,6 @@ import '../debug_logger.dart';
 class DioApiClient {
   static Dio? _dio;
   static CacheOptions? _cacheOptions;
-  static String? _baseUrl;
 
   /// Inicializa el cliente Dio (llamar al inicio de la app)
   static Future<void> init({
@@ -29,20 +29,17 @@ class DioApiClient {
     Duration receiveTimeout = const Duration(seconds: 30),
     Duration sendTimeout = const Duration(seconds: 30),
   }) async {
-    _baseUrl = baseUrl;
-
     // =========================================================================
-    // CACHE STORE - Almacenamiento en Hive
+    // CACHE STORE - Almacenamiento en memoria (MemCacheStore por defecto)
     // =========================================================================
-    final cacheStore = HiveCacheStore(
-      null, // Usa directorio por defecto
-      hiveBoxName: 'api_cache',
-    );
-
+    // En dio_cache_interceptor 4.x, MemCacheStore se usa automáticamente
+    // Para persistencia, agregar http_cache_hive_store cuando esté disponible
+    
     _cacheOptions = CacheOptions(
-      store: cacheStore,
+      store: MemCacheStore(), // Caché en memoria (rápido pero no persistente)
       policy: CachePolicy.request, // Respetar headers del servidor
-      hitCacheOnErrorExcept: [401, 403, 404], // Usar caché en errores de red
+      // NOTA: dio_cache_interceptor 4.x eliminó hitCacheOnErrorExcept
+      // Ahora usa una política de caché más simple
       maxStale: const Duration(days: 7),
       priority: CachePriority.high,
       keyBuilder: CacheOptions.defaultCacheKeyBuilder,
@@ -221,18 +218,24 @@ class DioApiClient {
       case DioExceptionType.connectionTimeout:
       case DioExceptionType.sendTimeout:
       case DioExceptionType.receiveTimeout:
-        return TimeoutException('Tiempo de espera agotado. Intenta nuevamente.');
+        return TimeoutException(
+          'Tiempo de espera agotado. Intenta nuevamente.',
+        );
 
       case DioExceptionType.badResponse:
         final statusCode = e.response?.statusCode;
         if (statusCode == 401) {
-          return UnauthorizedException('Sesión expirada. Inicia sesión nuevamente.');
+          return UnauthorizedException(
+            'Sesión expirada. Inicia sesión nuevamente.',
+          );
         } else if (statusCode == 403) {
           return ForbiddenException('No tienes permiso para esta acción.');
         } else if (statusCode == 404) {
           return NotFoundException('Recurso no encontrado.');
         } else if (statusCode == 429) {
-          return RateLimitException('Demasiadas solicitudes. Espera un momento.');
+          return RateLimitException(
+            'Demasiadas solicitudes. Espera un momento.',
+          );
         } else if (statusCode != null && statusCode >= 500) {
           return ServerException('Error del servidor. Intenta más tarde.');
         }
@@ -316,10 +319,7 @@ class _RetryInterceptor extends Interceptor {
 class _LoggingInterceptor extends Interceptor {
   @override
   void onRequest(RequestOptions options, RequestInterceptorHandler handler) {
-    DebugLogger.info(
-      '→ ${options.method} ${options.path}',
-      context: 'HTTP',
-    );
+    DebugLogger.info('→ ${options.method} ${options.path}', context: 'HTTP');
     super.onRequest(options, handler);
   }
 

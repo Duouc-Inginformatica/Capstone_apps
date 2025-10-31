@@ -18,9 +18,9 @@ class BusGeometryService {
   final ApiClient _apiClient = ApiClient();
 
   /// Obtiene geometría exacta entre dos paraderos en una ruta de bus
-  /// 
+  ///
   /// Usa GTFS shapes cuando están disponibles, con fallback a GraphHopper
-  /// 
+  ///
   /// [routeNumber]: Número de ruta (ej: "506", "D09")
   /// [fromStopCode]: Código del paradero de origen (ej: "PC1237")
   /// [toStopCode]: Código del paradero de destino (ej: "PC615")
@@ -114,10 +114,7 @@ class BusGeometryService {
   /// Valida que la geometría recibida sea válida
   bool isValidGeometry(List<LatLng> geometry) {
     if (geometry.isEmpty) {
-      DebugLogger.warning(
-        'Geometría vacía',
-        context: 'BusGeometryService',
-      );
+      DebugLogger.warning('Geometría vacía', context: 'BusGeometryService');
       return false;
     }
 
@@ -206,12 +203,7 @@ class BusStopInfo {
   final double lat;
   final double lon;
 
-  BusStopInfo({
-    this.code,
-    this.name,
-    required this.lat,
-    required this.lon,
-  });
+  BusStopInfo({this.code, this.name, required this.lat, required this.lon});
 
   factory BusStopInfo.fromJson(Map<String, dynamic> json) {
     return BusStopInfo(

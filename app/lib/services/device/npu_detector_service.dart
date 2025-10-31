@@ -63,7 +63,7 @@ class NpuDetectorService {
       try {
         nativeCapabilities =
             await _channel.invokeMapMethod<String, dynamic>('detectNpu') ??
-                <String, dynamic>{};
+            <String, dynamic>{};
       } catch (e) {
         DebugLogger.info('⚠️ [NPU] Platform channel no disponible: $e');
       }
@@ -72,7 +72,7 @@ class NpuDetectorService {
       final hasNpuDelegate = nativeCapabilities['has_npu'] as bool? ?? false;
       final acceleratorName =
           nativeCapabilities['accelerator_name'] as String? ?? '';
-  final rawHardware = deviceInfo.hardware;
+      final rawHardware = deviceInfo.hardware;
       final hardware = rawHardware.toLowerCase();
 
       // Determinar tipo de acelerador basado en chipset
@@ -104,11 +104,13 @@ class NpuDetectorService {
         acceleratorType: acceleratorType,
         deviceInfo:
             '${deviceInfo.manufacturer} ${deviceInfo.model} (SDK $sdkInt)',
-  chipset: rawHardware.isNotEmpty ? rawHardware : 'unknown',
+        chipset: rawHardware.isNotEmpty ? rawHardware : 'unknown',
       );
 
       DebugLogger.info('🧠 [NPU] Capacidades detectadas:');
-      DebugLogger.info('   - NNAPI: ${hasNnapi ? "v${nnApiVersion / 10}" : "No"}');
+      DebugLogger.info(
+        '   - NNAPI: ${hasNnapi ? "v${nnApiVersion / 10}" : "No"}',
+      );
       DebugLogger.info('   - GPU Delegate: $hasGpuDelegate');
       DebugLogger.info('   - NPU Delegate: $hasNpuDelegate');
       DebugLogger.info('   - Acelerador: ${acceleratorType.name}');

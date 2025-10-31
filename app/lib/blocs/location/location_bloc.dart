@@ -46,17 +46,22 @@ class LocationBloc extends Bloc<LocationEvent, LocationState> {
     LocationStarted event,
     Emitter<LocationState> emit,
   ) async {
-    DebugLogger.info('Iniciando servicio de ubicación', context: 'LocationBloc');
+    DebugLogger.info(
+      'Iniciando servicio de ubicación',
+      context: 'LocationBloc',
+    );
     emit(const LocationLoading());
 
     try {
       // 1. Verificar si el servicio de ubicación está habilitado
       final serviceEnabled = await Geolocator.isLocationServiceEnabled();
       if (!serviceEnabled) {
-        emit(const LocationError(
-          message: 'GPS desactivado. Activa la ubicación en Configuración.',
-          errorType: LocationErrorType.serviceDisabled,
-        ));
+        emit(
+          const LocationError(
+            message: 'GPS desactivado. Activa la ubicación en Configuración.',
+            errorType: LocationErrorType.serviceDisabled,
+          ),
+        );
         return;
       }
 
@@ -65,38 +70,60 @@ class LocationBloc extends Bloc<LocationEvent, LocationState> {
       if (permission == LocationPermission.denied) {
         permission = await Geolocator.requestPermission();
         if (permission == LocationPermission.denied) {
-          emit(const LocationError(
-            message: 'Permisos de ubicación denegados',
-            errorType: LocationErrorType.permissionDenied,
-          ));
+          emit(
+            const LocationError(
+              message: 'Permisos de ubicación denegados',
+              errorType: LocationErrorType.permissionDenied,
+            ),
+          );
           return;
         }
       }
 
       if (permission == LocationPermission.deniedForever) {
-        emit(const LocationError(
-          message:
-              'Permisos de ubicación denegados permanentemente. Ve a Configuración para habilitarlos.',
-          errorType: LocationErrorType.permissionDeniedForever,
-        ));
+        emit(
+          const LocationError(
+            message:
+                'Permisos de ubicación denegados permanentemente. Ve a Configuración para habilitarlos.',
+            errorType: LocationErrorType.permissionDeniedForever,
+          ),
+        );
         return;
       }
 
       // 3. Obtener posición inicial
-      final initialPosition = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.high,
-          distanceFilter: 0,
-        ),
-      );
+      final initialPosition =
+          await Geolocator.getCurrentPosition(
+            locationSettings: const LocationSettings(
+              accuracy: LocationAccuracy.high,
+              distanceFilter: 0,
+              timeLimit: Duration(seconds: 15),
+            ),
+          ).timeout(
+            const Duration(seconds: 20),
+            onTimeout: () async {
+              return await Geolocator.getLastKnownPosition() ??
+                  Position(
+                    latitude: -33.4489,
+                    longitude: -70.6693,
+                    timestamp: DateTime.now(),
+                    accuracy: 0,
+                    altitude: 0,
+                    altitudeAccuracy: 0,
+                    heading: 0,
+                    headingAccuracy: 0,
+                    speed: 0,
+                    speedAccuracy: 0,
+                  );
+            },
+          );
 
       _lastPosition = initialPosition;
       _lastUpdateTime = DateTime.now();
 
-      emit(LocationLoaded(
-        position: initialPosition,
-        timestamp: DateTime.now(),
-      ));
+      emit(
+        LocationLoaded(position: initialPosition, timestamp: DateTime.now()),
+      );
 
       DebugLogger.success(
         'Posición inicial: ${initialPosition.latitude}, ${initialPosition.longitude}',
@@ -104,28 +131,32 @@ class LocationBloc extends Bloc<LocationEvent, LocationState> {
       );
 
       // 4. Suscribirse al stream de posiciones
-      _positionStreamSubscription = Geolocator.getPositionStream(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.high,
-          distanceFilter: 10, // Actualizar cada 10 metros
-          timeLimit: Duration(seconds: 60), // Timeout de 60 segundos
-        ),
-      ).listen(
-        (Position position) {
-          add(LocationUpdated(
-            latitude: position.latitude,
-            longitude: position.longitude,
-            accuracy: position.accuracy,
-            heading: position.heading,
-            timestamp: DateTime.now(),
-          ));
-        },
-        onError: (error) {
-          add(LocationErrorOccurred(
-            message: 'Error obteniendo ubicación: $error',
-          ));
-        },
-      );
+      _positionStreamSubscription =
+          Geolocator.getPositionStream(
+            locationSettings: const LocationSettings(
+              accuracy: LocationAccuracy.high,
+              distanceFilter: 5,
+              timeLimit: Duration(minutes: 5),
+            ),
+          ).listen(
+            (Position position) {
+              add(
+                LocationUpdated(
+                  latitude: position.latitude,
+                  longitude: position.longitude,
+                  accuracy: position.accuracy,
+                  heading: position.heading,
+                  timestamp: DateTime.now(),
+                ),
+              );
+            },
+            onError: (error) {
+              DebugLogger.warning(
+                'Stream error: $error',
+                context: 'LocationBloc',
+              );
+            },
+          );
     } catch (e, stackTrace) {
       DebugLogger.error(
         'Error iniciando ubicación',
@@ -134,10 +165,12 @@ class LocationBloc extends Bloc<LocationEvent, LocationState> {
         stackTrace: stackTrace,
       );
 
-      emit(LocationError(
-        message: 'Error: ${e.toString()}',
-        errorType: LocationErrorType.unknown,
-      ));
+      emit(
+        LocationError(
+          message: 'Error: ${e.toString()}',
+          errorType: LocationErrorType.unknown,
+        ),
+      );
     }
   }
 
@@ -146,7 +179,10 @@ class LocationBloc extends Bloc<LocationEvent, LocationState> {
     LocationStopped event,
     Emitter<LocationState> emit,
   ) async {
-    DebugLogger.info('Deteniendo servicio de ubicación', context: 'LocationBloc');
+    DebugLogger.info(
+      'Deteniendo servicio de ubicación',
+      context: 'LocationBloc',
+    );
 
     await _positionStreamSubscription?.cancel();
     _positionStreamSubscription = null;
@@ -210,11 +246,13 @@ class LocationBloc extends Bloc<LocationEvent, LocationState> {
     _lastPosition = position;
     _lastUpdateTime = now;
 
-    emit(LocationLoaded(
-      position: position,
-      heading: event.heading,
-      timestamp: event.timestamp,
-    ));
+    emit(
+      LocationLoaded(
+        position: position,
+        heading: event.heading,
+        timestamp: event.timestamp,
+      ),
+    );
 
     DebugLogger.info(
       'Ubicación actualizada: ${event.latitude.toStringAsFixed(6)}, ${event.longitude.toStringAsFixed(6)} (±${event.accuracy.toStringAsFixed(1)}m)',
@@ -233,10 +271,12 @@ class LocationBloc extends Bloc<LocationEvent, LocationState> {
       error: event.message,
     );
 
-    emit(LocationError(
-      message: event.message,
-      errorType: LocationErrorType.unknown,
-    ));
+    emit(
+      LocationError(
+        message: event.message,
+        errorType: LocationErrorType.unknown,
+      ),
+    );
   }
 
   /// Solicitar permisos de ubicación
@@ -244,22 +284,26 @@ class LocationBloc extends Bloc<LocationEvent, LocationState> {
     LocationPermissionRequested event,
     Emitter<LocationState> emit,
   ) async {
-    emit(const LocationPermissionRequested());
+    emit(const LocationPermissionRequesting());
 
     final status = await Permission.location.request();
 
     if (status.isGranted) {
       add(const LocationStarted());
     } else if (status.isDenied) {
-      emit(const LocationError(
-        message: 'Permisos de ubicación denegados',
-        errorType: LocationErrorType.permissionDenied,
-      ));
+      emit(
+        const LocationError(
+          message: 'Permisos de ubicación denegados',
+          errorType: LocationErrorType.permissionDenied,
+        ),
+      );
     } else if (status.isPermanentlyDenied) {
-      emit(const LocationError(
-        message: 'Abre Configuración para habilitar permisos de ubicación',
-        errorType: LocationErrorType.permissionDeniedForever,
-      ));
+      emit(
+        const LocationError(
+          message: 'Abre Configuración para habilitar permisos de ubicación',
+          errorType: LocationErrorType.permissionDeniedForever,
+        ),
+      );
     }
   }
 
@@ -291,17 +335,17 @@ class LocationBloc extends Bloc<LocationEvent, LocationState> {
         ),
       );
 
-      add(LocationUpdated(
-        latitude: position.latitude,
-        longitude: position.longitude,
-        accuracy: position.accuracy,
-        heading: position.heading,
-        timestamp: DateTime.now(),
-      ));
+      add(
+        LocationUpdated(
+          latitude: position.latitude,
+          longitude: position.longitude,
+          accuracy: position.accuracy,
+          heading: position.heading,
+          timestamp: DateTime.now(),
+        ),
+      );
     } catch (e) {
-      add(LocationErrorOccurred(
-        message: 'Error refrescando ubicación: $e',
-      ));
+      add(LocationErrorOccurred(message: 'Error refrescando ubicación: $e'));
     }
   }
 

@@ -37,12 +37,12 @@ class LocationLoaded extends LocationState {
 
   @override
   List<Object?> get props => [
-        position.latitude,
-        position.longitude,
-        position.accuracy,
-        heading,
-        timestamp,
-      ];
+    position.latitude,
+    position.longitude,
+    position.accuracy,
+    heading,
+    timestamp,
+  ];
 
   /// Crea copia con cambios
   LocationLoaded copyWith({
@@ -81,10 +81,7 @@ class LocationError extends LocationState {
   final String message;
   final LocationErrorType errorType;
 
-  const LocationError({
-    required this.message,
-    required this.errorType,
-  });
+  const LocationError({required this.message, required this.errorType});
 
   @override
   List<Object?> get props => [message, errorType];
@@ -100,6 +97,6 @@ enum LocationErrorType {
 }
 
 /// Estado de permiso - Esperando decisión del usuario
-class LocationPermissionRequested extends LocationState {
-  const LocationPermissionRequested();
+class LocationPermissionRequesting extends LocationState {
+  const LocationPermissionRequesting();
 }

@@ -175,15 +175,15 @@ class _BiometricLoginScreenState extends State<BiometricLoginScreen> {
       await _ensureBackendSession(user);
 
       final username = user['username'] as String;
-      await _tts.speak(
-        'Bienvenido de vuelta, $username. Ingresando a la aplicación.',
-      );
+      final welcomeMessage = 'Bienvenido de vuelta, $username';
 
       // Navegar al mapa
       if (mounted) {
-        Navigator.of(
-          context,
-        ).pushReplacement(MaterialPageRoute(builder: (_) => const MapScreen()));
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(
+            builder: (_) => MapScreen(welcomeMessage: welcomeMessage),
+          ),
+        );
       }
     } catch (e) {
       _log('❌ [BIOMETRIC-LOGIN] Error en auto-login: $e');
@@ -244,9 +244,7 @@ class _BiometricLoginScreenState extends State<BiometricLoginScreen> {
             _handleVoiceResult(result, step),
         listenFor: const Duration(seconds: 10),
         pauseFor: const Duration(seconds: 2),
-  listenOptions: SpeechListenOptions(
-          partialResults: false,
-        ),
+        listenOptions: SpeechListenOptions(partialResults: false),
         localeId: 'es_ES',
       );
 
@@ -459,12 +457,11 @@ class _BiometricLoginScreenState extends State<BiometricLoginScreen> {
   }
 
   Future<void> _ensureBackendSession(Map<String, dynamic> localUser) async {
-  final username = localUser['username']?.toString() ?? '';
-  final rawEmail = localUser['email'];
-  final emailCandidate =
-    rawEmail is String && rawEmail.trim().isNotEmpty
-      ? rawEmail.trim()
-      : null;
+    final username = localUser['username']?.toString() ?? '';
+    final rawEmail = localUser['email'];
+    final emailCandidate = rawEmail is String && rawEmail.trim().isNotEmpty
+        ? rawEmail.trim()
+        : null;
 
     try {
       final biometricToken = await _biometricAuth.getBiometricDeviceToken();
@@ -494,9 +491,7 @@ class _BiometricLoginScreenState extends State<BiometricLoginScreen> {
       }
     } catch (e) {
       _log('❌ [BACKEND] Error inesperado en login biométrico: $e');
-      await _tts.speak(
-        'Error inesperado al sincronizar con el servidor.',
-      );
+      await _tts.speak('Error inesperado al sincronizar con el servidor.');
     }
   }
 
@@ -555,11 +550,7 @@ class _BiometricLoginScreenState extends State<BiometricLoginScreen> {
       email: _registrationEmail,
     );
 
-    await _tts.speak(
-      'Registro completado exitosamente. '
-      'Bienvenido a WayFind CL, $_registrationUsername. '
-      'Ingresando a la aplicación.',
-    );
+    final welcomeMessage = 'Bienvenido a WayFind CL, $_registrationUsername';
 
     setState(() {
       _isRegistering = false;
@@ -569,9 +560,11 @@ class _BiometricLoginScreenState extends State<BiometricLoginScreen> {
     // Navegar al mapa
     await Future.delayed(const Duration(seconds: 1));
     if (mounted) {
-      Navigator.of(
-        context,
-      ).pushReplacement(MaterialPageRoute(builder: (_) => const MapScreen()));
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (_) => MapScreen(welcomeMessage: welcomeMessage),
+        ),
+      );
     }
   }
 

@@ -4,3 +4,4 @@ export 'biometric_auth_service.dart';
 export 'npu_detector_service.dart';
 export 'tts_service.dart';
 export 'haptic_feedback_service.dart';
+export 'smart_vibration_service.dart';

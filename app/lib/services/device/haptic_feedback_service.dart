@@ -11,28 +11,28 @@ import 'package:vibration/vibration.dart';
 enum HapticPattern {
   /// Vibración simple y corta (120ms) - para notificaciones ligeras
   light,
-  
+
   /// Vibración media (200ms) - para confirmaciones
   medium,
-  
+
   /// Vibración fuerte (300ms) - para alertas importantes
   strong,
-  
+
   /// Patrón de notificación (200ms, pausa 100ms, 200ms)
   notification,
-  
+
   /// Patrón de alerta (300ms, pausa 100ms, 300ms, pausa 100ms, 300ms)
   alert,
-  
+
   /// Patrón de advertencia (200ms, pausa 100ms, 200ms, pausa 100ms, 200ms)
   warning,
-  
+
   /// Patrón de error/desviación (400ms, pausa 200ms, 400ms)
   error,
-  
+
   /// Patrón de éxito (500ms, pausa 200ms, 500ms, pausa 200ms, 500ms)
   success,
-  
+
   /// Patrón de navegación crítica (500ms, pausa 200ms, 500ms)
   navigationCritical,
 }
@@ -40,20 +40,21 @@ enum HapticPattern {
 /// Servicio centralizado de retroalimentación háptica
 class HapticFeedbackService {
   HapticFeedbackService._internal();
-  static final HapticFeedbackService instance = HapticFeedbackService._internal();
+  static final HapticFeedbackService instance =
+      HapticFeedbackService._internal();
 
   /// Cache del estado del vibrador del dispositivo
   bool? _hasVibrator;
-  
+
   /// Indica si el servicio está habilitado globalmente
   bool _isEnabled = true;
-  
+
   /// Intensidad global de vibración (0.0 a 1.0)
   double _intensity = 1.0;
 
   /// Obtiene si el servicio está habilitado
   bool get isEnabled => _isEnabled;
-  
+
   /// Obtiene la intensidad actual
   double get intensity => _intensity;
 
@@ -77,7 +78,8 @@ class HapticFeedbackService {
     }
 
     try {
-      _hasVibrator = await Vibration.hasVibrator() ?? false;
+      final hasVibratorCapability = await Vibration.hasVibrator();
+      _hasVibrator = hasVibratorCapability == true;
       return _hasVibrator!;
     } catch (e) {
       _hasVibrator = false;
@@ -94,56 +96,62 @@ class HapticFeedbackService {
     if (!await hasVibrator()) return;
 
     final effectiveIntensity = customIntensity ?? _intensity;
-    
+
     try {
       switch (pattern) {
         case HapticPattern.light:
           await _vibrateDuration(120, effectiveIntensity);
           break;
-          
+
         case HapticPattern.medium:
           await _vibrateDuration(200, effectiveIntensity);
           break;
-          
+
         case HapticPattern.strong:
           await _vibrateDuration(300, effectiveIntensity);
           break;
-          
+
         case HapticPattern.notification:
-          await _vibratePattern(
-            [0, 200, 100, 200],
-            effectiveIntensity,
-          );
+          await _vibratePattern([0, 200, 100, 200], effectiveIntensity);
           break;
-          
+
         case HapticPattern.alert:
-          await _vibratePattern(
-            [0, 300, 100, 300, 100, 300],
-            effectiveIntensity,
-          );
+          await _vibratePattern([
+            0,
+            300,
+            100,
+            300,
+            100,
+            300,
+          ], effectiveIntensity);
           break;
-          
+
         case HapticPattern.warning:
-          await _vibratePattern(
-            [0, 200, 100, 200, 100, 200],
-            effectiveIntensity,
-          );
+          await _vibratePattern([
+            0,
+            200,
+            100,
+            200,
+            100,
+            200,
+          ], effectiveIntensity);
           break;
-          
+
         case HapticPattern.error:
-          await _vibratePattern(
-            [0, 400, 200, 400],
-            effectiveIntensity,
-          );
+          await _vibratePattern([0, 400, 200, 400], effectiveIntensity);
           break;
-          
+
         case HapticPattern.success:
-          await _vibratePattern(
-            [0, 500, 200, 500, 200, 500],
-            effectiveIntensity,
-          );
+          await _vibratePattern([
+            0,
+            500,
+            200,
+            500,
+            200,
+            500,
+          ], effectiveIntensity);
           break;
-          
+
         case HapticPattern.navigationCritical:
           await _vibratePattern(
             [0, 500, 200, 500],
@@ -158,10 +166,7 @@ class HapticFeedbackService {
   }
 
   /// Vibra con una duración específica
-  Future<void> vibrate({
-    int duration = 200,
-    double? customIntensity,
-  }) async {
+  Future<void> vibrate({int duration = 200, double? customIntensity}) async {
     if (!_isEnabled) return;
     if (!await hasVibrator()) return;
 
@@ -170,7 +175,7 @@ class HapticFeedbackService {
   }
 
   /// Vibra con un patrón personalizado
-  /// 
+  ///
   /// [pattern] - Array de duraciones en milisegundos
   /// El primer elemento es el delay antes de empezar
   /// Los elementos pares son pausas, los impares son vibraciones
@@ -183,7 +188,11 @@ class HapticFeedbackService {
     if (!await hasVibrator()) return;
 
     final effectiveIntensity = customIntensity ?? _intensity;
-    await _vibratePattern(pattern, effectiveIntensity, intensities: intensities);
+    await _vibratePattern(
+      pattern,
+      effectiveIntensity,
+      intensities: intensities,
+    );
   }
 
   /// Detiene cualquier vibración en curso
@@ -227,9 +236,7 @@ class HapticFeedbackService {
           intensities: intensities,
         );
       } else {
-        await Vibration.vibrate(
-          pattern: adjustedPattern,
-        );
+        await Vibration.vibrate(pattern: adjustedPattern);
       }
     } catch (e) {
       // Silenciar errores
@@ -249,13 +256,16 @@ class HapticFeedbackService {
   Future<void> navigationStart() => vibrateWithPattern(HapticPattern.medium);
 
   /// Feedback para aproximación a destino (300m)
-  Future<void> approachingDestination() => vibrateWithPattern(HapticPattern.medium);
+  Future<void> approachingDestination() =>
+      vibrateWithPattern(HapticPattern.medium);
 
   /// Feedback para cercanía a destino (150m)
-  Future<void> nearDestination() => vibrateWithPattern(HapticPattern.notification);
+  Future<void> nearDestination() =>
+      vibrateWithPattern(HapticPattern.notification);
 
   /// Feedback para llegada a destino (50m)
-  Future<void> arrivedAtDestination() => vibrateWithPattern(HapticPattern.alert);
+  Future<void> arrivedAtDestination() =>
+      vibrateWithPattern(HapticPattern.alert);
 
   /// Feedback para alerta de bus correcto
   Future<void> correctBusAlert() => vibrateWithPattern(HapticPattern.warning);
@@ -264,7 +274,7 @@ class HapticFeedbackService {
   Future<void> routeDeviation() => vibrateWithPattern(HapticPattern.error);
 
   /// Feedback para desviación de navegación crítica
-  Future<void> navigationDeviationCritical() => 
+  Future<void> navigationDeviationCritical() =>
       vibrateWithPattern(HapticPattern.navigationCritical);
 
   /// Feedback ligero para notificaciones generales

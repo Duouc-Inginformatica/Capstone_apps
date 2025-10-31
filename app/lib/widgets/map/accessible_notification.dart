@@ -55,14 +55,9 @@ class _AccessibleNotificationState extends State<AccessibleNotification>
     _slideAnimation = Tween<Offset>(
       begin: const Offset(0, -0.08),
       end: Offset.zero,
-    ).animate(
-      CurvedAnimation(parent: _controller, curve: Curves.easeOutCubic),
-    );
+    ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeOutCubic));
 
-    _fadeAnimation = CurvedAnimation(
-      parent: _controller,
-      curve: Curves.easeIn,
-    );
+    _fadeAnimation = CurvedAnimation(parent: _controller, curve: Curves.easeIn);
 
     _controller.forward();
     _scheduleAutoDismiss();

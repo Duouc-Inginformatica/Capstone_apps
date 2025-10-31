@@ -1,14 +1,14 @@
 import 'package:flutter/material.dart';
 
 /// Widget independiente para mostrar instrucciones de navegación
-/// 
+///
 /// Características:
 /// - Lista de instrucciones paso a paso
 /// - Resalta instrucción actual
 /// - Accesible (TalkBack/VoiceOver)
 /// - Swipe para siguiente/anterior
 /// - Animaciones suaves
-/// 
+///
 /// Uso:
 /// ```dart
 /// InstructionsPanelWidget(
@@ -43,7 +43,8 @@ class InstructionsPanelWidget extends StatefulWidget {
   });
 
   @override
-  State<InstructionsPanelWidget> createState() => _InstructionsPanelWidgetState();
+  State<InstructionsPanelWidget> createState() =>
+      _InstructionsPanelWidgetState();
 }
 
 class _InstructionsPanelWidgetState extends State<InstructionsPanelWidget>
@@ -64,10 +65,7 @@ class _InstructionsPanelWidgetState extends State<InstructionsPanelWidget>
     _slideAnimation = Tween<double>(
       begin: 1.0,
       end: 0.0,
-    ).animate(CurvedAnimation(
-      parent: _controller,
-      curve: Curves.easeOut,
-    ));
+    ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeOut));
 
     _pageController = PageController(initialPage: widget.currentStep);
 
@@ -111,9 +109,11 @@ class _InstructionsPanelWidgetState extends State<InstructionsPanelWidget>
       return const SizedBox.shrink();
     }
 
-    final bgColor = widget.backgroundColor ??
+    final bgColor =
+        widget.backgroundColor ??
         Theme.of(context).colorScheme.surface.withOpacity(0.95);
-    final txtColor = widget.textColor ?? Theme.of(context).colorScheme.onSurface;
+    final txtColor =
+        widget.textColor ?? Theme.of(context).colorScheme.onSurface;
 
     return SlideTransition(
       position: Tween<Offset>(
@@ -142,9 +142,7 @@ class _InstructionsPanelWidgetState extends State<InstructionsPanelWidget>
             _buildProgressIndicator(context),
 
             // Instructions PageView
-            Expanded(
-              child: _buildInstructionsView(context, txtColor),
-            ),
+            Expanded(child: _buildInstructionsView(context, txtColor)),
 
             // Controls
             _buildControls(context, txtColor),
@@ -159,10 +157,7 @@ class _InstructionsPanelWidgetState extends State<InstructionsPanelWidget>
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
         border: Border(
-          bottom: BorderSide(
-            color: textColor.withOpacity(0.1),
-            width: 1,
-          ),
+          bottom: BorderSide(color: textColor.withOpacity(0.1), width: 1),
         ),
       ),
       child: Row(
@@ -282,14 +277,16 @@ class _InstructionsPanelWidgetState extends State<InstructionsPanelWidget>
                   ),
                 ),
                 const SizedBox(height: 24),
-                
+
                 // Instrucción
                 Text(
                   instruction,
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     fontSize: isCurrentStep ? 20 : 18,
-                    fontWeight: isCurrentStep ? FontWeight.w600 : FontWeight.normal,
+                    fontWeight: isCurrentStep
+                        ? FontWeight.w600
+                        : FontWeight.normal,
                     color: textColor,
                     height: 1.4,
                   ),
@@ -311,10 +308,7 @@ class _InstructionsPanelWidgetState extends State<InstructionsPanelWidget>
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         border: Border(
-          top: BorderSide(
-            color: textColor.withOpacity(0.1),
-            width: 1,
-          ),
+          top: BorderSide(color: textColor.withOpacity(0.1), width: 1),
         ),
       ),
       child: Row(

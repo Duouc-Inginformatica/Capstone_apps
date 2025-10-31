@@ -118,7 +118,9 @@ class GeometryService {
         'departure_time': departure.toIso8601String(),
       });
 
-      DebugLogger.network('🚌 [Geometry] Solicitando geometría de transporte público');
+      DebugLogger.network(
+        '🚌 [Geometry] Solicitando geometría de transporte público',
+      );
 
       final response = await http
           .post(url, headers: {'Content-Type': 'application/json'}, body: body)
@@ -241,7 +243,9 @@ class GeometryService {
         '&profile=$profile',
       );
 
-      DebugLogger.network('🗺️ [Geometry] Calculando isócrona ($timeMinutes min)');
+      DebugLogger.network(
+        '🗺️ [Geometry] Calculando isócrona ($timeMinutes min)',
+      );
 
       final response = await http.get(url).timeout(const Duration(seconds: 15));
 

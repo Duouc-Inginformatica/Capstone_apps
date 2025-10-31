@@ -2,10 +2,10 @@ import 'package:flutter/material.dart';
 import '../../services/navigation/integrated_navigation_service.dart';
 
 /// Widget para visualizar rutas con metro y trasbordos
-/// 
+///
 /// Muestra el flujo completo de la ruta:
 /// 🚶 Usuario → 🚏 Paradero → 🚌 Bus → 🚶 Caminar → 🚇 Metro (L1→L2) → 🚌 Bus → 🎯 Destino
-/// 
+///
 /// Características:
 /// - Detección automática de segmentos de metro (type: 'metro', mode: 'Metro')
 /// - Visualización de líneas de metro (L1-L6 con colores)
@@ -43,7 +43,7 @@ class MetroRoutePanelWidget extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final bool hasMetro = _hasMetroSegment();
-    
+
     return Container(
       height: height ?? 400,
       decoration: BoxDecoration(
@@ -61,9 +61,9 @@ class MetroRoutePanelWidget extends StatelessWidget {
         children: [
           // Barra superior con título y botón cerrar
           _buildHeader(context, hasMetro),
-          
+
           const Divider(height: 1),
-          
+
           // Lista de pasos con visualización mejorada para metro
           Expanded(
             child: ListView.builder(
@@ -73,7 +73,7 @@ class MetroRoutePanelWidget extends StatelessWidget {
                 final step = steps[index];
                 final isCurrentStep = index == currentStepIndex;
                 final isCompleted = step.isCompleted;
-                
+
                 return _buildStepItem(
                   context,
                   step,
@@ -103,15 +103,11 @@ class MetroRoutePanelWidget extends StatelessWidget {
                 color: Colors.purple.shade100,
                 borderRadius: BorderRadius.circular(8),
               ),
-              child: const Icon(
-                Icons.subway,
-                color: Colors.purple,
-                size: 24,
-              ),
+              child: const Icon(Icons.subway, color: Colors.purple, size: 24),
             ),
             const SizedBox(width: 12),
           ],
-          
+
           // Título
           Expanded(
             child: Column(
@@ -126,15 +122,12 @@ class MetroRoutePanelWidget extends StatelessWidget {
                 ),
                 Text(
                   '${steps.length} pasos • ${_getTotalDuration()} min',
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: Colors.grey.shade600,
-                  ),
+                  style: TextStyle(fontSize: 14, color: Colors.grey.shade600),
                 ),
               ],
             ),
           ),
-          
+
           // Botón cerrar
           if (onClose != null)
             IconButton(
@@ -156,8 +149,10 @@ class MetroRoutePanelWidget extends StatelessWidget {
     bool isCompleted,
   ) {
     final stepType = step.type.toLowerCase();
-    final isMetro = stepType == 'metro' || (step.busRoute?.startsWith('L') == true && step.busRoute!.length <= 3);
-    
+    final isMetro =
+        stepType == 'metro' ||
+        (step.busRoute?.startsWith('L') == true && step.busRoute!.length <= 3);
+
     return InkWell(
       onTap: onStepTap != null ? () => onStepTap!(index) : null,
       child: Container(
@@ -176,10 +171,10 @@ class MetroRoutePanelWidget extends StatelessWidget {
                     height: 12,
                     color: isCompleted ? Colors.green : Colors.grey.shade300,
                   ),
-                
+
                 // Ícono del paso
                 _buildStepIcon(step, isCompleted, isCurrentStep, isMetro),
-                
+
                 // Línea inferior (excepto último paso)
                 if (index < steps.length - 1)
                   Container(
@@ -189,9 +184,9 @@ class MetroRoutePanelWidget extends StatelessWidget {
                   ),
               ],
             ),
-            
+
             const SizedBox(width: 16),
-            
+
             // Contenido del paso
             Expanded(
               child: Column(
@@ -205,31 +200,32 @@ class MetroRoutePanelWidget extends StatelessWidget {
                           _getStepTitle(step),
                           style: TextStyle(
                             fontSize: 16,
-                            fontWeight: isCurrentStep ? FontWeight.bold : FontWeight.normal,
-                            color: isCompleted ? Colors.grey.shade600 : Colors.black,
+                            fontWeight: isCurrentStep
+                                ? FontWeight.bold
+                                : FontWeight.normal,
+                            color: isCompleted
+                                ? Colors.grey.shade600
+                                : Colors.black,
                           ),
                         ),
                       ),
-                      
+
                       // Badge de línea de metro
                       if (isMetro && step.busRoute != null)
                         _buildMetroLineBadge(step.busRoute!),
                     ],
                   ),
-                  
+
                   const SizedBox(height: 4),
-                  
+
                   // Instrucción detallada
                   Text(
                     step.instruction,
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: Colors.grey.shade700,
-                    ),
+                    style: TextStyle(fontSize: 14, color: Colors.grey.shade700),
                   ),
-                  
+
                   const SizedBox(height: 8),
-                  
+
                   // Información adicional (duración, distancia, paradas)
                   _buildStepMetadata(step),
                 ],
@@ -242,10 +238,15 @@ class MetroRoutePanelWidget extends StatelessWidget {
   }
 
   /// Construye el ícono para cada tipo de paso
-  Widget _buildStepIcon(NavigationStep step, bool isCompleted, bool isCurrentStep, bool isMetro) {
+  Widget _buildStepIcon(
+    NavigationStep step,
+    bool isCompleted,
+    bool isCurrentStep,
+    bool isMetro,
+  ) {
     IconData icon;
     Color color;
-    
+
     if (isCompleted) {
       icon = Icons.check_circle;
       color = Colors.green;
@@ -256,7 +257,7 @@ class MetroRoutePanelWidget extends StatelessWidget {
       icon = _getIconForStepType(step.type, isMetro);
       color = Colors.grey.shade400;
     }
-    
+
     return Container(
       width: 40,
       height: 40,
@@ -290,7 +291,7 @@ class MetroRoutePanelWidget extends StatelessWidget {
   /// Construye el badge de línea de metro (L1, L2, etc.)
   Widget _buildMetroLineBadge(String lineCode) {
     final color = metroLineColors[lineCode] ?? Colors.purple;
-    
+
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
@@ -311,7 +312,7 @@ class MetroRoutePanelWidget extends StatelessWidget {
   /// Construye la metadata del paso (duración, paradas, etc.)
   Widget _buildStepMetadata(NavigationStep step) {
     final List<Widget> metadata = [];
-    
+
     // Duración
     if (step.estimatedDuration > 0) {
       metadata.add(
@@ -327,7 +328,7 @@ class MetroRoutePanelWidget extends StatelessWidget {
         ),
       );
     }
-    
+
     // Distancia real (para caminar)
     if (step.realDistanceMeters != null && step.type.toLowerCase() == 'walk') {
       metadata.add(
@@ -343,7 +344,7 @@ class MetroRoutePanelWidget extends StatelessWidget {
         ),
       );
     }
-    
+
     // Número de paradas (para bus/metro)
     if (step.totalStops != null && step.totalStops! > 0) {
       metadata.add(
@@ -359,16 +360,12 @@ class MetroRoutePanelWidget extends StatelessWidget {
         ),
       );
     }
-    
+
     if (metadata.isEmpty) {
       return const SizedBox.shrink();
     }
-    
-    return Wrap(
-      spacing: 12,
-      runSpacing: 4,
-      children: metadata,
-    );
+
+    return Wrap(spacing: 12, runSpacing: 4, children: metadata);
   }
 
   /// Obtiene el título del paso
@@ -377,7 +374,9 @@ class MetroRoutePanelWidget extends StatelessWidget {
       case 'walk':
         return 'Caminar';
       case 'bus':
-        final isMetro = step.busRoute?.startsWith('L') == true && step.busRoute!.length <= 3;
+        final isMetro =
+            step.busRoute?.startsWith('L') == true &&
+            step.busRoute!.length <= 3;
         if (isMetro) {
           return 'Tomar Metro ${step.busRoute}';
         }
@@ -402,7 +401,8 @@ class MetroRoutePanelWidget extends StatelessWidget {
   bool _hasMetroSegment() {
     return steps.any((step) {
       final isMetroType = step.type.toLowerCase() == 'metro';
-      final isMetroRoute = step.busRoute?.startsWith('L') == true && step.busRoute!.length <= 3;
+      final isMetroRoute =
+          step.busRoute?.startsWith('L') == true && step.busRoute!.length <= 3;
       return isMetroType || isMetroRoute;
     });
   }
@@ -423,7 +423,7 @@ class MetroRouteSummaryWidget extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final modes = _getUniqueModes();
-    
+
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -445,7 +445,7 @@ class MetroRouteSummaryWidget extends StatelessWidget {
               children: modes.asMap().entries.map((entry) {
                 final index = entry.key;
                 final mode = entry.value;
-                
+
                 return Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
@@ -464,7 +464,7 @@ class MetroRouteSummaryWidget extends StatelessWidget {
               }).toList(),
             ),
           ),
-          
+
           // Duración total
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -494,11 +494,14 @@ class MetroRouteSummaryWidget extends StatelessWidget {
   /// Obtiene los modos únicos de transporte en orden
   List<String> _getUniqueModes() {
     final List<String> modes = [];
-    
+
     for (final step in steps) {
       final type = step.type.toLowerCase();
-      final isMetro = type == 'metro' || (step.busRoute?.startsWith('L') == true && step.busRoute!.length <= 3);
-      
+      final isMetro =
+          type == 'metro' ||
+          (step.busRoute?.startsWith('L') == true &&
+              step.busRoute!.length <= 3);
+
       String mode;
       if (type == 'walk') {
         mode = 'walk';
@@ -509,13 +512,13 @@ class MetroRouteSummaryWidget extends StatelessWidget {
       } else {
         continue;
       }
-      
+
       // Evitar duplicados consecutivos (excepto metro con diferentes líneas)
       if (modes.isEmpty || modes.last != mode) {
         modes.add(mode);
       }
     }
-    
+
     return modes;
   }
 
@@ -524,7 +527,7 @@ class MetroRouteSummaryWidget extends StatelessWidget {
     IconData icon;
     Color color;
     String? metroLine;
-    
+
     if (mode == 'walk') {
       icon = Icons.directions_walk;
       color = Colors.green;
@@ -539,7 +542,7 @@ class MetroRouteSummaryWidget extends StatelessWidget {
       icon = Icons.navigation;
       color = Colors.grey;
     }
-    
+
     return Stack(
       children: [
         Container(
@@ -550,7 +553,7 @@ class MetroRouteSummaryWidget extends StatelessWidget {
           ),
           child: Icon(icon, size: 20, color: color),
         ),
-        
+
         // Badge de línea de metro
         if (metroLine != null && metroLine.isNotEmpty)
           Positioned(

@@ -40,21 +40,19 @@ class LocationUpdated extends LocationEvent {
 
   @override
   List<Object?> get props => [
-        latitude,
-        longitude,
-        accuracy,
-        heading,
-        timestamp,
-      ];
+    latitude,
+    longitude,
+    accuracy,
+    heading,
+    timestamp,
+  ];
 }
 
 /// Evento: Error de ubicación
 class LocationErrorOccurred extends LocationEvent {
   final String message;
 
-  const LocationErrorOccurred({
-    required this.message,
-  });
+  const LocationErrorOccurred({required this.message});
 
   @override
   List<Object?> get props => [message];

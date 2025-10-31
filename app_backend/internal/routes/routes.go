@@ -24,6 +24,16 @@ func Register(app *fiber.App, db *sql.DB) {
 	api.Get("/health", handlers.Health)
 	
 	// ============================================================================
+	// GEOCODING (Búsqueda de lugares)
+	// ============================================================================
+	geocode := api.Group("/geocode")
+	geocode.Get("/search", handlers.GeocodeSearch)
+	// GET /api/geocode/search?q=costanera+center&limit=5&bounded=true
+	
+	geocode.Get("/reverse", handlers.GeocodeReverse)
+	// GET /api/geocode/reverse?lat=-33.4&lon=-70.6
+	
+	// ============================================================================
 	// AUTENTICACIÓN (con rate limiting estricto)
 	// ============================================================================
 	authGroup := api.Group("/auth")

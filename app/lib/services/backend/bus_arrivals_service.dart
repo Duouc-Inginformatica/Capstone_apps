@@ -81,9 +81,11 @@ class StopArrivals {
               ?.map((e) => BusArrival.fromJson(e as Map<String, dynamic>))
               .toList() ??
           [],
-      bussesPassed: (json['busses_passed'] as List<dynamic>?)
-          ?.map((e) => e.toString())
-          .toList() ?? [],
+      bussesPassed:
+          (json['busses_passed'] as List<dynamic>?)
+              ?.map((e) => e.toString())
+              .toList() ??
+          [],
       lastUpdated:
           DateTime.tryParse(json['last_updated'] ?? '') ?? DateTime.now(),
     );
@@ -105,7 +107,8 @@ class StopArrivals {
   BusArrival? findBus(String routeNumber) {
     try {
       return arrivals.firstWhere(
-        (arrival) => arrival.routeNumber.toUpperCase() == routeNumber.toUpperCase(),
+        (arrival) =>
+            arrival.routeNumber.toUpperCase() == routeNumber.toUpperCase(),
       );
     } catch (e) {
       return null;
@@ -130,7 +133,9 @@ class BusArrivalsService {
 
   String get baseUrl => '${ServerConfig.instance.baseUrl}/api';
   static const Duration timeout = Duration(seconds: 10);
-  static const Duration pollingInterval = Duration(seconds: 30); // Polling cada 30s
+  static const Duration pollingInterval = Duration(
+    seconds: 30,
+  ); // Polling cada 30s
 
   // Estado de tracking activo
   Timer? _pollingTimer;
@@ -145,7 +150,9 @@ class BusArrivalsService {
 
   /// Obtiene las llegadas de buses para un paradero específico (llamada única)
   Future<StopArrivals?> getBusArrivals(String stopCode) async {
-    DebugLogger.network('🚌 [ARRIVALS] Obteniendo llegadas para paradero: $stopCode');
+    DebugLogger.network(
+      '🚌 [ARRIVALS] Obteniendo llegadas para paradero: $stopCode',
+    );
 
     try {
       final url = Uri.parse('$baseUrl/bus-arrivals/$stopCode');
@@ -190,7 +197,9 @@ class BusArrivalsService {
     required Function(String) onBusPassed,
     Function(BusArrival)? onApproaching,
   }) {
-    DebugLogger.navigation('🚌 [TRACKING] Iniciando seguimiento: Bus $routeNumber en $stopCode');
+    DebugLogger.navigation(
+      '🚌 [TRACKING] Iniciando seguimiento: Bus $routeNumber en $stopCode',
+    );
 
     // Detener tracking previo
     stopTracking();
@@ -231,7 +240,7 @@ class BusArrivalsService {
     if (_currentStopCode == null || _currentRouteNumber == null) return;
 
     final arrivals = await getBusArrivals(_currentStopCode!);
-    
+
     if (arrivals == null) {
       DebugLogger.navigation('⚠️ [TRACKING] No se pudieron obtener llegadas');
       return;
@@ -250,7 +259,7 @@ class BusArrivalsService {
 
     // Buscar el bus específico que estamos esperando
     final targetBus = arrivals.findBus(_currentRouteNumber!);
-    
+
     if (targetBus != null) {
       DebugLogger.navigation(
         '🚌 [TRACKING] Bus $_currentRouteNumber: ${targetBus.formattedDistance} (${targetBus.estimatedMinutes} min)',
@@ -264,10 +273,13 @@ class BusArrivalsService {
       DebugLogger.navigation(
         '⚠️ [TRACKING] Bus $_currentRouteNumber no encontrado en llegadas',
       );
-      
+
       // Si teníamos datos previos y ahora desapareció, posiblemente pasó
-      if (_lastArrivals != null && _lastArrivals!.findBus(_currentRouteNumber!) != null) {
-        DebugLogger.navigation('� [TRACKING] Bus $_currentRouteNumber desapareció - probablemente pasó');
+      if (_lastArrivals != null &&
+          _lastArrivals!.findBus(_currentRouteNumber!) != null) {
+        DebugLogger.navigation(
+          '� [TRACKING] Bus $_currentRouteNumber desapareció - probablemente pasó',
+        );
         onBusPassed?.call(_currentRouteNumber!);
         stopTracking();
         return;
@@ -279,7 +291,7 @@ class BusArrivalsService {
 
   /// Obtiene el estado actual de tracking
   bool get isTracking => _pollingTimer != null && _pollingTimer!.isActive;
-  
+
   String? get trackingStopCode => _currentStopCode;
   String? get trackingRouteNumber => _currentRouteNumber;
   StopArrivals? get lastArrivals => _lastArrivals;

@@ -4,11 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:local_auth/local_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/device/biometric_auth_service.dart';
-import '../services/device/tts_service.dart';
 import '../services/device/npu_detector_service.dart';
 import '../services/backend/api_client.dart';
 import 'map_screen.dart';
-import 'biometric_register_screen.dart';
 
 /// Login Screen V2 - UI Clásica de Figma con Badge IA
 /// Flujo: 1) Detectar huella PRIMERO, 2) Si existe → login, 3) Si no existe → register
@@ -25,7 +23,6 @@ class LoginScreenV2 extends StatefulWidget {
 class _LoginScreenV2State extends State<LoginScreenV2>
     with TickerProviderStateMixin {
   final BiometricAuthService _biometricService = BiometricAuthService.instance;
-  final TtsService _ttsService = TtsService();
   final ApiClient _apiClient = ApiClient();
 
   bool _isLoading = true;
@@ -77,28 +74,19 @@ class _LoginScreenV2State extends State<LoginScreenV2>
 
   Future<void> _initializeApp() async {
     try {
-      // 1. Inicializar TTS básico primero (para mensajes inmediatos)
-      await _ttsService.initialize();
-
-      // 2. Verificar disponibilidad biométrica
+      // 1. Verificar disponibilidad biométrica
       _biometricAvailable = await _biometricService.isAvailable();
 
       setState(() {
         _isLoading = false;
       });
 
-      // 3. Inicializar detección NPU en paralelo (puede tardar)
+      // 2. Inicializar detección NPU en paralelo (puede tardar)
       // No bloqueamos el flujo principal, se carga en background
       _initializeNpuDetection();
 
-      // 4. TTS mensaje de bienvenida + instrucción
+      // 3. Iniciar autenticación automáticamente
       if (_biometricAvailable) {
-        // Mensaje de bienvenida simple
-        await _ttsService.speak(
-          'Bienvenido a WayFind CL. Por favor, coloca tu dedo en el sensor de huella digital para continuar.',
-        );
-
-        // 5. Iniciar autenticación automáticamente
         await Future.delayed(const Duration(milliseconds: 500));
         _authenticateWithBiometric();
       } else {
@@ -106,9 +94,6 @@ class _LoginScreenV2State extends State<LoginScreenV2>
         setState(() {
           _statusMessage = 'Autenticación biométrica no disponible';
         });
-        await _ttsService.speak(
-          'Bienvenido a WayFind CL. Autenticación biométrica no disponible en este dispositivo.',
-        );
       }
     } catch (e) {
       setState(() {
@@ -124,7 +109,7 @@ class _LoginScreenV2State extends State<LoginScreenV2>
   Future<void> _initializeNpuDetection() async {
     // ✅ CORREGIDO: Verificar mounted al inicio
     if (!mounted) return;
-    
+
     try {
       setState(() {
         _npuLoading = true;
@@ -138,17 +123,17 @@ class _LoginScreenV2State extends State<LoginScreenV2>
       // Intentar detectar capacidades NPU
       final capabilities = await NpuDetectorService.instance
           .detectCapabilities();
-      
+
       // ✅ CORREGIDO: Verificar mounted después de operación asíncrona
       if (!mounted) return;
-      
+
       final hasAcceleration = capabilities.hasAcceleration;
 
       setState(() {
         _npuAvailable = hasAcceleration;
         _npuLoading = false;
       });
-      
+
       _badgeController.forward();
 
       if (hasAcceleration) {
@@ -167,7 +152,7 @@ class _LoginScreenV2State extends State<LoginScreenV2>
     } catch (e) {
       // ✅ CORREGIDO: Verificar mounted antes de setState
       if (!mounted) return;
-      
+
       setState(() {
         _npuLoading = false;
       });
@@ -180,15 +165,7 @@ class _LoginScreenV2State extends State<LoginScreenV2>
     if (_hasAnnouncedNpuStatus) return;
     _hasAnnouncedNpuStatus = true;
 
-    if (_isAuthenticating) {
-      return;
-    }
-
-    final message = hasAcceleration
-        ? 'Aceleración por hardware detectada. Dispositivo optimizado para inteligencia artificial.'
-        : 'No se detectaron aceleradores de inteligencia artificial. Continuaremos en modo estándar.';
-
-    await _ttsService.speak(message);
+    // NPU status se anunciará en MapScreen, no aquí
   }
 
   Future<void> _syncBackendSession({String? username, String? email}) async {
@@ -227,16 +204,14 @@ class _LoginScreenV2State extends State<LoginScreenV2>
             '❌ No se pudo registrar en backend: $registerError',
             name: 'LoginScreen',
           );
-          await _ttsService.speak(
-            'Advertencia: no se pudo sincronizar con el servidor. '
-            'Algunas funciones pueden no estar disponibles.',
-          );
+          // Error silencioso - MapScreen manejará feedback
         }
       } else {
-        developer.log('❌ Error al renovar sesión backend: $e', name: 'LoginScreen');
-        await _ttsService.speak(
-          'No se pudo establecer conexión con el servidor.',
+        developer.log(
+          '❌ Error al renovar sesión backend: $e',
+          name: 'LoginScreen',
         );
+        // Error silencioso - MapScreen manejará feedback
       }
     } catch (e) {
       developer.log(
@@ -254,9 +229,7 @@ class _LoginScreenV2State extends State<LoginScreenV2>
       _statusMessage = 'Coloca tu dedo en el sensor...';
     });
 
-    await _ttsService.speak(
-      'Por favor, coloca tu dedo en el sensor de huella digital',
-    );
+    // Login silencioso - sin TTS
 
     try {
       final LocalAuthentication auth = LocalAuthentication();
@@ -271,7 +244,7 @@ class _LoginScreenV2State extends State<LoginScreenV2>
           _isAuthenticating = false;
           _statusMessage = 'Autenticación cancelada';
         });
-        await _ttsService.speak('Autenticación cancelada');
+        // Cancelación silenciosa
         return;
       }
 
@@ -295,9 +268,7 @@ class _LoginScreenV2State extends State<LoginScreenV2>
             _isAuthenticating = false;
             _statusMessage = 'No se encontró información del usuario';
           });
-          await _ttsService.speak(
-            'No se pudo acceder a tu perfil almacenado. Intenta nuevamente.',
-          );
+          // Error silencioso
           return;
         }
 
@@ -308,9 +279,8 @@ class _LoginScreenV2State extends State<LoginScreenV2>
           email: userData['email']?.toString(),
         );
 
-        await _ttsService.speak(
-          'Inicio de sesión exitoso. Bienvenido de vuelta',
-        );
+        final username = userData['username']?.toString() ?? 'Usuario';
+        final welcomeMessage = 'Bienvenido de vuelta, $username';
 
         if (mounted) {
           setState(() {
@@ -318,7 +288,9 @@ class _LoginScreenV2State extends State<LoginScreenV2>
           });
 
           Navigator.of(context).pushReplacement(
-            MaterialPageRoute(builder: (_) => const MapScreen()),
+            MaterialPageRoute(
+              builder: (_) => MapScreen(welcomeMessage: welcomeMessage),
+            ),
           );
         }
       } else {
@@ -341,9 +313,10 @@ class _LoginScreenV2State extends State<LoginScreenV2>
           // CASO: Huella EXISTE en backend → Login automático
           // ============================================================
           final username = checkResult['username']?.toString() ?? 'Usuario';
-          final welcomeMessage = checkResult['message']?.toString() ?? 
+          final welcomeMessage =
+              checkResult['message']?.toString() ??
               'Bienvenido de nuevo, $username!';
-          
+
           setState(() {
             _statusMessage = 'Iniciando sesión...';
           });
@@ -354,12 +327,12 @@ class _LoginScreenV2State extends State<LoginScreenV2>
           try {
             // Login automático con el backend
             await _apiClient.biometricLogin(biometricToken: biometricToken);
-            
+
             // Guardar datos localmente SIN solicitar huella de nuevo
             // (ya se autenticó al inicio del método)
             final userId = biometricToken; // Usar el token como ID único
             final prefs = await SharedPreferences.getInstance();
-            
+
             final userData = {
               'userId': userId,
               'username': username,
@@ -367,7 +340,7 @@ class _LoginScreenV2State extends State<LoginScreenV2>
               'registeredAt': DateTime.now().toIso8601String(),
               'lastLogin': DateTime.now().toIso8601String(),
             };
-            
+
             await prefs.setString(
               'biometric_user_$userId',
               jsonEncode(userData),
@@ -398,17 +371,14 @@ class _LoginScreenV2State extends State<LoginScreenV2>
               '❌ Error en login automático: $loginError',
               name: 'LoginScreen',
             );
-            
+
             setState(() {
               _isAuthenticating = false;
               _statusMessage = 'Error al iniciar sesión';
             });
-            
-            await _ttsService.speak(
-              'Error al iniciar sesión. Por favor intenta nuevamente.',
-            );
+            // Error silencioso
           }
-          
+
           return;
         }
 
@@ -419,18 +389,9 @@ class _LoginScreenV2State extends State<LoginScreenV2>
           _statusMessage = 'Nuevo usuario detectado. Iniciando registro...';
         });
 
-        final registerMessage = checkResult?['message']?.toString() ?? 
-            'No hay usuarios registrados con esta huella. Iniciando proceso de registro automático';
-
-        await _ttsService.speak(registerMessage);
-
+        // Redirigir a BiometricLoginScreen que maneja tanto login como registro (con TTS)
         if (mounted) {
-          Navigator.of(context).pushReplacement(
-            MaterialPageRoute(
-              builder: (_) =>
-                  BiometricRegisterScreen(biometricToken: biometricToken),
-            ),
-          );
+          Navigator.of(context).pushReplacementNamed('/biometric-login');
         }
       }
     } catch (e) {
@@ -438,9 +399,7 @@ class _LoginScreenV2State extends State<LoginScreenV2>
         _isAuthenticating = false;
         _statusMessage = 'Error en autenticación biométrica';
       });
-      await _ttsService.speak(
-        'Ocurrió un error durante la autenticación. Por favor intenta nuevamente.',
-      );
+      // Error silencioso
       developer.log('❌ Error biométrico: $e', name: 'LoginScreen');
     }
   }

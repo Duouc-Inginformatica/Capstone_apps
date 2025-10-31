@@ -65,16 +65,16 @@ class NavigationActive extends NavigationState {
 
   @override
   List<Object?> get props => [
-        route,
-        currentStepIndex,
-        distanceToNextStep,
-        totalDistanceRemaining,
-        estimatedTimeRemaining,
-        currentPosition,
-        currentHeading,
-        currentInstruction,
-        nextInstruction,
-      ];
+    route,
+    currentStepIndex,
+    distanceToNextStep,
+    totalDistanceRemaining,
+    estimatedTimeRemaining,
+    currentPosition,
+    currentHeading,
+    currentInstruction,
+    nextInstruction,
+  ];
 
   /// Helpers
   bool get isNearNextStep => distanceToNextStep < 50; // menos de 50m
@@ -149,8 +149,12 @@ class NavigationArrived extends NavigationState {
   });
 
   @override
-  List<Object?> get props =>
-      [destination, destinationName, totalDuration, totalDistance];
+  List<Object?> get props => [
+    destination,
+    destinationName,
+    totalDuration,
+    totalDistance,
+  ];
 
   String get totalDistanceFormatted {
     if (totalDistance < 1000) {
@@ -220,14 +224,14 @@ class NavigationRoute extends Equatable {
 
   @override
   List<Object?> get props => [
-        id,
-        origin,
-        destination,
-        steps,
-        polylinePoints,
-        totalDistance,
-        estimatedDuration,
-      ];
+    id,
+    origin,
+    destination,
+    steps,
+    polylinePoints,
+    totalDistance,
+    estimatedDuration,
+  ];
 }
 
 /// Paso individual de navegación
@@ -254,15 +258,15 @@ class NavigationStep extends Equatable {
 
   @override
   List<Object?> get props => [
-        index,
-        startLocation,
-        endLocation,
-        distance,
-        duration,
-        instruction,
-        maneuver,
-        roadName,
-      ];
+    index,
+    startLocation,
+    endLocation,
+    distance,
+    duration,
+    instruction,
+    maneuver,
+    roadName,
+  ];
 }
 
 /// Instrucción de navegación con iconografía

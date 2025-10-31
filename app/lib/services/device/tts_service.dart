@@ -19,9 +19,9 @@ class TtsService {
   String? _currentContext;
   final List<_SpeechMessage> _messageQueue = [];
 
-  // Configuración de voz
-  double _rate = 0.45;
-  double _pitch = 0.95;
+  // Configuración de voz optimizada para accesibilidad
+  double _rate = 0.4; // Más lento para mejor comprensión (era 0.45)
+  double _pitch = 1.0; // Tono normal para claridad (era 0.95)
 
   // Historial de mensajes
   String? _lastSpokenText;
@@ -41,17 +41,17 @@ class TtsService {
   }
 
   Future<void> _initializeNativeTts() async {
-    // Configuración mejorada para voz más natural
+    // Configuración mejorada para voz más natural y clara
     await _tts.setLanguage('es-ES');
 
     // Velocidad más lenta para mejor comprensión (0.4 = más lento, 1.0 = normal)
-  await _tts.setSpeechRate(_rate);
+    await _tts.setSpeechRate(_rate);
 
     // Volumen máximo
     await _tts.setVolume(1.0);
 
-    // Tono ligeramente más bajo para sonar más natural (1.0 = normal)
-  await _tts.setPitch(_pitch);
+    // Tono normal para mejor claridad (1.0 = normal, era 0.95)
+    await _tts.setPitch(_pitch);
 
     // Configurar callbacks para saber cuándo termina de hablar
     _tts.setCompletionHandler(() {
@@ -232,7 +232,8 @@ class TtsService {
     String? context,
   }) async {
     // Mapear prioridad a urgent flag
-    final urgent = (priority == TtsPriority.high || priority == TtsPriority.critical);
+    final urgent =
+        (priority == TtsPriority.high || priority == TtsPriority.critical);
     await speak(text, urgent: urgent, context: context);
   }
 
@@ -312,10 +313,7 @@ class TtsService {
 }
 
 class _SpeechMessage {
-  const _SpeechMessage({
-    required this.text,
-    required this.context,
-  });
+  const _SpeechMessage({required this.text, required this.context});
 
   final String text;
   final String context;

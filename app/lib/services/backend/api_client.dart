@@ -84,9 +84,9 @@ class RouteCache {
   static const int maxCacheSize = 50; // ✅ Aumentado de 10 a 50
   static const String cacheKey = 'route_cache_v2';
   static const String metricsKey = 'route_cache_metrics';
-  
+
   final List<CachedRoute> _cache = [];
-  
+
   // Métricas
   int _hits = 0;
   int _misses = 0;
@@ -95,7 +95,7 @@ class RouteCache {
   Future<void> loadCache() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      
+
       // Cargar rutas
       final cacheJson = prefs.getString(cacheKey);
       if (cacheJson != null) {
@@ -107,7 +107,7 @@ class RouteCache {
         // Limpiar rutas expiradas
         _cache.removeWhere((route) => route.isExpired());
       }
-      
+
       // Cargar métricas
       final metricsJson = prefs.getString(metricsKey);
       if (metricsJson != null) {
@@ -117,13 +117,13 @@ class RouteCache {
         final accessCount = metrics['access_count'] as Map<String, dynamic>?;
         if (accessCount != null) {
           _routeAccessCount.addAll(
-            accessCount.map((k, v) => MapEntry(k, v as int))
+            accessCount.map((k, v) => MapEntry(k, v as int)),
           );
         }
       }
-      
+
       DebugLogger.network(
-        '✅ [CACHE] Cargado: ${_cache.length} rutas, Hit rate: ${hitRate.toStringAsFixed(1)}%'
+        '✅ [CACHE] Cargado: ${_cache.length} rutas, Hit rate: ${hitRate.toStringAsFixed(1)}%',
       );
     } catch (e) {
       DebugLogger.network('❌ Error loading route cache: $e');
@@ -133,11 +133,11 @@ class RouteCache {
   Future<void> saveCache() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      
+
       // Guardar rutas
       final cacheJson = jsonEncode(_cache.map((r) => r.toJson()).toList());
       await prefs.setString(cacheKey, cacheJson);
-      
+
       // Guardar métricas
       final metricsJson = jsonEncode({
         'hits': _hits,
@@ -158,15 +158,17 @@ class RouteCache {
     required double destLon,
   }) async {
     final key = _generateKey(originLat, originLon, destLat, destLon);
-    
+
     // Evitar duplicados - remover si ya existe
-    _cache.removeWhere((c) => c.matchesRequest(
-      originLat: originLat,
-      originLon: originLon,
-      destLat: destLat,
-      destLon: destLon,
-    ));
-    
+    _cache.removeWhere(
+      (c) => c.matchesRequest(
+        originLat: originLat,
+        originLon: originLon,
+        destLat: destLat,
+        destLon: destLon,
+      ),
+    );
+
     final cached = CachedRoute(
       routeData: routeData,
       timestamp: DateTime.now(),
@@ -194,7 +196,7 @@ class RouteCache {
     required double destLon,
   }) {
     final key = _generateKey(originLat, originLon, destLat, destLon);
-    
+
     for (var cached in _cache) {
       if (!cached.isExpired() &&
           cached.matchesRequest(
@@ -206,25 +208,27 @@ class RouteCache {
         // Métricas
         _hits++;
         _routeAccessCount[key] = (_routeAccessCount[key] ?? 0) + 1;
-        
+
         DebugLogger.network(
-          '✅ [CACHE] HIT: $key (${_routeAccessCount[key]} accesos)'
+          '✅ [CACHE] HIT: $key (${_routeAccessCount[key]} accesos)',
         );
-        
+
         // Mover al inicio (LRU)
         _cache.remove(cached);
         _cache.insert(0, cached);
-        
+
         // Guardar métricas actualizadas (sin await para no bloquear)
         saveCache();
-        
+
         return cached.routeData;
       }
     }
-    
+
     _misses++;
-    DebugLogger.network('❌ [CACHE] MISS: $key (Total: $_hits hits, $_misses misses)');
-    
+    DebugLogger.network(
+      '❌ [CACHE] MISS: $key (Total: $_hits hits, $_misses misses)',
+    );
+
     return null;
   }
 
@@ -257,11 +261,11 @@ class RouteCache {
       final countB = _routeAccessCount[keyB] ?? 0;
       return countB.compareTo(countA); // Descendente
     });
-    
+
     // Eliminar las últimas (menos frecuentes)
     final removed = _cache.sublist(maxCacheSize);
     _cache.removeRange(maxCacheSize, _cache.length);
-    
+
     // Limpiar métricas de rutas eliminadas
     for (final route in removed) {
       final key = _generateKey(
@@ -272,14 +276,16 @@ class RouteCache {
       );
       _routeAccessCount.remove(key);
     }
-    
-    DebugLogger.network('🧹 [CACHE] Limpieza: eliminadas ${removed.length} rutas menos frecuentes');
+
+    DebugLogger.network(
+      '🧹 [CACHE] Limpieza: eliminadas ${removed.length} rutas menos frecuentes',
+    );
   }
 
   String _generateKey(double oLat, double oLon, double dLat, double dLon) {
     // Redondear a 4 decimales (~11m precisión)
     return '${oLat.toStringAsFixed(4)},${oLon.toStringAsFixed(4)}-'
-           '${dLat.toStringAsFixed(4)},${dLon.toStringAsFixed(4)}';
+        '${dLat.toStringAsFixed(4)},${dLon.toStringAsFixed(4)}';
   }
 
   // ============================================================================
@@ -308,11 +314,11 @@ class RouteCache {
   List<Map<String, dynamic>> _getTopRoutes(int limit) {
     final sorted = _routeAccessCount.entries.toList()
       ..sort((a, b) => b.value.compareTo(a.value));
-    
-    return sorted.take(limit).map((e) => {
-      'route': e.key,
-      'access_count': e.value,
-    }).toList();
+
+    return sorted
+        .take(limit)
+        .map((e) => {'route': e.key, 'access_count': e.value})
+        .toList();
   }
 
   /// Limpia todo el caché y resetea métricas
@@ -325,7 +331,6 @@ class RouteCache {
     DebugLogger.network('🗑️ [CACHE] Limpiado completamente');
   }
 }
-
 
 class ApiClient {
   // Singleton instance
@@ -482,9 +487,7 @@ class ApiClient {
     required String biometricToken,
   }) async {
     final uri = _uri('/api/auth/biometric/login');
-    final body = {
-      'biometric_id': biometricToken,
-    };
+    final body = {'biometric_id': biometricToken};
 
     final res = await _safeRequest(
       () => http.post(
@@ -513,7 +516,9 @@ class ApiClient {
 
   /// Verifica si un token biométrico ya está registrado en el backend
   /// Retorna información completa: action (auto_login/register), username, message
-  Future<Map<String, dynamic>?> checkBiometricExists(String biometricToken) async {
+  Future<Map<String, dynamic>?> checkBiometricExists(
+    String biometricToken,
+  ) async {
     try {
       final uri = _uri('/api/biometric/check');
       final res = await _safeRequest(
@@ -571,20 +576,22 @@ class ApiClient {
     String path, {
     Map<String, String>? queryParams,
   }) async {
-    final uri = queryParams != null 
-      ? _uriWithQuery(path, queryParams)
-      : _uri(path);
-    
+    final uri = queryParams != null
+        ? _uriWithQuery(path, queryParams)
+        : _uri(path);
+
     DebugLogger.network('🌐 [GET] $uri');
-    
+
     final response = await _safeRequest(() => getAuthorized(uri));
-    
+
     if (response.statusCode >= 200 && response.statusCode < 300) {
       final body = response.body.isEmpty ? '{}' : response.body;
       return jsonDecode(body) as Map<String, dynamic>;
     }
-    
-    final errorData = jsonDecode(response.body.isEmpty ? '{}' : response.body) as Map<String, dynamic>;
+
+    final errorData =
+        jsonDecode(response.body.isEmpty ? '{}' : response.body)
+            as Map<String, dynamic>;
     throw ApiException(
       message: errorData['error']?.toString() ?? 'GET request failed',
       statusCode: response.statusCode,
@@ -597,17 +604,19 @@ class ApiClient {
     Map<String, dynamic> body,
   ) async {
     final uri = _uri(path);
-    
+
     DebugLogger.network('🌐 [POST] $uri');
-    
+
     final response = await _safeRequest(() => postAuthorized(uri, body));
-    
+
     if (response.statusCode >= 200 && response.statusCode < 300) {
       final responseBody = response.body.isEmpty ? '{}' : response.body;
       return jsonDecode(responseBody) as Map<String, dynamic>;
     }
-    
-    final errorData = jsonDecode(response.body.isEmpty ? '{}' : response.body) as Map<String, dynamic>;
+
+    final errorData =
+        jsonDecode(response.body.isEmpty ? '{}' : response.body)
+            as Map<String, dynamic>;
     throw ApiException(
       message: errorData['error']?.toString() ?? 'POST request failed',
       statusCode: response.statusCode,
