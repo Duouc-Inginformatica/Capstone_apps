@@ -112,7 +112,7 @@ class _InstructionsPanelWidgetState extends State<InstructionsPanelWidget>
     }
 
     final bgColor = widget.backgroundColor ??
-        Theme.of(context).colorScheme.surface.withOpacity(0.95);
+        Theme.of(context).colorScheme.surface.withValues(alpha: 0.95);
     final txtColor = widget.textColor ?? Theme.of(context).colorScheme.onSurface;
 
     return SlideTransition(
@@ -127,7 +127,7 @@ class _InstructionsPanelWidgetState extends State<InstructionsPanelWidget>
           borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.1),
+              color: Colors.black.withValues(alpha: 0.1),
               blurRadius: 10,
               offset: const Offset(0, -2),
             ),
@@ -160,7 +160,7 @@ class _InstructionsPanelWidgetState extends State<InstructionsPanelWidget>
       decoration: BoxDecoration(
         border: Border(
           bottom: BorderSide(
-            color: textColor.withOpacity(0.1),
+            color: textColor.withValues(alpha: 0.1),
             width: 1,
           ),
         ),
@@ -236,7 +236,7 @@ class _InstructionsPanelWidgetState extends State<InstructionsPanelWidget>
             borderRadius: BorderRadius.circular(4),
             child: LinearProgressIndicator(
               value: progress,
-              backgroundColor: Colors.grey.withOpacity(0.2),
+              backgroundColor: Colors.grey.withValues(alpha: 0.2),
               minHeight: 6,
             ),
           ),
@@ -267,7 +267,7 @@ class _InstructionsPanelWidgetState extends State<InstructionsPanelWidget>
                   decoration: BoxDecoration(
                     color: isCurrentStep
                         ? Theme.of(context).colorScheme.primary
-                        : Colors.grey.withOpacity(0.3),
+                        : Colors.grey.withValues(alpha: 0.3),
                     shape: BoxShape.circle,
                   ),
                   child: Center(
@@ -312,7 +312,7 @@ class _InstructionsPanelWidgetState extends State<InstructionsPanelWidget>
       decoration: BoxDecoration(
         border: Border(
           top: BorderSide(
-            color: textColor.withOpacity(0.1),
+            color: textColor.withValues(alpha: 0.1),
             width: 1,
           ),
         ),
@@ -383,7 +383,7 @@ class CurrentInstructionBanner extends StatelessWidget {
           borderRadius: BorderRadius.circular(12),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.2),
+              color: Colors.black.withValues(alpha: 0.2),
               blurRadius: 8,
               offset: const Offset(0, 2),
             ),

@@ -13,7 +13,6 @@ import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import '../backend/api_client.dart';
 import '../device/tts_service.dart';
-import '../device/haptic_feedback_service.dart';
 import '../device/smart_vibration_service.dart';
 import '../backend/bus_arrivals_service.dart';
 import '../debug_logger.dart';
@@ -2663,7 +2662,7 @@ Te iré guiando paso a paso.
   /// Patrón: vibración fuerte intermitente (500ms, pausa 200ms, 500ms)
   Future<void> _triggerDeviationVibration() async {
     try {
-      await HapticFeedbackService.instance.navigationDeviationCritical();
+      await SmartVibrationService.instance.navigationDeviationCritical();
       _navLog('📳 Vibración de alerta activada');
     } catch (e) {
       _navLog('⚠️ Error al activar vibración: $e');

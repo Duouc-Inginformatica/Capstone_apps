@@ -37,16 +37,38 @@ enum VibrationType {
   alert,
 }
 
+/// Patrones de vibración predefinidos (compatibilidad con HapticFeedbackService)
+enum HapticPattern {
+  light,
+  medium,
+  strong,
+  notification,
+  alert,
+  warning,
+  error,
+  success,
+  navigationCritical,
+}
+
 /// Servicio singleton para gestionar vibraciones inteligentes
 class SmartVibrationService {
   SmartVibrationService._();
   static final SmartVibrationService instance = SmartVibrationService._();
   
   bool _isVibrationEnabled = true;
+  double _intensity = 1.0;
   
   /// Habilitar o deshabilitar vibraciones globalmente
   void setEnabled(bool enabled) {
     _isVibrationEnabled = enabled;
+  }
+  
+  /// Establece la intensidad de vibración (0.0 a 1.0)
+  void setIntensity(double intensity) {
+    if (intensity < 0.0 || intensity > 1.0) {
+      throw ArgumentError('La intensidad debe estar entre 0.0 y 1.0');
+    }
+    _intensity = intensity;
   }
   
   /// Verifica si el dispositivo soporta vibración
@@ -152,4 +174,71 @@ class SmartVibrationService {
       // Ignorar errores de vibración
     }
   }
+  
+  // ========== Métodos de compatibilidad con HapticFeedbackService ==========
+  
+  /// Vibra con un patrón personalizado (para compatibilidad)
+  Future<void> vibrateCustomPattern(List<int> pattern) async {
+    if (!_isVibrationEnabled) return;
+    
+    final hasVib = await hasVibrator;
+    if (!hasVib) return;
+    
+    try {
+      await Vibration.vibrate(pattern: pattern);
+    } catch (e) {
+      // Ignorar errores de vibración
+    }
+  }
+  
+  /// Vibra con un patrón predefinido (compatibilidad con HapticFeedbackService)
+  Future<void> vibrateWithPattern(HapticPattern pattern) async {
+    if (!_isVibrationEnabled) return;
+    
+    final hasVib = await hasVibrator;
+    if (!hasVib) return;
+    
+    try {
+      switch (pattern) {
+        case HapticPattern.light:
+          await Vibration.vibrate(duration: (120 * _intensity).round());
+          break;
+        case HapticPattern.medium:
+          await Vibration.vibrate(duration: (200 * _intensity).round());
+          break;
+        case HapticPattern.strong:
+          await Vibration.vibrate(duration: (300 * _intensity).round());
+          break;
+        case HapticPattern.notification:
+          await Vibration.vibrate(pattern: [0, 200, 100, 200]);
+          break;
+        case HapticPattern.alert:
+          await Vibration.vibrate(pattern: [0, 300, 100, 300, 100, 300]);
+          break;
+        case HapticPattern.warning:
+          await Vibration.vibrate(pattern: [0, 200, 100, 200, 100, 200]);
+          break;
+        case HapticPattern.error:
+          await Vibration.vibrate(pattern: [0, 400, 200, 400]);
+          break;
+        case HapticPattern.success:
+          await Vibration.vibrate(pattern: [0, 500, 200, 500, 200, 500]);
+          break;
+        case HapticPattern.navigationCritical:
+          await Vibration.vibrate(pattern: [0, 500, 200, 500]);
+          break;
+      }
+    } catch (e) {
+      // Ignorar errores de vibración
+    }
+  }
+  
+  /// Feedback para inicio de navegación
+  Future<void> navigationStart() => vibrate(VibrationType.instructionChange);
+  
+  /// Feedback ligero para notificaciones generales
+  Future<void> lightNotification() => simple(duration: 100);
+  
+  /// Feedback para desviación de navegación crítica
+  Future<void> navigationDeviationCritical() => vibrate(VibrationType.deviation);
 }

@@ -13,7 +13,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import '../device/tts_service.dart';
-import '../device/haptic_feedback_service.dart';
+import '../device/smart_vibration_service.dart';
 import '../debug_logger.dart';
 
 enum NotificationType { audio, vibration, visual, all }
@@ -316,10 +316,10 @@ class CustomNotificationsService {
   }
 
   Future<void> _vibrate(CustomNotification notification) async {
-    final haptic = HapticFeedbackService.instance;
+    final haptic = SmartVibrationService.instance;
     
     // Verificar si el servicio está habilitado
-    if (!await haptic.hasVibrator()) return;
+    if (!await haptic.hasVibrator) return;
 
     // Aplicar intensidad configurada
     haptic.setIntensity(_preferences.vibrationIntensity);

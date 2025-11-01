@@ -297,15 +297,15 @@ class _MapScreenState extends State<MapScreen>
   /// TEST: Simula movimiento GPS realista a lo largo de la geometría para desarrolladores
   void _simulateArrivalAtStop() async {
     try {
-      print('🔴🔴🔴 _simulateArrivalAtStop CALLED 🔴🔴🔴');
+      _log('🔴🔴🔴 _simulateArrivalAtStop CALLED 🔴🔴🔴');
       _log('🔧 [SIMULAR] ═══════════════════════════════════════════════════════');
       _log('🔧 [SIMULAR] Función _simulateArrivalAtStop INICIADA');
       
       final activeNav = IntegratedNavigationService.instance.activeNavigation;
-      print('🔴 activeNav = ${activeNav != null ? "NOT NULL" : "NULL"}');
+      _log('🔴 activeNav = ${activeNav != null ? "NOT NULL" : "NULL"}');
 
     if (activeNav == null) {
-      print('🔴 activeNav is NULL - returning');
+      _log('🔴 activeNav is NULL - returning');
       _log('⚠️ [SIMULAR] No hay navegación activa');
       await TtsService.instance.speak('No hay navegación activa');
       _showWarningNotification(
@@ -314,13 +314,13 @@ class _MapScreenState extends State<MapScreen>
       return;
     }
 
-    print('🔴 activeNav OK - currentStepIndex = ${activeNav.currentStepIndex}/${activeNav.steps.length}');
+    _log('🔴 activeNav OK - currentStepIndex = ${activeNav.currentStepIndex}/${activeNav.steps.length}');
     _log('🔧 [SIMULAR] Navegación activa encontrada');
     _log('🔧 [SIMULAR] Paso actual: índice ${activeNav.currentStepIndex}/${activeNav.steps.length}');
     
     // Verificar si ya completamos todos los pasos
     if (activeNav.currentStepIndex >= activeNav.steps.length) {
-      print('🔴 Navigation completed - returning');
+      _log('🔴 Navigation completed - returning');
       _log('✅ [SIMULAR] Navegación completada');
       await TtsService.instance.speak('Navegación completada');
       _showSuccessNotification('Ruta completada');
@@ -328,7 +328,7 @@ class _MapScreenState extends State<MapScreen>
     }
     
     final currentStep = activeNav.steps[activeNav.currentStepIndex];
-    print('🔴 currentStep.type = ${currentStep.type}');
+    _log('🔴 currentStep.type = ${currentStep.type}');
     _log('🔧 [SIMULAR] Tipo de paso actual: ${currentStep.type}');
     _log('🔧 [SIMULAR] Instrucción: ${currentStep.instruction}');
 
@@ -336,7 +336,7 @@ class _MapScreenState extends State<MapScreen>
     // CASO ESPECIAL: WAIT_BUS - Usuario confirma que subió al bus
     // ═══════════════════════════════════════════════════════════════
     if (currentStep.type == 'wait_bus') {
-      print('🔴🔴🔴 ENTERING wait_bus BLOCK 🔴🔴🔴');
+      _log('🔴🔴🔴 ENTERING wait_bus BLOCK 🔴🔴🔴');
       _log('🚌 [SIMULAR] ══════════════════════════════════════════════════════');
       _log('🚌 [SIMULAR] Usuario confirmó que subió al bus desde wait_bus');
       _log('🚌 [SIMULAR] ══════════════════════════════════════════════════════');
@@ -1056,9 +1056,8 @@ class _MapScreenState extends State<MapScreen>
       }
     }
     } catch (e, stackTrace) {
-      print('🔴🔴🔴 EXCEPTION in _simulateArrivalAtStop: $e');
-      print('🔴🔴🔴 Stack trace: $stackTrace');
       _log('🔴🔴🔴 EXCEPTION in _simulateArrivalAtStop: $e');
+      _log('🔴🔴🔴 Stack trace: $stackTrace');
     }
   }
 
@@ -3762,7 +3761,7 @@ class _MapScreenState extends State<MapScreen>
                         maxNativeZoom: 18,
                         retinaMode: false,
                         // Optimizaciones de rendimiento
-                        tileSize: 256,
+                        tileDimension: 256,
                         panBuffer: 1, // Reduce tiles cargados fuera de pantalla
                       ),
                       // ✅ PRIORIDAD: Durante simulación, SOLO mostrar _simulationPolylines

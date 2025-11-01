@@ -221,12 +221,12 @@ mixin RouteDisplayMixin<T extends StatefulWidget> on State<T> {
       height: size,
       child: Container(
         decoration: BoxDecoration(
-          color: Colors.blue.withOpacity(0.8),
+          color: Colors.blue.withValues(alpha: 0.8),
           shape: BoxShape.circle,
           border: Border.all(color: Colors.white, width: 3),
           boxShadow: [
             BoxShadow(
-              color: Colors.blue.withOpacity(0.3),
+              color: Colors.blue.withValues(alpha: 0.3),
               blurRadius: 10,
               spreadRadius: 5,
             ),
