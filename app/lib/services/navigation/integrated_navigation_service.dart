@@ -14,6 +14,7 @@ import 'package:geolocator/geolocator.dart';
 import '../backend/api_client.dart';
 import '../device/tts_service.dart';
 import '../device/haptic_feedback_service.dart';
+import '../device/smart_vibration_service.dart';
 import '../backend/bus_arrivals_service.dart';
 import '../debug_logger.dart';
 
@@ -1425,15 +1426,27 @@ Te iré guiando paso a paso.
           
           // Si está cerca del paradero de inicio (< 50m) y velocidad baja, está esperando
           if (distanceToStart < 50 && position.speed < 1.0) {
-            _navLog('🚌 Usuario esperando el bus en el paradero');
+            if (currentStep.type == 'ride_metro') {
+              _navLog('🚇 Usuario esperando el metro en la estación');
+            } else {
+              _navLog('🚌 Usuario esperando el bus en el paradero');
+            }
           }
-          // Si está moviéndose rápido, asumimos que subió al bus
+          // Si está moviéndose rápido, asumimos que subió al vehículo
           else if (position.speed > 2.0) {
-            _navLog(
-              '🚌 [BUS-RIDING] Usuario en movimiento (${position.speed.toStringAsFixed(1)} m/s) - Anunciando paradas',
-            );
-            // Anunciar paradas intermedias
-            _checkBusStopsProgress(currentStep, userLocation);
+            if (currentStep.type == 'ride_metro') {
+              _navLog(
+                '� [METRO-RIDING] Usuario en movimiento (${position.speed.toStringAsFixed(1)} m/s) - Anunciando estaciones',
+              );
+              // Anunciar estaciones intermedias de metro
+              _checkMetroStationsProgress(currentStep, userLocation);
+            } else {
+              _navLog(
+                '�🚌 [BUS-RIDING] Usuario en movimiento (${position.speed.toStringAsFixed(1)} m/s) - Anunciando paradas',
+              );
+              // Anunciar paradas intermedias de bus
+              _checkBusStopsProgress(currentStep, userLocation);
+            }
           }
         }
       }
@@ -1899,6 +1912,101 @@ Te iré guiando paso a paso.
     }
 
     _navLog('🔔 [TTS] $announcement');
+    TtsService.instance.speak(announcement);
+  }
+
+  /// Verifica progreso a través de estaciones de metro durante viaje en metro
+  /// Anuncia cada estación cuando el usuario pasa cerca
+  void _checkMetroStationsProgress(NavigationStep step, LatLng userLocation) {
+    // Usar estaciones almacenadas directamente en el NavigationStep
+    final metroStations = step.busStops;
+
+    if (metroStations == null || metroStations.isEmpty) {
+      _navLog(
+        '⚠️ [METRO_STATIONS] No hay estaciones disponibles en el paso actual',
+      );
+      return;
+    }
+
+    _navLog(
+      '🚇 [METRO_STATIONS] Verificando progreso: ${metroStations.length} estaciones totales, índice actual: $_currentBusStopIndex',
+    );
+
+    // Verificar cercanía a cada estación (en orden)
+    for (int i = _currentBusStopIndex; i < metroStations.length; i++) {
+      final station = metroStations[i];
+      final stationLocation = LatLng(
+        station['lat'] as double,
+        station['lng'] as double,
+      );
+
+      final distanceToStation = _distance.as(
+        LengthUnit.Meter,
+        userLocation,
+        stationLocation,
+      );
+
+      _navLog(
+        '🚇 [STATION $i] ${station['name']}: ${distanceToStation.toStringAsFixed(0)}m',
+      );
+
+      // Si está cerca de esta estación (80m para metro, túneles menos precisos) y no se ha anunciado
+      final stationId = '${station['name']}_$i';
+      if (distanceToStation <= 80.0 && !_announcedStops.contains(stationId)) {
+        _navLog(
+          '✅ [METRO_STATIONS] Estación detectada a ${distanceToStation.toStringAsFixed(0)}m - Anunciando...',
+        );
+        _announceCurrentMetroStation(station, i + 1, metroStations.length, step.busRoute ?? '');
+        _announcedStops.add(stationId);
+        _currentBusStopIndex = i + 1; // Avanzar al siguiente índice
+        break; // Solo anunciar una estación a la vez
+      }
+    }
+  }
+
+  /// Anuncia la estación actual del metro
+  void _announceCurrentMetroStation(
+    Map<String, dynamic> station,
+    int stationNumber,
+    int totalStations,
+    String metroLine,
+  ) {
+    final isLastStation = stationNumber == totalStations;
+    final isFirstStation = stationNumber == 1;
+
+    // OPTIMIZACIÓN: Si hay más de 8 estaciones, solo anunciar estaciones clave
+    if (totalStations > 8 && !isFirstStation && !isLastStation) {
+      final shouldAnnounce = _shouldAnnounceStop(stationNumber, totalStations);
+      if (!shouldAnnounce) {
+        _navLog(
+          '⏭️ [TTS] Estación $stationNumber omitida (solo anuncio de estaciones clave)',
+        );
+        return;
+      }
+    }
+
+    final stationName = station['name'] as String;
+
+    String announcement;
+    if (isLastStation) {
+      // Vibración especial para estación de bajada
+      SmartVibrationService.instance.vibrate(VibrationType.criticalTurn);
+      announcement =
+          'Próxima estación: $stationName. Es tu estación de bajada. Prepárate para descender del Metro Línea $metroLine.';
+    } else if (isFirstStation) {
+      // Vibración de confirmación al subir al metro
+      SmartVibrationService.instance.vibrate(VibrationType.metroBoarding);
+      announcement =
+          'Primera estación: $stationName. Ahora estás en el Metro Línea $metroLine.';
+    } else {
+      // Vibración suave para estaciones intermedias
+      SmartVibrationService.instance.vibrate(VibrationType.instructionChange);
+      // Simplificar nombre de estación para TTS (quitar "Metro" duplicado)
+      final simplifiedName = stationName.replaceAll(RegExp(r'\bMetro\b', caseSensitive: false), '').trim();
+      announcement = 'Estación $stationNumber de $totalStations: $simplifiedName';
+    }
+
+    _navLog('🔔 [TTS-METRO] $announcement');
     TtsService.instance.speak(announcement);
   }
 

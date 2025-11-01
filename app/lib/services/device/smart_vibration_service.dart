@@ -24,6 +24,9 @@ enum VibrationType {
   /// Bus llegando al paradero (patrón alternado)
   busBoarding,
   
+  /// Metro llegando a estación (patrón distintivo más suave)
+  metroBoarding,
+  
   /// Usuario se desvió de la ruta (vibración intermitente)
   deviation,
   
@@ -98,6 +101,16 @@ class SmartVibrationService {
           await Vibration.vibrate(duration: 200);
           await Future.delayed(const Duration(milliseconds: 200));
           await Vibration.vibrate(duration: 300);
+          break;
+          
+        case VibrationType.metroBoarding:
+          // Patrón más suave y continuo - metro llegando a estación
+          // Diferente al bus para que el usuario pueda distinguir
+          await Vibration.vibrate(duration: 150);
+          await Future.delayed(const Duration(milliseconds: 150));
+          await Vibration.vibrate(duration: 150);
+          await Future.delayed(const Duration(milliseconds: 150));
+          await Vibration.vibrate(duration: 250);
           break;
           
         case VibrationType.deviation:
